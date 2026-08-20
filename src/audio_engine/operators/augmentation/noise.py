@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+from audio_engine.core.artifacts import atomic_path, derived_audio_path
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
@@ -35,10 +36,11 @@ class AddNoiseOperator(BaseOperator):
         noise = noise * np.sqrt(noise_power / (np.mean(noise**2) + 1e-10))
         augmented = mono + noise
 
-        out_dir = config.output_dir / "augment" / "noise"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        output_path = out_dir / f"{sample.id}_aug_noise.wav"
-        sf.write(str(output_path), augmented, sr)
+        output_path = derived_audio_path(
+            config.output_dir, "augment/noise", sample, stem_suffix="_aug_noise"
+        )
+        with atomic_path(output_path) as tmp:
+            sf.write(str(tmp), augmented, sr)
 
         return {
             "audio": {output_key: str(output_path.resolve())},

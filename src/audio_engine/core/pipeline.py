@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import time
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,10 +17,81 @@ from typing import Any
 import yaml
 from loguru import logger
 
+from audio_engine.core.checkpoint import (
+    COUNT_KEYS,
+    StepCheckpoint,
+    digest_payload,
+    digest_samples,
+    empty_counts,
+)
 from audio_engine.core.manifest import Manifest
-from audio_engine.core.operator import ManifestOperator, OperatorConfig
+from audio_engine.core.operator import BaseOperator, ManifestOperator, OperatorConfig
 from audio_engine.core.registry import OperatorRegistry
 from audio_engine.core.sample import Sample
+
+EXECUTORS = ("thread", "process", "sequential")
+
+
+def _process_one_task(
+    operator_name: str, sample: Sample, config: OperatorConfig
+) -> tuple[Sample, str]:
+    """Top-level worker for ProcessPoolExecutor (must be picklable on Windows spawn)."""
+    # Child processes start empty; re-import so OperatorRegistry is populated.
+    import audio_engine.operators  # noqa: F401
+
+    operator = OperatorRegistry.get(operator_name)
+    try:
+        result = operator.process(sample, config)
+    except Exception as exc:
+        failed = sample.model_copy(deep=True)
+        failed.mark_failed(operator_name, str(exc))
+        return failed, "failed"
+
+    if result.skipped:
+        return result.sample, "skipped"
+    if result.cache_hit:
+        return result.sample, "cache_hits"
+    return result.sample, "processed"
+
+
+@dataclass(frozen=True)
+class ExecutionConfig:
+    """Concurrency settings for one step; a step-level value overrides the pipeline default."""
+
+    executor: str = "thread"
+    workers: int = 4
+    max_in_flight: int = 0  # 0 → workers * 4
+    fail_fast: bool = False
+    checkpoint_every: int = 1000  # samples per checkpoint part; 0 disables checkpointing
+
+    def __post_init__(self) -> None:
+        if self.executor not in EXECUTORS:
+            raise ValueError(
+                f"Unsupported execution.executor '{self.executor}'. Use one of {EXECUTORS}."
+            )
+        if self.workers < 1:
+            raise ValueError(f"execution.workers must be >= 1, got {self.workers}")
+        if self.checkpoint_every < 0:
+            raise ValueError(
+                f"execution.checkpoint_every must be >= 0, got {self.checkpoint_every}"
+            )
+
+    @property
+    def concurrent(self) -> bool:
+        return self.executor in ("thread", "process") and self.workers > 1
+
+    @property
+    def in_flight(self) -> int:
+        return self.max_in_flight if self.max_in_flight > 0 else self.workers * 4
+
+    def merged(self, override: dict[str, Any] | None) -> ExecutionConfig:
+        if not override:
+            return self
+        known = {f.name for f in fields(self)}
+        unknown = set(override) - known
+        if unknown:
+            raise ValueError(f"Unknown execution keys: {sorted(unknown)}. Allowed: {sorted(known)}")
+        return replace(self, **override)
 
 
 @dataclass
@@ -22,6 +101,7 @@ class PipelineStep:
     params: dict[str, Any] = field(default_factory=dict)
     input_audio_key: str = "raw"
     output_audio_key: str | None = None
+    execution: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -38,6 +118,16 @@ class PipelineConfig:
     force: bool = False
     mock: bool = False
     filter_expr: str | None = None
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    # Highest priority (CLI flags): applied after pipeline default + step override.
+    execution_override: dict[str, Any] = field(default_factory=dict)
+    # Existing run dir (or run id under runs_dir) to continue from its checkpoints.
+    resume: str | None = None
+    # Exact run dir to use, created when missing; reuses checkpoints found inside.
+    run_dir: str | None = None
+
+    def step_execution(self, step: PipelineStep) -> ExecutionConfig:
+        return self.execution.merged(step.execution).merged(self.execution_override)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PipelineConfig:
@@ -52,6 +142,7 @@ class PipelineConfig:
                 params=s.get("params", {}),
                 input_audio_key=s.get("input_audio_key", "raw"),
                 output_audio_key=s.get("output_audio_key"),
+                execution=s.get("execution") or {},
             )
             for s in data.get("pipeline", [])
         ]
@@ -85,6 +176,7 @@ class PipelineConfig:
             force=data.get("force", False),
             mock=data.get("mock", False),
             filter_expr=data.get("filter"),
+            execution=ExecutionConfig().merged(data.get("execution") or {}),
         )
 
 
@@ -96,6 +188,9 @@ class RunMetrics:
     cache_hits: int = 0
     failed: int = 0
     by_step: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def record_counts(self, step_name: str, counts: dict[str, int]) -> None:
+        self.record(step_name, **{key: int(counts.get(key, 0)) for key in COUNT_KEYS})
 
     def record(self, step_name: str, *, processed: int = 0, skipped: int = 0, cache_hits: int = 0, failed: int = 0) -> None:
         if step_name not in self.by_step:
@@ -129,10 +224,66 @@ class PipelineRunner:
         self.run_dir = self._create_run_dir()
 
     def _create_run_dir(self) -> Path:
+        if self.config.resume:
+            candidate = Path(self.config.resume)
+            if not candidate.exists():
+                candidate = self.config.runs_dir / self.config.resume
+            if not candidate.is_dir():
+                raise FileNotFoundError(
+                    f"Cannot resume: run dir not found ({self.config.resume})"
+                )
+            return candidate
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = self.config.runs_dir / f"{ts}_{self.config.name}"
         run_dir.mkdir(parents=True, exist_ok=True)
         return run_dir
+
+    def _config_digest(self) -> str:
+        """Any change to the step list, params or operator versions invalidates checkpoints."""
+        return digest_payload(
+            {
+                "name": self.config.name,
+                "mock": self.config.mock,
+                "steps": [
+                    {
+                        "name": step.name,
+                        "operator": step.operator,
+                        "version": getattr(OperatorRegistry.get(step.operator), "version", ""),
+                        "params": step.params,
+                        "input_audio_key": step.input_audio_key,
+                        "output_audio_key": step.output_audio_key,
+                    }
+                    for step in self.config.steps
+                ],
+            }
+        )
+
+    def _open_checkpoint(
+        self,
+        order: int,
+        step: PipelineStep,
+        operator: BaseOperator | ManifestOperator,
+        op_config: OperatorConfig,
+        samples: list[Sample],
+        execution: ExecutionConfig,
+    ) -> StepCheckpoint | None:
+        if execution.checkpoint_every <= 0:
+            return None
+
+        fingerprint = {
+            "pipeline": self._config_digest(),
+            "operator": step.operator,
+            "version": operator.version,
+            "params": digest_payload(op_config.params),
+            "input": digest_samples(samples),
+            "checkpoint_every": execution.checkpoint_every,
+        }
+        directory = self.run_dir / "checkpoints" / f"{order:02d}_{step.name}"
+        directory.mkdir(parents=True, exist_ok=True)
+        checkpoint = StepCheckpoint(directory, fingerprint)
+        # --force means "recompute": write fresh checkpoints, never restore old ones.
+        return checkpoint if self.config.force else checkpoint.load()
 
     def _setup_logging(self) -> None:
         log_path = self.run_dir / "run.log"
@@ -155,15 +306,17 @@ class PipelineRunner:
 
         self.metrics.total = len(manifest.samples)
         logger.info(
-            "Pipeline '{}' started: {} samples, {} steps",
+            "Pipeline '{}' {}: {} samples, {} steps, execution={}",
             self.config.name,
+            f"resumed from {self.run_dir}" if self.config.resume else "started",
             len(manifest.samples),
             len(self.config.steps),
+            self.config.execution,
         )
 
         samples = list(manifest.samples)
-        for step in self.config.steps:
-            samples = self._run_step(step, samples)
+        for order, step in enumerate(self.config.steps):
+            samples = self._run_step(step, samples, order=order)
 
         result = Manifest(samples)
         out_manifest = self.run_dir / "manifest.parquet"
@@ -179,8 +332,15 @@ class PipelineRunner:
                     "source_id": self.config.source_id,
                     "output_manifest": self.config.output_manifest,
                     "filter": self.config.filter_expr,
+                    "execution": asdict(self.config.execution),
+                    "config_digest": self._config_digest(),
                     "pipeline": [
-                        {"name": s.name, "operator": s.operator, "params": s.params}
+                        {
+                            "name": s.name,
+                            "operator": s.operator,
+                            "params": s.params,
+                            "execution": asdict(self.config.step_execution(s)),
+                        }
                         for s in self.config.steps
                     ],
                 },
@@ -198,9 +358,10 @@ class PipelineRunner:
         logger.info("Pipeline finished. Run dir: {}", self.run_dir)
         return result
 
-    def _run_step(self, step: PipelineStep, samples: list[Sample]) -> list[Sample]:
+    def _run_step(
+        self, step: PipelineStep, samples: list[Sample], order: int = 0
+    ) -> list[Sample]:
         operator = OperatorRegistry.get(step.operator)
-        logger.info("Step '{}' ({})", step.name, step.operator)
 
         op_config = OperatorConfig(
             params=dict(step.params),
@@ -214,42 +375,244 @@ class PipelineRunner:
         if step.output_audio_key:
             op_config.params.setdefault("output_audio_key", step.output_audio_key)
 
+        execution = self.config.step_execution(step)
+        checkpoint = self._open_checkpoint(order, step, operator, op_config, samples, execution)
+
+        if checkpoint is not None and checkpoint.complete:
+            restored = checkpoint.read_samples()
+            self.metrics.record_counts(step.name, checkpoint.restored_counts())
+            self.metrics.total = len(restored)
+            logger.info(
+                "Step '{}' ({}): restored {} samples from checkpoint, not re-run",
+                step.name,
+                step.operator,
+                len(restored),
+            )
+            return restored
+
         if isinstance(operator, ManifestOperator):
-            if self.config.source_dir:
-                op_config.params.setdefault("source_dir", self.config.source_dir)
-            updated = operator.run(list(samples), op_config)
-            delta = len(updated) - len(samples)
-            if delta > 0:
-                self.metrics.record(step.name, processed=delta)
-            elif delta < 0:
-                self.metrics.record(step.name, processed=len(updated), skipped=-delta)
+            return self._run_manifest_step(step, operator, op_config, samples, checkpoint)
+        return self._run_sample_step(step, operator, op_config, samples, execution, checkpoint)
+
+    def _run_manifest_step(
+        self,
+        step: PipelineStep,
+        operator: ManifestOperator,
+        op_config: OperatorConfig,
+        samples: list[Sample],
+        checkpoint: StepCheckpoint | None,
+    ) -> list[Sample]:
+        """Whole-collection operators run in one shot, so they checkpoint as a single part."""
+        logger.info("Step '{}' ({}): manifest operator, sequential", step.name, step.operator)
+        if self.config.source_dir:
+            op_config.params.setdefault("source_dir", self.config.source_dir)
+
+        started = time.perf_counter()
+        updated = operator.run(list(samples), op_config)
+        delta = len(updated) - len(samples)
+        if delta > 0:
+            counts = {"processed": delta}
+        elif delta < 0:
+            counts = {"processed": len(updated), "skipped": -delta}
+        else:
+            counts = {}
+        self.metrics.record_counts(step.name, counts)
+        self.metrics.total = len(updated)
+
+        if checkpoint is not None:
+            checkpoint.append(updated, count_in=len(samples), counts=counts)
+            checkpoint.finish(len(updated))
+
+        logger.info(
+            "Step '{}' finished: {} -> {} samples in {:.2f}s",
+            step.name,
+            len(samples),
+            len(updated),
+            time.perf_counter() - started,
+        )
+        return updated
+
+    def _run_sample_step(
+        self,
+        step: PipelineStep,
+        operator: BaseOperator,
+        op_config: OperatorConfig,
+        samples: list[Sample],
+        execution: ExecutionConfig,
+        checkpoint: StepCheckpoint | None,
+    ) -> list[Sample]:
+        done: list[Sample] = []
+        if checkpoint is not None and checkpoint.restored:
+            done = checkpoint.read_samples()
+            self.metrics.record_counts(step.name, checkpoint.restored_counts())
+            logger.info(
+                "Step '{}' ({}): resuming after {} checkpointed samples",
+                step.name,
+                step.operator,
+                len(done),
+            )
+
+        pending = samples[checkpoint.consumed :] if checkpoint is not None else samples
+        batch_size = (
+            execution.checkpoint_every
+            if checkpoint is not None and execution.checkpoint_every > 0
+            else len(pending) or 1
+        )
+
+        mode = (
+            f"{execution.workers} {execution.executor}s, max_in_flight={execution.in_flight}"
+            if execution.concurrent
+            else "sequential"
+        )
+        logger.info(
+            "Step '{}' ({}): {} samples, {}{}",
+            step.name,
+            step.operator,
+            len(pending),
+            mode,
+            f", checkpoint every {batch_size}" if checkpoint is not None else "",
+        )
+
+        started = time.perf_counter()
+        for start in range(0, len(pending), batch_size):
+            batch = pending[start : start + batch_size]
+            if execution.concurrent and len(batch) > 1:
+                updated, counts = self._run_concurrent(step, operator, op_config, batch, execution)
             else:
-                self.metrics.record(step.name, processed=0)
-            self.metrics.total = len(updated)
-            return updated
+                updated, counts = self._run_sequential(step, operator, op_config, batch, execution)
+            self.metrics.record_counts(step.name, counts)
+            done.extend(updated)
+            if checkpoint is not None:
+                checkpoint.append(updated, count_in=len(batch), counts=counts)
 
+        if checkpoint is not None:
+            checkpoint.finish(len(done))
+
+        elapsed = time.perf_counter() - started
+        rate = len(pending) / elapsed if elapsed > 0 else 0.0
+        logger.info(
+            "Step '{}' finished: {} samples in {:.2f}s ({:.1f} samples/s)",
+            step.name,
+            len(pending),
+            elapsed,
+            rate,
+        )
+        return done
+
+    def _process_one(
+        self,
+        step: PipelineStep,
+        operator: BaseOperator,
+        op_config: OperatorConfig,
+        sample: Sample,
+    ) -> tuple[Sample, str]:
+        """Run one sample and classify the outcome. Never raises — runs inside workers."""
+        try:
+            result = operator.process(sample, op_config)
+        except Exception as exc:
+            logger.error("Sample {} failed at step '{}': {}", sample.id, step.name, exc)
+            failed = sample.model_copy(deep=True)
+            failed.mark_failed(step.operator, str(exc))
+            return failed, "failed"
+
+        if result.skipped:
+            return result.sample, "skipped"
+        if result.cache_hit:
+            return result.sample, "cache_hits"
+        return result.sample, "processed"
+
+    def _run_sequential(
+        self,
+        step: PipelineStep,
+        operator: BaseOperator,
+        op_config: OperatorConfig,
+        samples: list[Sample],
+        execution: ExecutionConfig,
+    ) -> tuple[list[Sample], dict[str, int]]:
         updated_samples: list[Sample] = []
+        counts = empty_counts()
         for idx, sample in enumerate(samples, start=1):
-            try:
-                result = operator.process(sample, op_config)
-                updated_samples.append(result.sample)
-                if result.skipped:
-                    self.metrics.record(step.name, skipped=1)
-                elif result.cache_hit:
-                    self.metrics.record(step.name, cache_hits=1)
-                else:
-                    self.metrics.record(step.name, processed=1)
-            except Exception as exc:
-                logger.error("Sample {} failed at step '{}': {}", sample.id, step.name, exc)
-                failed = sample.model_copy(deep=True)
-                failed.mark_failed(step.operator, str(exc))
-                updated_samples.append(failed)
-                self.metrics.record(step.name, failed=1)
-
+            processed, outcome = self._process_one(step, operator, op_config, sample)
+            updated_samples.append(processed)
+            counts[outcome] += 1
+            if outcome == "failed" and execution.fail_fast:
+                raise RuntimeError(
+                    f"Step '{step.name}' aborted (fail_fast) on sample {processed.id}: "
+                    f"{processed.errors.get(step.operator, 'unknown error')}"
+                )
             if idx % 100 == 0:
                 logger.debug("Step '{}' progress: {}/{}", step.name, idx, len(samples))
+        return updated_samples, counts
 
-        return updated_samples
+    def _run_concurrent(
+        self,
+        step: PipelineStep,
+        operator: BaseOperator,
+        op_config: OperatorConfig,
+        samples: list[Sample],
+        execution: ExecutionConfig,
+    ) -> tuple[list[Sample], dict[str, int]]:
+        """Bounded worker pool: at most `in_flight` tasks queued, output order preserved."""
+        total = len(samples)
+        results: list[Sample | None] = [None] * total
+        counts = empty_counts()
+        pending = iter(enumerate(samples))
+        completed = 0
+        abort: str | None = None
+
+        if execution.executor == "process":
+            pool_cm = ProcessPoolExecutor(max_workers=execution.workers)
+
+            def submit(pool, sample):
+                return pool.submit(_process_one_task, step.operator, sample, op_config)
+        else:
+            pool_cm = ThreadPoolExecutor(
+                max_workers=execution.workers, thread_name_prefix=f"ade-{step.name}"
+            )
+
+            def submit(pool, sample):
+                return pool.submit(self._process_one, step, operator, op_config, sample)
+
+        with pool_cm as pool:
+            futures: dict[Future[tuple[Sample, str]], int] = {}
+
+            def submit_next() -> bool:
+                item = next(pending, None)
+                if item is None:
+                    return False
+                idx, sample = item
+                futures[submit(pool, sample)] = idx
+                return True
+
+            for _ in range(execution.in_flight):
+                if not submit_next():
+                    break
+
+            while futures:
+                done, _ = wait(list(futures), return_when=FIRST_COMPLETED)
+                for future in done:
+                    idx = futures.pop(future)
+                    processed, outcome = future.result()
+                    results[idx] = processed
+                    # counts are only touched by this (main) thread
+                    counts[outcome] += 1
+                    completed += 1
+                    if outcome == "failed" and execution.fail_fast and abort is None:
+                        abort = (
+                            f"sample {processed.id}: "
+                            f"{processed.errors.get(step.operator, 'unknown error')}"
+                        )
+                    if completed % 100 == 0:
+                        logger.debug("Step '{}' progress: {}/{}", step.name, completed, total)
+                if abort is not None:
+                    break
+                for _ in range(len(done)):
+                    if not submit_next():
+                        break
+
+        if abort is not None:
+            raise RuntimeError(f"Step '{step.name}' aborted (fail_fast) on {abort}")
+        return [s for s in results if s is not None], counts
 
     def run_single_operator(
         self,

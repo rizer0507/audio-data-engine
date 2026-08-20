@@ -34,8 +34,9 @@ class SelectOperator(ManifestOperator):
         except Exception as exc:
             raise ValueError(f"Invalid select expression: {expr!r} ({exc})") from exc
 
-        keep_ids = set(matched["id"].tolist())
-        kept = [s for s in samples if s.id in keep_ids]
+        # positional index, not id: ids can repeat across source directories
+        keep_positions = set(matched.index)
+        kept = [s for pos, s in enumerate(samples) if pos in keep_positions]
         for sample in kept:
             sample.mark_completed(self.full_name)
             sample.add_lineage(

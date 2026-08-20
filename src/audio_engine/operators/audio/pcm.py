@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+from audio_engine.core.artifacts import atomic_path, derived_audio_path
 from audio_engine.core.manifest import probe_audio
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
@@ -61,14 +62,13 @@ class PcmToWavOperator(BaseOperator):
                 f"audio.pcm_to_wav: unsupported format '{suffix}' for {input_path}"
             )
 
-        out_dir = config.output_dir / "pcm_to_wav"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        output_path = out_dir / f"{sample.id}.wav"
+        output_path = derived_audio_path(config.output_dir, "pcm_to_wav", sample)
 
         raw = np.fromfile(input_path, dtype=dtype)
         if channels > 1:
             raw = raw.reshape(-1, channels)
-        sf.write(str(output_path), raw, sample_rate, subtype="PCM_16")
+        with atomic_path(output_path) as tmp:
+            sf.write(str(tmp), raw, sample_rate, subtype="PCM_16")
 
         duration = len(raw) / sample_rate / (channels if channels > 1 else 1)
         return {

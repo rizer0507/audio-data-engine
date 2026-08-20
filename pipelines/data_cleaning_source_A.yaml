@@ -18,6 +18,15 @@ input:
 output:
   manifest: datasets/manifests/cleaned_source_A.parquet
 
+# 步骤内样本级并发（ManifestOperator 如 ingest.scan / quality.select 始终串行）
+# CLI 可临时覆盖：--workers 8 --executor sequential|thread|process
+execution:
+  executor: thread      # thread | process | sequential
+  workers: 4            # 全局默认并发数，step 内可覆盖
+  max_in_flight: 0      # 0 → workers * 4
+  fail_fast: false
+  checkpoint_every: 1000  # 每 1000 条落一个 checkpoint part；0 关闭（短任务可省约 20% 开销）
+
 pipeline:
   # 若 source 尚无样本索引、只有外部 path，保留本步；已有 manifest 时会按 sha256 去重跳过
   - name: ingest
@@ -25,6 +34,8 @@ pipeline:
 
   - name: pcm_convert
     operator: audio.pcm_to_wav
+    execution:
+      workers: 8          # 磁盘读写为主，线程即可
     params:
       # 仅对 .pcm/.raw 生效；已是容器格式时透传。此处 sample_rate 是 PCM 缺省解码参数
       sample_rate: 8000
@@ -34,6 +45,9 @@ pipeline:
 
   - name: resample
     operator: audio.resample
+    execution:
+      # CPU 密集：若线程加速不足，可改为 executor: process、workers: 物理核数
+      workers: 4
     params:
       # 已是 16k 时透传，不写新文件
       sample_rate: 16000
@@ -42,10 +56,13 @@ pipeline:
 
   - name: probe
     operator: quality.probe
+    execution:
+      workers: 16         # 只读文件头，I/O 为主
     params:
       input_audio_key: resampled_16k
 
   # 输入已是 VAD 后片段，不再跑 audio.vad；仅按损坏 / 时长过滤
+  # 批量算子：一次性对整表求值（分块 chunk_size），不受 execution.workers 影响
   - name: audio_pass
     operator: quality.filter
     params:

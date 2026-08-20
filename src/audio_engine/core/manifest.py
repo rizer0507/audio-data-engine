@@ -9,6 +9,7 @@ import pandas as pd
 import soundfile as sf
 from loguru import logger
 
+from audio_engine.core.artifacts import sample_digest
 from audio_engine.core.sample import Sample
 
 AUDIO_EXTENSIONS = {".wav", ".flac", ".ogg", ".mp3", ".m4a"}
@@ -207,6 +208,74 @@ class Manifest:
             logger.debug("Ingested [{}/{}] {}", idx, len(files), sample_id)
 
         return cls(samples)
+
+    def split(self, shards: int, *, strategy: str = "hash") -> list[Manifest]:
+        """Split samples into shards.
+
+        Strategies:
+        - `hash`: stable content-hash buckets (same file always same shard).
+        - `duration-balanced`: greedy LPT assignment by audio duration so total
+          load per shard is closer when clip lengths vary widely. Deterministic
+          via sort key `(duration desc, digest)`; best after duration is known.
+        """
+        if shards < 1:
+            raise ValueError(f"shards must be >= 1, got {shards}")
+        if strategy == "hash":
+            buckets: list[list[Sample]] = [[] for _ in range(shards)]
+            for sample in self.samples:
+                buckets[int(sample_digest(sample)[:16], 16) % shards].append(sample)
+            return [Manifest(bucket) for bucket in buckets]
+        if strategy == "duration-balanced":
+            return self._split_duration_balanced(shards)
+        raise ValueError(
+            f"Unknown split strategy '{strategy}'. Use 'hash' or 'duration-balanced'."
+        )
+
+    def _split_duration_balanced(self, shards: int) -> list[Manifest]:
+        """Longest-processing-time-first: assign each clip to the lightest shard."""
+        ordered = sorted(
+            self.samples,
+            key=lambda s: (-(s.duration if s.duration is not None else 1.0), sample_digest(s)),
+        )
+        buckets: list[list[Sample]] = [[] for _ in range(shards)]
+        loads = [0.0] * shards
+        for sample in ordered:
+            weight = sample.duration if sample.duration is not None else 1.0
+            # Prefer the lightest shard; tie-break by smaller index for stability.
+            target = min(range(shards), key=lambda i: (loads[i], i))
+            buckets[target].append(sample)
+            loads[target] += weight
+        # Restore deterministic order inside each shard (by digest), not LPT order.
+        for bucket in buckets:
+            bucket.sort(key=lambda s: (sample_digest(s), s.id))
+        return [Manifest(bucket) for bucket in buckets]
+
+    @classmethod
+    def merge(
+        cls, manifests: list[Manifest], *, keep_duplicates: bool = False
+    ) -> tuple[Manifest, dict[str, Any]]:
+        """Concatenate shard outputs, drop repeats and restore a deterministic order."""
+        combined = [sample for manifest in manifests for sample in manifest.samples]
+        seen: set[tuple[str, str]] = set()
+        unique: list[Sample] = []
+        duplicates = 0
+        for sample in combined:
+            key = (sample.sha256 or sample.source_path, sample.id)
+            if key in seen:
+                duplicates += 1
+                if not keep_duplicates:
+                    continue
+            seen.add(key)
+            unique.append(sample)
+
+        unique.sort(key=lambda s: (s.sha256, s.id))
+        report = {
+            "inputs": len(manifests),
+            "total_in": len(combined),
+            "duplicates": duplicates,
+            "total_out": len(unique),
+        }
+        return cls(unique), report
 
     def resolve_path(name: str, manifests_dir: Path = Path("datasets/manifests")) -> Path:
         """Resolve dataset name to manifest path (with or without extension)."""

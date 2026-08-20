@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 from scipy import signal
 
+from audio_engine.core.artifacts import atomic_path, derived_audio_path
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
@@ -29,10 +30,11 @@ class SpeedPerturbOperator(BaseOperator):
         new_len = max(1, int(len(mono) / factor))
         perturbed = signal.resample(mono, new_len)
 
-        out_dir = config.output_dir / "augment" / "speed"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        output_path = out_dir / f"{sample.id}_sp{factor:.2f}.wav"
-        sf.write(str(output_path), perturbed.astype(np.float32), sr)
+        output_path = derived_audio_path(
+            config.output_dir, "augment/speed", sample, stem_suffix=f"_sp{factor:.2f}"
+        )
+        with atomic_path(output_path) as tmp:
+            sf.write(str(tmp), perturbed.astype(np.float32), sr)
 
         return {
             "audio": {output_key: str(output_path.resolve())},

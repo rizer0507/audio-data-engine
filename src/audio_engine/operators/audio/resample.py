@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 from scipy import signal
 
+from audio_engine.core.artifacts import atomic_path, derived_audio_path
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
@@ -71,10 +72,11 @@ class ResampleOperator(BaseOperator):
             else:
                 resampled = signal.resample(data, int(len(data) * target_sr / sr))
 
-            out_dir = config.output_dir / f"resample_{target_sr // 1000}k"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir / f"{sample.id}.wav"
-            sf.write(str(out_path), resampled, target_sr)
+            out_path = derived_audio_path(
+                config.output_dir, f"resample_{target_sr // 1000}k", sample
+            )
+            with atomic_path(out_path) as tmp:
+                sf.write(str(tmp), resampled, target_sr)
             resampled_flag = True
             quality_status = "converted"
 

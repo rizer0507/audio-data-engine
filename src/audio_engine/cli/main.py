@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -12,7 +15,13 @@ from rich.table import Table
 
 import audio_engine.operators  # noqa: F401 — register all operators
 from audio_engine.core.manifest import Manifest
-from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, PipelineStep
+from audio_engine.core.pipeline import (
+    EXECUTORS,
+    ExecutionConfig,
+    PipelineConfig,
+    PipelineRunner,
+    PipelineStep,
+)
 from audio_engine.core.registry import OperatorRegistry
 
 app = typer.Typer(
@@ -29,6 +38,29 @@ RUNS_DIR = Path("runs")
 
 def _resolve_dataset(name: str) -> Path:
     return Manifest.resolve_path(name, MANIFESTS_DIR)
+
+
+def _execution_override(
+    workers: Optional[int],
+    executor: Optional[str],
+    max_in_flight: Optional[int] = None,
+    checkpoint_every: Optional[int] = None,
+) -> dict:
+    """CLI flags win over pipeline and step YAML values; unset flags change nothing."""
+    override: dict = {}
+    if workers is not None:
+        override["workers"] = workers
+    if executor is not None:
+        override["executor"] = executor
+    if max_in_flight is not None:
+        override["max_in_flight"] = max_in_flight
+    if checkpoint_every is not None:
+        override["checkpoint_every"] = checkpoint_every
+    try:
+        ExecutionConfig().merged(override)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return override
 
 
 def _resolve_operator(name: str) -> str:
@@ -131,6 +163,10 @@ def run_operator(
     force: bool = typer.Option(False, "--force", help="Ignore cache and re-run"),
     mock: bool = typer.Option(False, "--mock", help="Use mock ASR output"),
     input_audio_key: str = typer.Option("raw", "--input-key", help="Input audio artifact key"),
+    workers: Optional[int] = typer.Option(None, "--workers", "-w", help="Concurrent workers"),
+    executor: Optional[str] = typer.Option(
+        None, "--executor", help=f"Executor: {', '.join(EXECUTORS)}"
+    ),
 ) -> None:
     """Run a single operator over a dataset."""
     op_name = _resolve_operator(operator)
@@ -150,6 +186,7 @@ def run_operator(
         force=force,
         mock=mock,
         filter_expr=filter_expr,
+        execution_override=_execution_override(workers, executor),
     )
     runner = PipelineRunner(pipeline_cfg)
     result = runner.run_single_operator(op_name, manifest, params)
@@ -178,11 +215,56 @@ def pipeline_run(
     config_path: Path = typer.Argument(..., help="Pipeline YAML file"),
     force: bool = typer.Option(False, "--force", help="Ignore cache"),
     mock: bool = typer.Option(False, "--mock", help="Use mock ASR"),
+    workers: Optional[int] = typer.Option(
+        None, "--workers", "-w", help="Override per-step concurrency (default from YAML)"
+    ),
+    executor: Optional[str] = typer.Option(
+        None, "--executor", help=f"Override executor: {', '.join(EXECUTORS)}"
+    ),
+    max_in_flight: Optional[int] = typer.Option(
+        None, "--max-in-flight", help="Override queued+running tasks per step"
+    ),
+    checkpoint_every: Optional[int] = typer.Option(
+        None, "--checkpoint-every", help="Samples per checkpoint part (0 disables checkpointing)"
+    ),
+    resume: Optional[str] = typer.Option(
+        None, "--resume", help="Continue an existing run dir (path or run id under runs/)"
+    ),
+    input_manifest: Optional[Path] = typer.Option(
+        None, "--input-manifest", help="Override input.manifest (e.g. run one shard)"
+    ),
+    output_manifest: Optional[Path] = typer.Option(
+        None, "--output-manifest", help="Override output.manifest"
+    ),
+    runs_dir: Optional[Path] = typer.Option(
+        None, "--runs-dir", help="Override run directory root (isolate parallel runs)"
+    ),
+    skip_step: Optional[list[str]] = typer.Option(
+        None, "--skip-step", help="Skip a step by name or operator (repeatable)"
+    ),
 ) -> None:
     """Run a pipeline from YAML configuration."""
     cfg = PipelineConfig.from_yaml(config_path)
     cfg.force = force or cfg.force
     cfg.mock = mock or cfg.mock
+    cfg.execution_override = _execution_override(
+        workers, executor, max_in_flight, checkpoint_every
+    )
+    cfg.resume = resume or cfg.resume
+
+    if input_manifest is not None:
+        cfg.input_manifest = str(input_manifest)
+        cfg.source_dir = None  # an explicit manifest replaces directory scanning
+    if output_manifest is not None:
+        cfg.output_manifest = str(output_manifest)
+    if runs_dir is not None:
+        cfg.runs_dir = runs_dir
+    if skip_step:
+        skipped = set(skip_step)
+        kept = [s for s in cfg.steps if s.name not in skipped and s.operator not in skipped]
+        if len(kept) != len(cfg.steps):
+            console.print(f"  Skipping steps: {', '.join(sorted(skipped))}")
+        cfg.steps = kept
 
     runner = PipelineRunner(cfg)
     result = runner.run()
@@ -206,6 +288,224 @@ def pipeline_run(
     console.print(f"[green]OK[/green] Pipeline '{cfg.name}' finished")
     console.print(f"  Total: {m['total']}, Processed: {m['processed']}, Failed: {m['failed']}")
     console.print(f"  Run dir: [cyan]{runner.run_dir}[/cyan]")
+
+
+@pipeline_app.command("clean-temp")
+def pipeline_clean_temp(
+    config_path: Path = typer.Argument(..., help="Pipeline YAML file"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only list what would be removed"),
+) -> None:
+    """Remove orphaned `*.tmp*` files left behind when a run was hard-killed.
+
+    Atomic writes clean up after themselves on exceptions, but a SIGKILL leaves
+    the temp file in place. It is never read (only `<name>` is), so this is
+    housekeeping rather than a correctness fix.
+    """
+    cfg = PipelineConfig.from_yaml(config_path)
+    targets = [cfg.cache_dir, cfg.output_dir, cfg.runs_dir]
+    removed = 0
+    freed = 0
+    for directory in targets:
+        if not directory.exists():
+            continue
+        for leftover in directory.rglob("*.tmp*"):
+            if not leftover.is_file():
+                continue
+            size = leftover.stat().st_size
+            console.print(f"  {'would remove' if dry_run else 'removed'} {leftover} ({size} B)")
+            if not dry_run:
+                leftover.unlink(missing_ok=True)
+            removed += 1
+            freed += size
+
+    verb = "would remove" if dry_run else "removed"
+    console.print(f"[green]OK[/green] {verb} {removed} temp file(s), {freed} bytes")
+
+
+@pipeline_app.command("run-shards")
+def pipeline_run_shards(
+    config_path: Path = typer.Argument(..., help="Pipeline YAML file"),
+    shard_dir: Path = typer.Option(..., "--shard-dir", help="Directory with shard-*.parquet"),
+    parallel_shards: int = typer.Option(
+        2, "--parallel-shards", "-p", help="Shard pipelines running at the same time"
+    ),
+    workers: Optional[int] = typer.Option(
+        None, "--workers", "-w", help="Workers per shard pipeline"
+    ),
+    executor: Optional[str] = typer.Option(
+        None, "--executor", help=f"Override executor: {', '.join(EXECUTORS)}"
+    ),
+    force: bool = typer.Option(False, "--force", help="Ignore cache"),
+    run_root: Optional[Path] = typer.Option(None, "--run-root", help="Output root for this batch"),
+) -> None:
+    """Run one independent pipeline process per shard, `parallel_shards` at a time.
+
+    Ingest steps are dropped: the shard manifest already lists the samples, so
+    rescanning the source directory would pull every sample into every shard.
+
+    Each shard uses a fixed run directory under `--run-root`, so re-issuing the
+    same command after a crash resumes every shard from its own checkpoints.
+    """
+    cfg = PipelineConfig.from_yaml(config_path)
+    shards = sorted(shard_dir.glob("shard-*.parquet"))
+    if not shards:
+        raise typer.BadParameter(f"No shard-*.parquet found in {shard_dir}")
+    if parallel_shards < 1:
+        raise typer.BadParameter("--parallel-shards must be >= 1")
+
+    ingest_steps = sorted({s.name for s in cfg.steps if s.operator.startswith("ingest.")})
+    root = run_root or (RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cfg.name}_shards")
+    root.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"Running {len(shards)} shards, {parallel_shards} at a time")
+    console.print(f"  Run root: [cyan]{root}[/cyan]")
+    if ingest_steps:
+        console.print(f"  Dropping ingest steps: {', '.join(ingest_steps)}")
+
+    queue = list(shards)
+    running: list[tuple[Path, subprocess.Popen, object]] = []
+    exit_codes: dict[str, int] = {}
+
+    while queue or running:
+        while queue and len(running) < parallel_shards:
+            shard = queue.pop(0)
+            shard_run_dir = root / shard.stem
+            shard_run_dir.mkdir(parents=True, exist_ok=True)
+            command = [
+                sys.executable,
+                "-m",
+                "audio_engine.cli.main",
+                "pipeline",
+                "run",
+                str(config_path),
+                "--input-manifest",
+                str(shard),
+                "--output-manifest",
+                str(root / f"{shard.stem}.parquet"),
+                "--resume",
+                str(shard_run_dir),
+            ]
+            for name in ingest_steps:
+                command += ["--skip-step", name]
+            if workers is not None:
+                command += ["--workers", str(workers)]
+            if executor is not None:
+                command += ["--executor", executor]
+            if force:
+                command.append("--force")
+
+            log_file = (root / f"{shard.stem}.log").open("w", encoding="utf-8")
+            process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT)
+            running.append((shard, process, log_file))
+            console.print(f"  started {shard.name} (pid {process.pid})")
+
+        time.sleep(0.2)
+        for entry in list(running):
+            shard, process, log_file = entry
+            if process.poll() is None:
+                continue
+            log_file.close()
+            running.remove(entry)
+            exit_codes[shard.stem] = process.returncode
+            status = "[green]ok[/green]" if process.returncode == 0 else "[red]FAILED[/red]"
+            console.print(f"  {status} {shard.name} (exit {process.returncode})")
+
+    failed = [name for name, code in exit_codes.items() if code != 0]
+    if failed:
+        console.print(f"[red]{len(failed)} shard(s) failed:[/red] {', '.join(sorted(failed))}")
+        console.print(f"  Logs: [cyan]{root}[/cyan]")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]OK[/green] all {len(shards)} shards finished")
+    console.print(
+        "  Merge with: [cyan]audio-data manifest merge "
+        f'"{root}/shard-*.parquet" --output <path>[/cyan]'
+    )
+
+
+manifest_app = typer.Typer(help="Manifest sharding and merging for large-scale runs")
+app.add_typer(manifest_app, name="manifest")
+
+
+@manifest_app.command("shard")
+def manifest_shard(
+    dataset: str = typer.Argument(..., help="Dataset name or manifest path"),
+    shards: int = typer.Option(..., "--shards", "-n", help="Number of shards"),
+    output_dir: Path = typer.Option(..., "--output-dir", "-o", help="Where to write the shards"),
+    strategy: str = typer.Option(
+        "hash",
+        "--strategy",
+        help="hash (stable content buckets) or duration-balanced (even total duration)",
+    ),
+) -> None:
+    """Split a manifest into shards (hash or duration-balanced)."""
+    manifest = Manifest.load(_resolve_dataset(dataset))
+    try:
+        parts = manifest.split(shards, strategy=strategy)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for idx, part in enumerate(parts):
+        if not len(part):
+            console.print(f"  shard-{idx:03d}: empty, skipped")
+            continue
+        out = output_dir / f"shard-{idx:03d}.parquet"
+        part.save(out)
+        written += 1
+        total_dur = sum(s.duration or 0.0 for s in part.samples)
+        console.print(f"  {out.name}: {len(part)} samples, {total_dur:.1f}s audio")
+
+    console.print(
+        f"[green]OK[/green] {len(manifest)} samples -> {written} shards "
+        f"({strategy}) in [cyan]{output_dir}[/cyan]"
+    )
+
+
+@manifest_app.command("merge")
+def manifest_merge(
+    inputs: list[str] = typer.Argument(..., help="Shard manifest paths or globs"),
+    output: Path = typer.Option(..., "--output", "-o", help="Merged manifest path"),
+    expected_shards: Optional[int] = typer.Option(
+        None, "--expected-shards", help="Fail unless this many shard files are found"
+    ),
+    keep_duplicates: bool = typer.Option(
+        False, "--keep-duplicates", help="Keep repeated (sha256, id) instead of dropping them"
+    ),
+) -> None:
+    """Merge shard outputs with completeness, duplicate and count checks."""
+    paths: list[Path] = []
+    for pattern in inputs:
+        candidate = Path(pattern)
+        matched = (
+            [candidate]
+            if candidate.exists()
+            else sorted(Path(candidate.parent or ".").glob(candidate.name))
+        )
+        if not matched:
+            raise typer.BadParameter(f"No manifest matched: {pattern}")
+        paths.extend(matched)
+
+    if expected_shards is not None and len(paths) != expected_shards:
+        raise typer.BadParameter(
+            f"Expected {expected_shards} shard files, found {len(paths)}: "
+            f"{[p.name for p in paths]}"
+        )
+
+    manifests = [Manifest.load(p) for p in paths]
+    merged, report = Manifest.merge(manifests, keep_duplicates=keep_duplicates)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    merged.save(output)
+    merged.save(output.with_suffix(".jsonl"))
+
+    console.print(f"[green]OK[/green] merged {report['inputs']} shard manifests")
+    console.print(f"  In: {report['total_in']}, duplicates: {report['duplicates']}")
+    console.print(f"  Out: {report['total_out']} -> [cyan]{output}[/cyan]")
+    if report["duplicates"]:
+        action = "kept" if keep_duplicates else "dropped"
+        console.print(f"  [yellow]{report['duplicates']} duplicate (sha256, id) {action}[/yellow]")
 
 
 @app.command("compare")

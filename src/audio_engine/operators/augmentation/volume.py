@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+from audio_engine.core.artifacts import atomic_path, derived_audio_path
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
@@ -27,10 +28,11 @@ class VolumePerturbOperator(BaseOperator):
         scaled = data * (10 ** (gain_db / 20))
         scaled = np.clip(scaled, -1.0, 1.0)
 
-        out_dir = config.output_dir / "augment" / "volume"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        output_path = out_dir / f"{sample.id}_vol{gain_db:+.0f}db.wav"
-        sf.write(str(output_path), scaled, sr)
+        output_path = derived_audio_path(
+            config.output_dir, "augment/volume", sample, stem_suffix=f"_vol{gain_db:+.0f}db"
+        )
+        with atomic_path(output_path) as tmp:
+            sf.write(str(tmp), scaled, sr)
 
         return {
             "audio": {output_key: str(output_path.resolve())},

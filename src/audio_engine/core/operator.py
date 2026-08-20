@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from audio_engine.core.artifacts import atomic_write_json
 from audio_engine.core.sample import Sample
 
 
@@ -94,9 +95,7 @@ class BaseOperator(ABC):
             return None
 
     def save_cache(self, cache_key: str, config: OperatorConfig, data: dict[str, Any]) -> None:
-        path = self._cache_path(cache_key, config)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self._cache_path(cache_key, config), data)
 
     def should_skip(self, sample: Sample, config: OperatorConfig) -> bool:
         if config.force:

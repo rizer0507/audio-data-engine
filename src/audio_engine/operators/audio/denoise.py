@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+from audio_engine.core.artifacts import atomic_path, derived_audio_path
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
@@ -35,10 +36,9 @@ class DenoiseOperator(BaseOperator):
         cleaned = np.fft.irfft(np.where(magnitude > threshold, spectrum, 0))
         cleaned = cleaned[: len(mono)].astype(np.float32)
 
-        out_dir = config.output_dir / "denoise" / model
-        out_dir.mkdir(parents=True, exist_ok=True)
-        output_path = out_dir / f"{sample.id}.wav"
-        sf.write(str(output_path), cleaned, sr)
+        output_path = derived_audio_path(config.output_dir, f"denoise/{model}", sample)
+        with atomic_path(output_path) as tmp:
+            sf.write(str(tmp), cleaned, sr)
 
         return {
             "audio": {output_key: str(output_path.resolve())},
