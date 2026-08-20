@@ -58,6 +58,47 @@ def test_resample_operator(sample_wav: Path):
     )
     result = op.process(sample, config)
     assert "resampled_8k" in result.sample.audio
+    assert result.sample.labels.get("resampled") is True
+
+
+def test_pcm_and_resample_passthrough(sample_wav: Path):
+    """Already-wav / already-16k should not convert or rewrite."""
+    sample = Sample(
+        id="test001",
+        source_path=str(sample_wav),
+        sha256="abc",
+        audio={"raw": str(sample_wav)},
+        sample_rate=16000,
+        duration=1.0,
+    )
+    pcm = OperatorRegistry.get("audio.pcm_to_wav")
+    pcm_cfg = OperatorConfig(
+        params={
+            "sample_rate": 8000,
+            "input_audio_key": "raw",
+            "output_audio_key": "pcm_wav",
+        },
+        output_dir=sample_wav.parent / "derived",
+        cache_dir=sample_wav.parent / "cache_pcm",
+    )
+    pcm_result = pcm.process(sample, pcm_cfg)
+    assert pcm_result.sample.labels.get("pcm_converted") is False
+    assert pcm_result.sample.audio["pcm_wav"] == str(sample_wav.resolve())
+
+    rs = OperatorRegistry.get("audio.resample")
+    rs_cfg = OperatorConfig(
+        params={
+            "sample_rate": 16000,
+            "input_audio_key": "pcm_wav",
+            "output_audio_key": "resampled_16k",
+        },
+        output_dir=sample_wav.parent / "derived",
+        cache_dir=sample_wav.parent / "cache_rs",
+    )
+    rs_result = rs.process(pcm_result.sample, rs_cfg)
+    assert rs_result.sample.labels.get("resampled") is False
+    assert rs_result.sample.audio["resampled_16k"] == str(sample_wav.resolve())
+    assert not (sample_wav.parent / "derived" / "resample_16k").exists()
 
 
 def test_cache_hit(sample_wav: Path):

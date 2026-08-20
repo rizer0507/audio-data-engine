@@ -6,6 +6,9 @@
 # 输出：datasets/manifests/cleaned_source_A.parquet（仅 audio_pass 样本）
 #
 # 音频 key 链：raw → pcm_wav → resampled_16k
+# pcm_to_wav / resample 都会先判断是否已满足需求：
+#   - 已是 wav/flac/... → pcm_to_wav 透传，不转码
+#   - 已是目标采样率 → resample 透传，不重采样、不整文件解码
 
 name: data_cleaning_source_A
 
@@ -23,6 +26,7 @@ pipeline:
   - name: pcm_convert
     operator: audio.pcm_to_wav
     params:
+      # 仅对 .pcm/.raw 生效；已是容器格式时透传。此处 sample_rate 是 PCM 缺省解码参数
       sample_rate: 8000
       channels: 1
       input_audio_key: raw
@@ -31,6 +35,7 @@ pipeline:
   - name: resample
     operator: audio.resample
     params:
+      # 已是 16k 时透传，不写新文件
       sample_rate: 16000
       input_audio_key: pcm_wav
       output_audio_key: resampled_16k
