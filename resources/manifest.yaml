@@ -1,0 +1,18 @@
+# 数据源清单（manifest）
+# 每当有新的数据批次落入体系，在此登记一条记录。
+# 字段说明见 docs/数据源落入管理.md
+
+sources: []
+
+# 登记示例（取消注释后填写）：
+#
+# sources:
+#   - source_id: source_A
+#     source_name: 数据源A
+#     ingested_at: "2026-08-20T10:30:00+08:00"
+#     origin: "某供应商-第一批客服外呼录音"
+#     path: "D:/Data/batch_A"
+#     format: wav
+#     sample_rate: 8000
+#     file_count: 15000
+#     note: ""

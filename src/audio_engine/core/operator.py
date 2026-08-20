@@ -34,6 +34,27 @@ class OperatorResult(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
+class ManifestOperator(ABC):
+    """Operator that transforms the whole sample collection at once.
+
+    Used for steps that cannot be expressed per-sample, e.g. ingest
+    (creates samples from an external directory). Registered in the same
+    OperatorRegistry and dispatched by PipelineRunner like any other step.
+    """
+
+    name: str = "base"
+    version: str = "1.0.0"
+    category: str = "manifest"
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.category}.{self.name}"
+
+    @abstractmethod
+    def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
+        """Take the current sample list and return the updated list."""
+
+
 class BaseOperator(ABC):
     """Unified interface for all audio processing capabilities."""
 

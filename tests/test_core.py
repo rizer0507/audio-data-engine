@@ -84,6 +84,31 @@ def test_operator_registry():
     assert "audio.resample" in names
     assert "asr.qwen" in names
     assert "asr.sensevoice" in names
+    assert "ingest.scan" in names
+
+
+def test_ingest_pipeline(sample_wav: Path, tmp_path: Path):
+    """Ingest runs through the unified PipelineRunner -> Operator path."""
+    from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, PipelineStep
+
+    cfg = PipelineConfig(
+        name="test_ingest",
+        input_manifest="",
+        source_dir=str(sample_wav.parent),
+        steps=[PipelineStep(name="ingest", operator="ingest.scan")],
+        output_dir=tmp_path / "derived",
+        cache_dir=tmp_path / "cache",
+        runs_dir=tmp_path / "runs",
+    )
+    runner = PipelineRunner(cfg)
+    result = runner.run()
+
+    assert len(result) == 1
+    sample = result.samples[0]
+    assert sample.sample_rate == 16000
+    assert sample.is_completed("ingest.scan")
+    assert sample.lineage[0].operator == "ingest.scan"
+    assert runner.metrics.processed == 1
 
 
 def test_filter_manifest(sample_wav: Path):

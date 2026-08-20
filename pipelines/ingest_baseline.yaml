@@ -1,0 +1,16 @@
+# 统一结构示例：入库(ingest.scan)与清洗在同一条流水线内执行
+name: ingest_baseline
+
+input:
+  source_dir: D:/SharedAudio/vendor_20260815   # 外部物理目录，只读扫描
+
+pipeline:
+  - name: ingest
+    operator: ingest.scan
+
+  - name: resample
+    operator: audio.resample
+    params:
+      sample_rate: 16000
+      input_audio_key: raw
+      output_audio_key: resampled_16k

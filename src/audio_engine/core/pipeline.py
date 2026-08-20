@@ -10,7 +10,7 @@ import yaml
 from loguru import logger
 
 from audio_engine.core.manifest import Manifest
-from audio_engine.core.operator import BaseOperator, OperatorConfig
+from audio_engine.core.operator import ManifestOperator, OperatorConfig
 from audio_engine.core.registry import OperatorRegistry
 from audio_engine.core.sample import Sample
 
@@ -29,6 +29,7 @@ class PipelineConfig:
     name: str
     input_manifest: str
     steps: list[PipelineStep]
+    source_dir: str | None = None
     output_dir: Path = Path("data/derived")
     cache_dir: Path = Path("data/cache")
     runs_dir: Path = Path("runs")
@@ -52,10 +53,16 @@ class PipelineConfig:
         ]
         input_cfg = data.get("input", {})
         manifest = input_cfg.get("manifest", "")
+        source_dir = input_cfg.get("source_dir")
+        if not manifest and not source_dir:
+            raise ValueError(
+                f"Pipeline '{path}' needs input.manifest or input.source_dir"
+            )
         return cls(
             name=data.get("name", path.stem),
             input_manifest=manifest,
             steps=steps,
+            source_dir=source_dir,
             output_dir=Path(data.get("output_dir", "data/derived")),
             cache_dir=Path(data.get("cache_dir", "data/cache")),
             runs_dir=Path(data.get("runs_dir", "runs")),
@@ -117,11 +124,16 @@ class PipelineRunner:
 
     def run(self) -> Manifest:
         self._setup_logging()
-        manifest_path = Path(self.config.input_manifest)
-        if not manifest_path.is_absolute() and not manifest_path.exists():
-            manifest_path = Manifest.resolve_path(self.config.input_manifest)
-
-        manifest = Manifest.load(manifest_path)
+        if self.config.input_manifest:
+            manifest_path = Path(self.config.input_manifest)
+            if not manifest_path.is_absolute() and not manifest_path.exists():
+                manifest_path = Manifest.resolve_path(self.config.input_manifest)
+            manifest = Manifest.load(manifest_path)
+        else:
+            # No manifest yet: pipeline starts empty and an ingest step
+            # (e.g. ingest.scan on input.source_dir) creates the samples.
+            manifest_path = None
+            manifest = Manifest([])
         if self.config.filter_expr:
             manifest = manifest.filter(self.config.filter_expr)
 
@@ -146,7 +158,8 @@ class PipelineRunner:
             yaml.dump(
                 {
                     "name": self.config.name,
-                    "input_manifest": str(manifest_path),
+                    "input_manifest": str(manifest_path) if manifest_path else "",
+                    "source_dir": self.config.source_dir,
                     "filter": self.config.filter_expr,
                     "pipeline": [
                         {"name": s.name, "operator": s.operator, "params": s.params}
@@ -168,7 +181,7 @@ class PipelineRunner:
         return result
 
     def _run_step(self, step: PipelineStep, samples: list[Sample]) -> list[Sample]:
-        operator: BaseOperator = OperatorRegistry.get(step.operator)
+        operator = OperatorRegistry.get(step.operator)
         logger.info("Step '{}' ({})", step.name, step.operator)
 
         op_config = OperatorConfig(
@@ -182,6 +195,14 @@ class PipelineRunner:
             op_config.params.setdefault("input_audio_key", step.input_audio_key)
         if step.output_audio_key:
             op_config.params.setdefault("output_audio_key", step.output_audio_key)
+
+        if isinstance(operator, ManifestOperator):
+            if self.config.source_dir:
+                op_config.params.setdefault("source_dir", self.config.source_dir)
+            updated = operator.run(list(samples), op_config)
+            self.metrics.record(step.name, processed=max(len(updated) - len(samples), 0))
+            self.metrics.total = len(updated)
+            return updated
 
         updated_samples: list[Sample] = []
         for idx, sample in enumerate(samples, start=1):

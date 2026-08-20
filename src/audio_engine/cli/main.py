@@ -12,7 +12,7 @@ from rich.table import Table
 
 import audio_engine.operators  # noqa: F401 — register all operators
 from audio_engine.core.manifest import Manifest
-from audio_engine.core.pipeline import PipelineConfig, PipelineRunner
+from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, PipelineStep
 from audio_engine.core.registry import OperatorRegistry
 
 app = typer.Typer(
@@ -34,6 +34,7 @@ def _resolve_dataset(name: str) -> Path:
 def _resolve_operator(name: str) -> str:
     """Allow shorthand names like qwen_asr -> asr.qwen."""
     aliases = {
+        "scan": "ingest.scan",
         "qwen_asr": "asr.qwen",
         "qwen": "asr.qwen",
         "sensevoice": "asr.sensevoice",
@@ -68,34 +69,33 @@ def ingest(
     copy_to_raw: bool = typer.Option(False, "--copy", help="Copy files to data/raw/"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output manifest path"),
 ) -> None:
-    """Scan audio files and create a manifest."""
+    """Ingest audio files via the ingest.scan operator (unified pipeline path)."""
     if not source.is_dir():
         raise typer.BadParameter(f"Not a directory: {source}")
 
-    manifest = Manifest.ingest(source)
     dataset_name = name or f"raw_{datetime.now().strftime('%Y%m%d')}"
-
+    params: dict = {"source_dir": str(source)}
     if copy_to_raw:
-        import shutil
+        params["copy_to"] = "data/raw"
 
-        raw_dir = Path("data/raw")
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        for sample in manifest.samples:
-            src = Path(sample.source_path)
-            dst = raw_dir / src.name
-            if not dst.exists():
-                shutil.copy2(src, dst)
-            sample.source_path = str(dst.resolve())
-            sample.audio["raw"] = str(dst.resolve())
+    cfg = PipelineConfig(
+        name=f"ingest_{dataset_name}",
+        input_manifest="",
+        source_dir=str(source),
+        steps=[PipelineStep(name="ingest", operator="ingest.scan", params=params)],
+    )
+    runner = PipelineRunner(cfg)
+    result = runner.run()
 
     out_path = output or (MANIFESTS_DIR / f"{dataset_name}.parquet")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest.save(out_path)
-    manifest.save(out_path.with_suffix(".jsonl"))
+    result.save(out_path)
+    result.save(out_path.with_suffix(".jsonl"))
 
-    stats = manifest.stats()
+    stats = result.stats()
     console.print(f"[green]OK[/green] {stats['files']} files discovered")
     console.print(f"Manifest created: [cyan]{out_path}[/cyan]")
+    console.print(f"  Run dir: [cyan]{runner.run_dir}[/cyan]")
 
 
 @app.command("stats")
@@ -187,7 +187,7 @@ def pipeline_run(
 
     # Save back to input manifest if under datasets/
     input_path = Path(cfg.input_manifest)
-    if not input_path.is_absolute():
+    if cfg.input_manifest and not input_path.is_absolute():
         try:
             resolved = Manifest.resolve_path(cfg.input_manifest)
             result.save(resolved)
