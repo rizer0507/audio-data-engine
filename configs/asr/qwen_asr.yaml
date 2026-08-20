@@ -1,0 +1,6 @@
+model: qwen3-asr
+version: "20260820"
+api_url: null
+timeout: 120
+language: zh
+temperature: 0

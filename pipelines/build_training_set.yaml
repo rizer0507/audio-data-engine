@@ -1,0 +1,39 @@
+name: build_training_set
+
+input:
+  manifest: datasets/manifests/raw_20260820.parquet
+
+pipeline:
+  - name: snr
+    operator: quality.snr
+    params:
+      input_audio_key: raw
+
+  - name: vad
+    operator: audio.vad
+    params:
+      input_audio_key: raw
+
+  - name: filter_quality
+    operator: quality.filter
+    params:
+      expr: "quality_snr > 5 and quality_speech_ratio > 0.5"
+      label_key: quality_pass
+
+  - name: resample
+    operator: audio.resample
+    params:
+      sample_rate: 16000
+      input_audio_key: raw
+      output_audio_key: resampled_16k
+
+  - name: qwen_asr
+    operator: asr.qwen
+    params:
+      input_audio_key: resampled_16k
+
+  - name: cer
+    operator: quality.cer
+    params:
+      hypothesis: qwen
+      reference: gold_text

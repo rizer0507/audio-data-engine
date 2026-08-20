@@ -1,0 +1,44 @@
+name: denoise_qwen
+
+input:
+  manifest: datasets/manifests/raw_20260820.parquet
+
+pipeline:
+  - name: pcm_convert
+    operator: audio.pcm_to_wav
+    params:
+      sample_rate: 8000
+      input_audio_key: raw
+      output_audio_key: pcm_to_wav
+
+  - name: resample
+    operator: audio.resample
+    params:
+      sample_rate: 16000
+      input_audio_key: pcm_to_wav
+      output_audio_key: resampled_16k
+
+  - name: denoise
+    operator: audio.denoise
+    params:
+      model: spectral_gate
+      input_audio_key: resampled_16k
+      output_audio_key: denoised
+
+  - name: qwen_asr
+    operator: asr.qwen
+    params:
+      input_audio_key: denoised
+      config_path: configs/asr/qwen_asr.yaml
+
+  - name: sensevoice
+    operator: asr.sensevoice
+    params:
+      input_audio_key: denoised
+      config_path: configs/asr/sensevoice.yaml
+
+  - name: compare
+    operator: quality.transcript_diff
+    params:
+      model_a: qwen
+      model_b: sensevoice

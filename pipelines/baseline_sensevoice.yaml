@@ -1,0 +1,18 @@
+name: baseline_sensevoice
+
+input:
+  manifest: datasets/manifests/raw_20260820.parquet
+
+pipeline:
+  - name: resample
+    operator: audio.resample
+    params:
+      sample_rate: 16000
+      input_audio_key: raw
+      output_audio_key: resampled_16k
+
+  - name: sensevoice
+    operator: asr.sensevoice
+    params:
+      input_audio_key: resampled_16k
+      config_path: configs/asr/sensevoice.yaml

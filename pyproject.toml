@@ -1,0 +1,48 @@
+[project]
+name = "audio-data-engine"
+version = "0.1.0"
+description = "Manifest-driven audio data processing pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "typer>=0.12",
+    "pyyaml>=6.0",
+    "pyarrow>=14.0",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "scipy>=1.11",
+    "loguru>=0.7",
+    "rich>=13.0",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+audio-data = "audio_engine.cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+dev-mode-dirs = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audio_engine"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/audio_engine", "configs", "pipelines"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

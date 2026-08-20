@@ -1,0 +1,70 @@
+audio-data-engine/
+│
+├── configs/
+│   ├── asr/
+│   │   ├── qwen_asr.yaml
+│   │   └── sensevoice.yaml
+│   ├── augmentation/
+│   └── denoise/
+│
+├── pipelines/
+│   ├── baseline_qwen.yaml
+│   ├── baseline_sensevoice.yaml
+│   ├── denoise_qwen.yaml
+│   └── build_training_set.yaml
+│
+├── src/audio_engine/
+│
+│   ├── core/
+│   │   ├── sample.py
+│   │   ├── manifest.py
+│   │   ├── operator.py
+│   │   ├── pipeline.py
+│   │   └── registry.py
+│   │
+│   ├── operators/
+│   │   ├── audio/
+│   │   │   ├── pcm.py
+│   │   │   ├── resample.py
+│   │   │   ├── vad.py
+│   │   │   └── denoise.py
+│   │   │
+│   │   ├── augmentation/
+│   │   │   ├── noise.py
+│   │   │   ├── speed.py
+│   │   │   └── volume.py
+│   │   │
+│   │   ├── asr/
+│   │   │   ├── qwen.py
+│   │   │   ├── sensevoice.py
+│   │   │   └── base.py
+│   │   │
+│   │   └── quality/
+│   │       ├── cer.py
+│   │       ├── snr.py
+│   │       └── filter.py
+│   │
+│   └── cli/
+│       └── main.py
+│
+├── datasets/
+│   ├── manifests/
+│   └── README.md
+│
+├── data/
+│   ├── raw/
+│   ├── derived/
+│   ├── cache/
+│   └── exports/
+│
+├── runs/
+│   └── 20260820_113012/
+│       ├── config.yaml
+│       ├── manifest.parquet
+│       ├── metrics.json
+│       └── run.log
+│
+├── tests/
+│
+├── pyproject.toml
+└── README.md

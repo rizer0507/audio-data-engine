@@ -1,0 +1,5 @@
+model: sensevoice-small
+model_path: iic/SenseVoiceSmall
+version: "20260820"
+language: auto
+use_itn: true
