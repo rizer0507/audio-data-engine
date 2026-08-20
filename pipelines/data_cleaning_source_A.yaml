@@ -45,16 +45,11 @@ pipeline:
     params:
       input_audio_key: resampled_16k
 
-  - name: vad
-    operator: audio.vad
-    params:
-      input_audio_key: resampled_16k
-      energy_threshold: 0.01
-
+  # 输入已是 VAD 后片段，不再跑 audio.vad；仅按损坏 / 时长过滤
   - name: audio_pass
     operator: quality.filter
     params:
-      expr: "label_broken != True and quality_speech_ratio > 0.1"
+      expr: "label_broken != True and duration > 0"
       label_key: audio_pass
 
   - name: select_pass

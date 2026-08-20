@@ -1,0 +1,177 @@
+B. 标注流水线（只做文本生成与标注融合）
+
+
+
+目标
+
+
+
+
+
+输入：datasets/manifests/cleaned_source_A_YYYYMMDD.parquet（或 cleaned_source_B_*）
+
+
+
+输出：data/exports/train_source_A.jsonl
+
+
+
+流程
+
+
+
+
+
+双模型 ASR（可并行）
+
+
+
+
+
+asr.sensevoice + asr.qwen，输入音频 key 为 resampled_16k
+
+
+
+输出到 transcripts.sensevoice.text / transcripts.qwen.text
+
+
+
+文本归一化
+
+
+
+
+
+两路文本统一走 zizhun.py 的 clean_text（去标签、口语词归一、数字转汉字）
+
+
+
+一致性筛选（伪金标）
+
+
+
+
+
+计算归一化后的编辑距离 / 字准率（word_acc = 1 - dis / len(ref)）
+
+
+
+word_acc >= 阈值（如 0.95）→ labels.pseudo_gold = true
+
+
+
+标注融合
+
+
+
+
+
+一致样本：归一化后文本写入 labels.gold_text
+
+
+
+不一致样本：接入边际距离脚本（quality.transcript_merge）融合
+
+
+
+差异过大：labels.needs_review = true
+
+
+
+业务过滤（语音信箱）
+
+
+
+
+
+对 gold_text 正则匹配：您拨打的电话|无法接通|留言|语音信箱
+
+
+
+命中：labels.voicemail = true，导出时排除
+
+
+
+YAML 草案
+
+name: labeling_source_A
+
+input:
+  manifest: datasets/manifests/cleaned_source_A_20260820.parquet
+
+output:
+  export: data/exports/train_source_A.jsonl
+
+pipeline:
+  - { operator: asr.sensevoice, params: { input_audio_key: resampled_16k } }
+  - { operator: asr.qwen, params: { input_audio_key: resampled_16k } }
+  - { operator: quality.transcript_diff, params: { model_a: qwen, model_b: sensevoice } }  # 待扩展为 clean_text + word_acc
+  - { operator: quality.transcript_merge }  # 待实现，接入边际距离脚本
+  - { operator: quality.filter, params: { expr: "label_voicemail != True and label_pseudo_gold == True", label_key: export_pass } }
+
+
+
+交付物
+
+
+
+
+
+
+
+阶段
+
+
+
+产物
+
+
+
+
+
+批次入库
+
+
+
+datasets/batches/batch_*/batch_meta.yaml + manifest.parquet
+
+
+
+
+
+数据源注册
+
+
+
+datasets/sources/source_*.yaml
+
+
+
+
+
+清洗
+
+
+
+datasets/manifests/cleaned_source_*_YYYYMMDD.parquet
+
+
+
+
+
+标注
+
+
+
+data/exports/train_source_*.jsonl
+
+
+
+
+
+每轮 run
+
+
+
+runs/<timestamp>/manifest.parquet + metrics.json
+

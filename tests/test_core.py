@@ -165,16 +165,16 @@ def test_filter_manifest(sample_wav: Path):
 def test_probe_and_select(sample_wav: Path, tmp_path: Path):
     from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, PipelineStep
 
-    # silent wav should fail speech_ratio threshold
-    silent = tmp_path / "silent.wav"
-    sf.write(str(silent), np.zeros(16000, dtype=np.float32), 16000)
+    # corrupt wav should fail probe → broken → filtered out（输入已是 VAD 后数据，不测 speech_ratio）
+    broken = tmp_path / "broken.wav"
+    broken.write_bytes(b"not a real wav file")
 
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir()
     import shutil
 
     shutil.copy2(sample_wav, audio_dir / "good.wav")
-    shutil.copy2(silent, audio_dir / "silent.wav")
+    shutil.copy2(broken, audio_dir / "broken.wav")
 
     cfg = PipelineConfig(
         name="test_cleaning",
@@ -197,15 +197,10 @@ def test_probe_and_select(sample_wav: Path, tmp_path: Path):
                 params={"input_audio_key": "resampled_16k"},
             ),
             PipelineStep(
-                name="vad",
-                operator="audio.vad",
-                params={"input_audio_key": "resampled_16k"},
-            ),
-            PipelineStep(
                 name="audio_pass",
                 operator="quality.filter",
                 params={
-                    "expr": "label_broken != True and quality_speech_ratio > 0.1",
+                    "expr": "label_broken != True and duration > 0",
                     "label_key": "audio_pass",
                 },
             ),

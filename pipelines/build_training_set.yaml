@@ -9,15 +9,11 @@ pipeline:
     params:
       input_audio_key: raw
 
-  - name: vad
-    operator: audio.vad
-    params:
-      input_audio_key: raw
-
+  # 输入已是 VAD 后片段，不再跑 audio.vad
   - name: filter_quality
     operator: quality.filter
     params:
-      expr: "quality_snr > 5 and quality_speech_ratio > 0.5"
+      expr: "quality_snr > 5"
       label_key: quality_pass
 
   - name: resample
