@@ -1,0 +1,15 @@
+{
+  "quality": {
+    "speech_ratio": 1.0,
+    "vad_method": "energy"
+  },
+  "lineage_entry": {
+    "operator": "audio.vad",
+    "version": "1.0.0",
+    "params": {
+      "input_audio_key": "resampled_16k",
+      "energy_threshold": 0.01
+    },
+    "input_key": "resampled_16k"
+  }
+}

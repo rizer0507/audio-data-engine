@@ -119,3 +119,104 @@ def test_filter_manifest(sample_wav: Path):
 
     empty = manifest.filter("label_badcase == 'silence'")
     assert len(empty) == 0
+
+
+def test_probe_and_select(sample_wav: Path, tmp_path: Path):
+    from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, PipelineStep
+
+    # silent wav should fail speech_ratio threshold
+    silent = tmp_path / "silent.wav"
+    sf.write(str(silent), np.zeros(16000, dtype=np.float32), 16000)
+
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    import shutil
+
+    shutil.copy2(sample_wav, audio_dir / "good.wav")
+    shutil.copy2(silent, audio_dir / "silent.wav")
+
+    cfg = PipelineConfig(
+        name="test_cleaning",
+        input_manifest="",
+        source_dir=str(audio_dir),
+        steps=[
+            PipelineStep(name="ingest", operator="ingest.scan"),
+            PipelineStep(
+                name="resample",
+                operator="audio.resample",
+                params={
+                    "sample_rate": 16000,
+                    "input_audio_key": "raw",
+                    "output_audio_key": "resampled_16k",
+                },
+            ),
+            PipelineStep(
+                name="probe",
+                operator="quality.probe",
+                params={"input_audio_key": "resampled_16k"},
+            ),
+            PipelineStep(
+                name="vad",
+                operator="audio.vad",
+                params={"input_audio_key": "resampled_16k"},
+            ),
+            PipelineStep(
+                name="audio_pass",
+                operator="quality.filter",
+                params={
+                    "expr": "label_broken != True and quality_speech_ratio > 0.1",
+                    "label_key": "audio_pass",
+                },
+            ),
+            PipelineStep(
+                name="select_pass",
+                operator="quality.select",
+                params={"expr": "label_audio_pass == True"},
+            ),
+        ],
+        output_dir=tmp_path / "derived",
+        cache_dir=tmp_path / "cache",
+        runs_dir=tmp_path / "runs",
+    )
+    result = PipelineRunner(cfg).run()
+    assert len(result) == 1
+    assert result.samples[0].id == "good"
+    assert result.samples[0].labels.get("audio_pass") is True
+
+
+def test_resolve_source(tmp_path: Path):
+    from audio_engine.core.source import resolve_source_input
+
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    manifest = resources / "manifest.yaml"
+    manifest.write_text(
+        "sources:\n"
+        "  - source_id: source_A\n"
+        "    source_name: A\n"
+        "    ingested_at: '2026-08-20T10:00:00+08:00'\n"
+        "    origin: test\n"
+        "    path: D:/Data/batch_A\n",
+        encoding="utf-8",
+    )
+    # no sample index → fall back to source_dir
+    resolved = resolve_source_input("source_A", resources_manifest=manifest)
+    assert resolved["source_dir"] == "D:/Data/batch_A"
+
+    samples_dir = tmp_path / "resources" / "sources" / "source_A"
+    samples_dir.mkdir(parents=True)
+    (samples_dir / "samples.jsonl").write_text(
+        '{"id":"x","source_path":"a.wav","sha256":"1"}\n',
+        encoding="utf-8",
+    )
+    # monkeypatch cwd-relative paths used by resolver: create under real relative path
+    # Prefer testing lookup with absolute by temporarily chdir
+    import os
+
+    old = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        resolved2 = resolve_source_input("source_A", resources_manifest=manifest)
+        assert resolved2["manifest"].endswith("samples.jsonl")
+    finally:
+        os.chdir(old)

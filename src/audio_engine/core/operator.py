@@ -103,11 +103,20 @@ class BaseOperator(ABC):
             return False
         return sample.is_completed(self.full_name)
 
-    def apply_cached(self, sample: Sample, cached: dict[str, Any]) -> Sample:
+    _SCALAR_FIELDS = ("sample_rate", "channels", "duration", "source_path", "sha256")
+
+    def _apply_updates(self, sample: Sample, updates: dict[str, Any]) -> Sample:
         updated = sample.model_copy(deep=True)
         for key in ("audio", "transcripts", "quality", "labels"):
-            if key in cached:
-                getattr(updated, key).update(cached[key])
+            if key in updates:
+                getattr(updated, key).update(updates[key])
+        for field in self._SCALAR_FIELDS:
+            if field in updates:
+                setattr(updated, field, updates[field])
+        return updated
+
+    def apply_cached(self, sample: Sample, cached: dict[str, Any]) -> Sample:
+        updated = self._apply_updates(sample, cached)
         if "lineage_entry" in cached:
             entry = cached["lineage_entry"]
             updated.add_lineage(
@@ -148,10 +157,7 @@ class BaseOperator(ABC):
             failed.mark_failed(self.full_name, str(exc))
             raise
 
-        updated = sample.model_copy(deep=True)
-        for key in ("audio", "transcripts", "quality", "labels"):
-            if key in updates:
-                getattr(updated, key).update(updates[key])
+        updated = self._apply_updates(sample, updates)
 
         if "lineage_entry" in updates:
             entry = updates["lineage_entry"]
@@ -168,7 +174,14 @@ class BaseOperator(ABC):
         updated.mark_completed(self.full_name)
         cache_data = {
             k: updates[k]
-            for k in ("audio", "transcripts", "quality", "labels", "lineage_entry")
+            for k in (
+                "audio",
+                "transcripts",
+                "quality",
+                "labels",
+                "lineage_entry",
+                *self._SCALAR_FIELDS,
+            )
             if k in updates
         }
         self.save_cache(cache_key, config, cache_data)

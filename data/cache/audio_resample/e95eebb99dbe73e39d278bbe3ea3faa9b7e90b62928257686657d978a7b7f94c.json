@@ -1,0 +1,19 @@
+{
+  "audio": {
+    "resampled_16k": "D:\\Work\\audio-data-engine\\data\\_smoke_cleaning\\audio\\good.wav"
+  },
+  "lineage_entry": {
+    "operator": "audio.resample",
+    "version": "1.0.0",
+    "params": {
+      "sample_rate": 16000,
+      "input_audio_key": "pcm_wav",
+      "output_audio_key": "resampled_16k"
+    },
+    "input_key": "pcm_wav",
+    "output_key": "resampled_16k",
+    "output_path": "D:\\Work\\audio-data-engine\\data\\_smoke_cleaning\\audio\\good.wav"
+  },
+  "sample_rate": 16000,
+  "duration": 1.0
+}

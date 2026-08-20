@@ -30,6 +30,8 @@ class PipelineConfig:
     input_manifest: str
     steps: list[PipelineStep]
     source_dir: str | None = None
+    source_id: str | None = None
+    output_manifest: str | None = None
     output_dir: Path = Path("data/derived")
     cache_dir: Path = Path("data/cache")
     runs_dir: Path = Path("runs")
@@ -39,6 +41,8 @@ class PipelineConfig:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PipelineConfig:
+        from audio_engine.core.source import resolve_source_input
+
         path = Path(path)
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         steps = [
@@ -51,18 +55,30 @@ class PipelineConfig:
             )
             for s in data.get("pipeline", [])
         ]
-        input_cfg = data.get("input", {})
-        manifest = input_cfg.get("manifest", "")
+        input_cfg = data.get("input", {}) or {}
+        output_cfg = data.get("output", {}) or {}
+        manifest = input_cfg.get("manifest", "") or ""
         source_dir = input_cfg.get("source_dir")
+        source_id = input_cfg.get("source")
+
+        if source_id and not manifest and not source_dir:
+            resolved = resolve_source_input(source_id)
+            manifest = resolved.get("manifest", "")
+            source_dir = resolved.get("source_dir")
+
         if not manifest and not source_dir:
             raise ValueError(
-                f"Pipeline '{path}' needs input.manifest or input.source_dir"
+                f"Pipeline '{path}' needs input.manifest, input.source_dir, or input.source"
             )
+
+        output_manifest = output_cfg.get("manifest") or data.get("output_manifest")
         return cls(
             name=data.get("name", path.stem),
             input_manifest=manifest,
             steps=steps,
             source_dir=source_dir,
+            source_id=source_id,
+            output_manifest=output_manifest,
             output_dir=Path(data.get("output_dir", "data/derived")),
             cache_dir=Path(data.get("cache_dir", "data/cache")),
             runs_dir=Path(data.get("runs_dir", "runs")),
@@ -160,6 +176,8 @@ class PipelineRunner:
                     "name": self.config.name,
                     "input_manifest": str(manifest_path) if manifest_path else "",
                     "source_dir": self.config.source_dir,
+                    "source_id": self.config.source_id,
+                    "output_manifest": self.config.output_manifest,
                     "filter": self.config.filter_expr,
                     "pipeline": [
                         {"name": s.name, "operator": s.operator, "params": s.params}
@@ -200,7 +218,13 @@ class PipelineRunner:
             if self.config.source_dir:
                 op_config.params.setdefault("source_dir", self.config.source_dir)
             updated = operator.run(list(samples), op_config)
-            self.metrics.record(step.name, processed=max(len(updated) - len(samples), 0))
+            delta = len(updated) - len(samples)
+            if delta > 0:
+                self.metrics.record(step.name, processed=delta)
+            elif delta < 0:
+                self.metrics.record(step.name, processed=len(updated), skipped=-delta)
+            else:
+                self.metrics.record(step.name, processed=0)
             self.metrics.total = len(updated)
             return updated
 

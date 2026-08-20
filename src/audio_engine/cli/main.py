@@ -46,6 +46,8 @@ def _resolve_operator(name: str) -> str:
         "cer": "quality.cer",
         "filter": "quality.filter",
         "transcript_diff": "quality.transcript_diff",
+        "probe": "quality.probe",
+        "select": "quality.select",
         "add_noise": "augmentation.add_noise",
         "speed_perturb": "augmentation.speed_perturb",
         "volume_perturb": "augmentation.volume_perturb",
@@ -185,9 +187,14 @@ def pipeline_run(
     runner = PipelineRunner(cfg)
     result = runner.run()
 
-    # Save back to input manifest if under datasets/
-    input_path = Path(cfg.input_manifest)
-    if cfg.input_manifest and not input_path.is_absolute():
+    if cfg.output_manifest:
+        out = Path(cfg.output_manifest)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        result.save(out)
+        result.save(out.with_suffix(".jsonl"))
+        console.print(f"  Output: [cyan]{out}[/cyan]")
+    elif cfg.input_manifest and not Path(cfg.input_manifest).is_absolute():
+        # Save back to input manifest only when no dedicated output is configured
         try:
             resolved = Manifest.resolve_path(cfg.input_manifest)
             result.save(resolved)

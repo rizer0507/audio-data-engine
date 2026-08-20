@@ -1,0 +1,12 @@
+{
+  "labels": {
+    "audio_pass": false
+  },
+  "lineage_entry": {
+    "operator": "quality.filter",
+    "version": "1.0.0",
+    "params": {
+      "expr": "label_broken != True and quality_speech_ratio > 0.1"
+    }
+  }
+}

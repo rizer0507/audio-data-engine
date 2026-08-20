@@ -1,0 +1,58 @@
+# 数据清洗流水线：只做音频质量，不做标注决策
+#
+# 输入：已登记的逻辑数据源 source_A（见 resources/manifest.yaml）
+#   - 若已有样本索引 → 直接加载
+#   - 若仅有外部 path → 第一步 ingest.scan 只读扫描
+# 输出：datasets/manifests/cleaned_source_A.parquet（仅 audio_pass 样本）
+#
+# 音频 key 链：raw → pcm_wav → resampled_16k
+
+name: data_cleaning_source_A
+
+input:
+  source: source_A
+
+output:
+  manifest: datasets/manifests/cleaned_source_A.parquet
+
+pipeline:
+  # 若 source 尚无样本索引、只有外部 path，保留本步；已有 manifest 时会按 sha256 去重跳过
+  - name: ingest
+    operator: ingest.scan
+
+  - name: pcm_convert
+    operator: audio.pcm_to_wav
+    params:
+      sample_rate: 8000
+      channels: 1
+      input_audio_key: raw
+      output_audio_key: pcm_wav
+
+  - name: resample
+    operator: audio.resample
+    params:
+      sample_rate: 16000
+      input_audio_key: pcm_wav
+      output_audio_key: resampled_16k
+
+  - name: probe
+    operator: quality.probe
+    params:
+      input_audio_key: resampled_16k
+
+  - name: vad
+    operator: audio.vad
+    params:
+      input_audio_key: resampled_16k
+      energy_threshold: 0.01
+
+  - name: audio_pass
+    operator: quality.filter
+    params:
+      expr: "label_broken != True and quality_speech_ratio > 0.1"
+      label_key: audio_pass
+
+  - name: select_pass
+    operator: quality.select
+    params:
+      expr: "label_audio_pass == True"
