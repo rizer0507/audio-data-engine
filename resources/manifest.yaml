@@ -8,8 +8,8 @@ sources:
   - source_id: source_A
     source_name: 数据源A
     ingested_at: "2026-08-20T10:30:00+08:00"
-    origin: "某供应商-第一批客服外呼录音"
-    path: "D:/Data/batch_A"
+    origin: "test"
+    path: "D:/Work/FunASR-main/data/wavfile"
     format: wav
     sample_rate: 8000
     file_count: 15000
