@@ -1,5 +1,5 @@
 model: sensevoice-small
-model_path: iic/SenseVoiceSmall
+model_path: /data2/data-cp/xijujun/models/SenseVoiceSmall
 version: "20260820"
 model_version: "20260820"
 device: cuda:0

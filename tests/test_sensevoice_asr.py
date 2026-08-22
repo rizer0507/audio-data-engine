@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import audio_engine.operators  # noqa: F401
 import audio_engine.operators.asr.sensevoice as sensevoice_module
 from audio_engine.core.operator import OperatorConfig
@@ -60,3 +62,23 @@ def test_batch_isolates_broken_audio(tmp_path, monkeypatch):
     assert results[1].sample.status["asr.sensevoice_batch"] == "failed"
     assert "broken audio" in results[1].sample.errors["asr.sensevoice_batch"]
     assert results[2].sample.get_transcript_text("sensevoice") == "文本s2"
+
+
+def test_environment_model_path_has_highest_priority(tmp_path, monkeypatch):
+    config_file = tmp_path / "sensevoice.yaml"
+    config_file.write_text("model_path: /from/yaml\n", encoding="utf-8")
+    monkeypatch.setenv("SENSEVOICE_MODEL_PATH", "/from/environment")
+    config = OperatorConfig(
+        params={"config_path": str(config_file), "model_path": "/from/operator"}
+    )
+
+    assert sensevoice_module._resolve_settings(config)["model_path"] == "/from/environment"
+
+
+def test_missing_absolute_model_path_fails_before_funasr_import(tmp_path):
+    missing = tmp_path / "missing-model"
+
+    with pytest.raises(FileNotFoundError, match="SenseVoice 本地模型目录不存在"):
+        sensevoice_module._load_sensevoice_model(
+            {"model_path": str(missing), "device": "cuda:0"}
+        )
