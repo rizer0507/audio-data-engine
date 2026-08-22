@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from loguru import logger
 
 from audio_engine.core.operator import BatchOperator, OperatorConfig, OperatorResult
 from audio_engine.core.registry import register_operator
@@ -37,8 +38,8 @@ def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
     )
     settings.update({key: value for key, value in config.params.items() if key != "config_path"})
     settings["model_path"] = (
-        config.params.get("model_path")
-        or os.environ.get("SENSEVOICE_MODEL_PATH")
+        os.environ.get("SENSEVOICE_MODEL_PATH")
+        or config.params.get("model_path")
         or settings.get("model_path")
         or settings.get("model", "iic/SenseVoiceSmall")
     )
@@ -54,8 +55,15 @@ def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorC
 
 
 def _load_sensevoice_model(settings: dict[str, Any]) -> Any:
+    model_path = str(settings["model_path"])
+    path = Path(model_path).expanduser()
+    if path.is_absolute() and not path.is_dir():
+        raise FileNotFoundError(
+            f"SenseVoice 本地模型目录不存在: {path}. "
+            "请检查 SENSEVOICE_MODEL_PATH 或 configs/asr/sensevoice.yaml"
+        )
     model_kwargs = {
-        "model": settings["model_path"],
+        "model": model_path,
         "device": settings.get("device", "cuda:0"),
         "disable_update": bool(settings.get("disable_update", True)),
     }
@@ -220,15 +228,30 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
                 parsed = parse_sensevoice_text(f"[mock:sensevoice:{sample.id}]")
                 results[index] = self._finalize(sample, parsed, cache_key, config, settings)
         elif pending:
+            logger.info(
+                "SenseVoice inference starting: pending={}, model={}, device={}, batch_size={}",
+                len(pending), settings["model_path"], settings.get("device", "cuda:0"),
+                settings.get("batch_size", 32),
+            )
             try:
                 model = _load_sensevoice_model(settings)
             except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "SenseVoice model initialization failed; all {} pending samples will fail: {}",
+                    len(pending), exc,
+                )
                 for index, sample, _ in pending:
                     results[index] = self._failed(sample, exc)
             else:
                 size = max(1, int(settings.get("batch_size", 32)))
                 for start in range(0, len(pending), size):
                     self._process_chunk(pending[start : start + size], model, config, settings, results)
+        else:
+            logger.warning(
+                "SenseVoice inference was not called: all {} samples were already completed or cache hits. "
+                "Use --force to perform real inference again.",
+                len(samples),
+            )
 
         if any(result is None for result in results):
             raise RuntimeError("SenseVoice batch operator produced an incomplete result set")
