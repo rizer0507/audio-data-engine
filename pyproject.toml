@@ -22,6 +22,10 @@ dependencies = [
 asr = [
     "qwen-asr",
 ]
+sensevoice = [
+    "funasr",
+    "modelscope",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",

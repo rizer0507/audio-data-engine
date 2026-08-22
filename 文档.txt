@@ -1,0 +1,62 @@
+SenseVoice 流水线执行步骤（4 卡 A800：GPU 4、5、6、7）
+=======================================================
+
+一、进入项目并安装
+------------------
+cd /workspace/audio-data-engine
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[sensevoice]'
+
+二、准备模型与输入
+------------------
+1. 将 SenseVoiceSmall 下载到本机，例如 /data/models/SenseVoiceSmall。
+2. 设置模型路径（环境变量优先于配置文件）：
+   export SENSEVOICE_MODEL_PATH=/data/models/SenseVoiceSmall
+3. 确认 Qwen-ASR 已完成，输入文件存在：
+   datasets/manifests/qwen_asr_source_A.parquet
+4. 输入 manifest 的每条样本应包含 resampled_16k 音频，并已有 transcripts.qwen。
+
+三、切为 4 个时长均衡分片
+--------------------------
+rm -rf runs/sensevoice_shards
+mkdir -p runs/sensevoice_shards
+
+audio-data manifest shard datasets/manifests/qwen_asr_source_A.parquet \
+  --shards 4 \
+  --strategy duration-balanced \
+  --output-dir runs/sensevoice_shards/input
+
+四、在 GPU 4、5、6、7 上并行识别
+---------------------------------
+# 每张卡启动一个常驻模型进程，进程内 batch_size=32。
+audio-data pipeline run-shards pipelines/sensevoice_asr_batch.yaml \
+  --shard-dir runs/sensevoice_shards/input \
+  --parallel-shards 4 \
+  --gpus 4,5,6,7 \
+  --instances-per-gpu 1 \
+  --workers 1 \
+  --executor sequential \
+  --run-root runs/sensevoice_shards/output
+
+若任务中断，原样重跑上面的 run-shards 命令；固定 run-root 会利用 checkpoint 和逐样本缓存续跑。不要增加 --force，否则会忽略缓存。
+
+五、合并结果
+------------
+audio-data manifest merge 'runs/sensevoice_shards/output/shard-*.parquet' \
+  --expected-shards 4 \
+  --output datasets/manifests/qwen_sensevoice_source_A.parquet
+
+六、检查与比对
+--------------
+audio-data stats datasets/manifests/qwen_sensevoice_source_A.parquet
+
+audio-data compare qwen sensevoice \
+  --dataset datasets/manifests/qwen_sensevoice_source_A.parquet \
+  --output runs/qwen_vs_sensevoice
+
+最终 manifest 同时保存 transcripts.qwen 与 transcripts.sensevoice。SenseVoice 结果包含 text、model、version、confidence，以及 extra.raw_text、language、emotion、events；失败样本记录在 status/errors，不会写入伪造识别结果。
+
+七、显存调优
+------------
+默认 batch_size=32（configs/asr/sensevoice.yaml）。先观察 nvidia-smi；如 OOM 改为 16，如显存余量超过 15% 可压测 64。修改配置后重新执行时缓存键会变化。建议先保持每卡一个实例，确认稳定后再评估每卡两个实例。

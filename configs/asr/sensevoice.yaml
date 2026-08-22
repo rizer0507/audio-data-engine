@@ -1,5 +1,9 @@
 model: sensevoice-small
 model_path: iic/SenseVoiceSmall
 version: "20260820"
+model_version: "20260820"
+device: cuda:0
+batch_size: 32
 language: auto
 use_itn: true
+disable_update: true
