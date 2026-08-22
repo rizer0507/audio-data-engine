@@ -1,0 +1,21 @@
+# Qwen-ASR 输出之上的 SenseVoice 批量识别阶段。
+name: sensevoice_asr_batch
+
+input:
+  manifest: datasets/manifests/qwen_asr_source_A.parquet
+
+output:
+  manifest: datasets/manifests/qwen_sensevoice_source_A.parquet
+
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+  checkpoint_every: 500
+
+pipeline:
+  - name: sensevoice_asr
+    operator: asr.sensevoice_batch
+    params:
+      input_audio_key: resampled_16k
+      config_path: configs/asr/sensevoice.yaml
