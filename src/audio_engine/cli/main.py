@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -335,6 +336,16 @@ def pipeline_run_shards(
     executor: Optional[str] = typer.Option(
         None, "--executor", help=f"Override executor: {', '.join(EXECUTORS)}"
     ),
+    gpus: Optional[str] = typer.Option(
+        None,
+        "--gpus",
+        help="Comma-separated GPU ids assigned round-robin to shard processes (e.g. 0,1,2,3)",
+    ),
+    instances_per_gpu: int = typer.Option(
+        1,
+        "--instances-per-gpu",
+        help="Max concurrent shard processes sharing one GPU (A800 80G ASR can use 2)",
+    ),
     force: bool = typer.Option(False, "--force", help="Ignore cache"),
     run_root: Optional[Path] = typer.Option(None, "--run-root", help="Output root for this batch"),
 ) -> None:
@@ -352,22 +363,49 @@ def pipeline_run_shards(
         raise typer.BadParameter(f"No shard-*.parquet found in {shard_dir}")
     if parallel_shards < 1:
         raise typer.BadParameter("--parallel-shards must be >= 1")
+    if instances_per_gpu < 1:
+        raise typer.BadParameter("--instances-per-gpu must be >= 1")
+    gpu_ids = [item.strip() for item in (gpus or "").split(",") if item.strip()]
+    if len(gpu_ids) != len(set(gpu_ids)):
+        raise typer.BadParameter("--gpus must not contain duplicate ids")
+    gpu_slots = len(gpu_ids) * instances_per_gpu if gpu_ids else 0
+    if gpu_ids and parallel_shards > gpu_slots:
+        raise typer.BadParameter(
+            "--parallel-shards cannot exceed GPUs * --instances-per-gpu "
+            f"({len(gpu_ids)} * {instances_per_gpu} = {gpu_slots})"
+        )
 
     ingest_steps = sorted({s.name for s in cfg.steps if s.operator.startswith("ingest.")})
     root = run_root or (RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cfg.name}_shards")
     root.mkdir(parents=True, exist_ok=True)
 
     console.print(f"Running {len(shards)} shards, {parallel_shards} at a time")
+    if gpu_ids:
+        console.print(
+            f"  GPUs: {','.join(gpu_ids)}  instances-per-gpu: {instances_per_gpu}"
+        )
     console.print(f"  Run root: [cyan]{root}[/cyan]")
     if ingest_steps:
         console.print(f"  Dropping ingest steps: {', '.join(ingest_steps)}")
 
     queue = list(shards)
-    running: list[tuple[Path, subprocess.Popen, object]] = []
+    running: list[tuple[Path, subprocess.Popen, object, str | None]] = []
     exit_codes: dict[str, int] = {}
 
     while queue or running:
         while queue and len(running) < parallel_shards:
+            gpu_id = None
+            if gpu_ids:
+                used: dict[str, int] = {}
+                for _shard, _proc, _log, assigned in running:
+                    if assigned is not None:
+                        used[assigned] = used.get(assigned, 0) + 1
+                gpu_id = next(
+                    (item for item in gpu_ids if used.get(item, 0) < instances_per_gpu),
+                    None,
+                )
+                if gpu_id is None:
+                    break
             shard = queue.pop(0)
             shard_run_dir = root / shard.stem
             shard_run_dir.mkdir(parents=True, exist_ok=True)
@@ -395,13 +433,23 @@ def pipeline_run_shards(
                 command.append("--force")
 
             log_file = (root / f"{shard.stem}.log").open("w", encoding="utf-8")
-            process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT)
-            running.append((shard, process, log_file))
-            console.print(f"  started {shard.name} (pid {process.pid})")
+            env = None
+            if gpu_id is not None:
+                env = os.environ.copy()
+                env["CUDA_VISIBLE_DEVICES"] = gpu_id
+            process = subprocess.Popen(
+                command,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+            running.append((shard, process, log_file, gpu_id))
+            gpu_label = f", GPU {gpu_id}" if gpu_id is not None else ""
+            console.print(f"  started {shard.name} (pid {process.pid}{gpu_label})")
 
         time.sleep(0.2)
         for entry in list(running):
-            shard, process, log_file = entry
+            shard, process, log_file, _gpu_id = entry
             if process.poll() is None:
                 continue
             log_file.close()

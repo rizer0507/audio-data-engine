@@ -121,10 +121,10 @@ class Sample(BaseModel):
         return cls(
             id=data["id"],
             source_path=data["source_path"],
-            sha256=data.get("sha256", ""),
-            sample_rate=data.get("sample_rate"),
-            channels=data.get("channels"),
-            duration=data.get("duration"),
+            sha256=data.get("sha256") or "",
+            sample_rate=_optional_number(data.get("sample_rate"), as_int=True),
+            channels=_optional_number(data.get("channels"), as_int=True),
+            duration=_optional_number(data.get("duration")),
             audio=data.get("audio") or {},
             transcripts=data.get("transcripts") or {},
             quality=data.get("quality") or {},
@@ -133,3 +133,17 @@ class Sample(BaseModel):
             status=data.get("status") or {},
             errors=data.get("errors") or {},
         )
+
+
+def _optional_number(value: Any, *, as_int: bool = False) -> int | float | None:
+    """Coerce parquet/pandas missing values (NaN) to None for Pydantic optional fields."""
+    if value is None:
+        return None
+    try:
+        if value != value:  # NaN
+            return None
+    except (TypeError, ValueError):
+        return None
+    if as_int:
+        return int(value)
+    return float(value)

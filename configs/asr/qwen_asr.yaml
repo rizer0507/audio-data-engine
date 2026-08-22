@@ -1,6 +1,11 @@
 model: qwen3-asr
-version: "20260820"
+model_version: "Qwen3-ASR-1.7B"
+model_path: /data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 api_url: null
 timeout: 120
-language: zh
-temperature: 0
+language: Chinese
+device_map: cuda:0
+dtype: bfloat16
+batch_size: 32
+max_new_tokens: 256
+return_time_stamps: false

@@ -19,6 +19,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+asr = [
+    "qwen-asr",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",

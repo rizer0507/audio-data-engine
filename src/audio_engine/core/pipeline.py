@@ -25,7 +25,7 @@ from audio_engine.core.checkpoint import (
     empty_counts,
 )
 from audio_engine.core.manifest import Manifest
-from audio_engine.core.operator import BaseOperator, ManifestOperator, OperatorConfig
+from audio_engine.core.operator import BaseOperator, BatchOperator, ManifestOperator, OperatorConfig
 from audio_engine.core.registry import OperatorRegistry
 from audio_engine.core.sample import Sample
 
@@ -476,7 +476,11 @@ class PipelineRunner:
         started = time.perf_counter()
         for start in range(0, len(pending), batch_size):
             batch = pending[start : start + batch_size]
-            if execution.concurrent and len(batch) > 1:
+            if isinstance(operator, BatchOperator):
+                updated, counts = self._run_batch_operator(
+                    step, operator, op_config, batch, execution
+                )
+            elif execution.concurrent and len(batch) > 1:
                 updated, counts = self._run_concurrent(step, operator, op_config, batch, execution)
             else:
                 updated, counts = self._run_sequential(step, operator, op_config, batch, execution)
@@ -498,6 +502,60 @@ class PipelineRunner:
             rate,
         )
         return done
+
+    def _run_batch_operator(
+        self,
+        step: PipelineStep,
+        operator: BatchOperator,
+        op_config: OperatorConfig,
+        samples: list[Sample],
+        execution: ExecutionConfig,
+    ) -> tuple[list[Sample], dict[str, int]]:
+        """Run a GPU/model batch without adding thread/process concurrency."""
+        if execution.concurrent:
+            logger.warning(
+                "Step '{}' uses batch operator {}; workers/executor are ignored",
+                step.name,
+                step.operator,
+            )
+        try:
+            results = operator.process_batch(samples, op_config)
+        except Exception as exc:  # noqa: BLE001 - isolate a failed model batch
+            logger.error("Batch failed at step '{}': {}", step.name, exc)
+            if execution.fail_fast:
+                raise RuntimeError(f"Step '{step.name}' batch aborted: {exc}") from exc
+            failed_samples = []
+            for sample in samples:
+                failed = sample.model_copy(deep=True)
+                failed.mark_failed(step.operator, str(exc))
+                failed_samples.append(failed)
+            return failed_samples, {**empty_counts(), "failed": len(failed_samples)}
+
+        if len(results) != len(samples):
+            raise RuntimeError(
+                f"Batch operator {step.operator} returned {len(results)} results "
+                f"for {len(samples)} samples"
+            )
+
+        updated: list[Sample] = []
+        counts = empty_counts()
+        for result in results:
+            updated.append(result.sample)
+            if result.skipped:
+                outcome = "skipped"
+            elif result.cache_hit:
+                outcome = "cache_hits"
+            elif result.sample.status.get(step.operator) == "failed":
+                outcome = "failed"
+            else:
+                outcome = "processed"
+            counts[outcome] += 1
+            if outcome == "failed" and execution.fail_fast:
+                raise RuntimeError(
+                    f"Step '{step.name}' aborted (fail_fast) on sample {result.sample.id}: "
+                    f"{result.sample.errors.get(step.operator, 'unknown error')}"
+                )
+        return updated, counts
 
     def _process_one(
         self,

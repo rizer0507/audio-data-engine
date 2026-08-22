@@ -1,0 +1,164 @@
+(/data2/data-cp/lizi/conda_envs/asr) lizi@17202207608:~/audio-data-engine$ audio-data manifest shard batch_A --shards 16 --output-dir datasets/shards/source_A
+╭──────────────────────────────── Traceback (most recent call last) ─────────────────────────────────╮
+│ /home/lizi/audio-data-engine/src/audio_engine/cli/main.py:442 in manifest_shard                    │
+│                                                                                                    │
+│   439 │   ),                                                                                       │
+│   440 ) -> None:                                                                                   │
+│   441 │   """Split a manifest into shards (hash or duration-balanced)."""                          │
+│ ❱ 442 │   manifest = Manifest.load(_resolve_dataset(dataset))                                      │
+│   443 │   try:                                                                                     │
+│   444 │   │   parts = manifest.split(shards, strategy=strategy)                                    │
+│   445 │   except ValueError as exc:                                                                │
+│                                                                                                    │
+│ ╭────────────────────── locals ──────────────────────╮                                             │
+│ │    dataset = 'batch_A'                             │                                             │
+│ │ output_dir = PosixPath('datasets/shards/source_A') │                                             │
+│ │     shards = 16                                    │                                             │
+│ │   strategy = 'hash'                                │                                             │
+│ ╰────────────────────────────────────────────────────╯                                             │
+│                                                                                                    │
+│ /home/lizi/audio-data-engine/src/audio_engine/core/manifest.py:67 in load                          │
+│                                                                                                    │
+│    64 │   │   if path.suffix == ".jsonl":                                                          │
+│    65 │   │   │   return cls._load_jsonl(path)                                                     │
+│    66 │   │   if path.suffix == ".parquet":                                                        │
+│ ❱  67 │   │   │   return cls._load_parquet(path)                                                   │
+│    68 │   │   raise ValueError(f"Unsupported manifest format: {path.suffix}")                      │
+│    69 │                                                                                            │
+│    70 │   @classmethod                                                                             │
+│                                                                                                    │
+│ ╭──────────────────────── locals ────────────────────────╮                                         │
+│ │ path = PosixPath('datasets/manifests/batch_A.parquet') │                                         │
+│ ╰────────────────────────────────────────────────────────╯                                         │
+│                                                                                                    │
+│ /home/lizi/audio-data-engine/src/audio_engine/core/manifest.py:98 in _load_parquet                 │
+│                                                                                                    │
+│    95 │   │   │   │   │   │   │   data[col] = {}                                                   │
+│    96 │   │   │   │   │   elif not isinstance(data[col], (dict, list)):                            │
+│    97 │   │   │   │   │   │   data[col] = {}                                                       │
+│ ❱  98 │   │   │   samples.append(Sample.from_flat_dict(data))                                      │
+│    99 │   │   return cls(samples)                                                                  │
+│   100 │                                                                                            │
+│   101 │   def save(self, path: str | Path) -> Path:                                                │
+│                                                                                                    │
+│ ╭──────────────────────────────────────────── locals ────────────────────────────────────────────╮ │
+│ │         _ = 0                                                                                  │ │
+│ │       col = 'errors'                                                                           │ │
+│ │      data = {                                                                                  │ │
+│ │             │   'id': 'fenshen-00007bc4-03f70015',                                             │ │
+│ │             │   'source_path':                                                                 │ │
+│ │             '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001… │ │
+│ │             │   'sha256': '6f75d924f18fbecf352c73f965d2d67232f446923796217b5bd53bb62a66db1b',  │ │
+│ │             │   'sample_rate': nan,                                                            │ │
+│ │             │   'channels': nan,                                                               │ │
+│ │             │   'duration': nan,                                                               │ │
+│ │             │   'audio': {                                                                     │ │
+│ │             │   │   'raw':                                                                     │ │
+│ │             '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001… │ │
+│ │             │   },                                                                             │ │
+│ │             │   'transcripts': {},                                                             │ │
+│ │             │   'quality': {},                                                                 │ │
+│ │             │   'labels': {},                                                                  │ │
+│ │             │   ... +3                                                                         │ │
+│ │             }                                                                                  │ │
+│ │        df = │   │   │   │   │   │   │      id  ... errors                                      │ │
+│ │             0       fenshen-00007bc4-03f70015  ...     {}                                      │ │
+│ │             1       fenshen-0000a0e7-4483c0da  ...     {}                                      │ │
+│ │             2       fenshen-00011bf6-bfb78174  ...     {}                                      │ │
+│ │             3       fenshen-00014942-1e66f231  ...     {}                                      │ │
+│ │             4       fenshen-00016f11-1bdef55e  ...     {}                                      │ │
+│ │             ...                           ...  ...    ...                                      │ │
+│ │             236876  fenshen-fffdca40-836872ad  ...     {}                                      │ │
+│ │             236877  fenshen-fffe13e6-7ca1bcd4  ...     {}                                      │ │
+│ │             236878  fenshen-fffe7ba8-2b03b35f  ...     {}                                      │ │
+│ │             236879  fenshen-ffffa75d-2cabf448  ...     {}                                      │ │
+│ │             236880  fenshen-ffffdcc6-cb98ab5d  ...     {}                                      │ │
+│ │                                                                                                │ │
+│ │             [236881 rows x 13 columns]                                                         │ │
+│ │ json_cols = ['audio', 'transcripts', 'quality', 'labels', 'lineage', 'status', 'errors']       │ │
+│ │      path = PosixPath('datasets/manifests/batch_A.parquet')                                    │ │
+│ │       row = id                                     fenshen-00007bc4-03f70015                   │ │
+│ │             source_path    /data2/data-cp/datasets/asr_datasets/fenshen/2...                   │ │
+│ │             sha256         6f75d924f18fbecf352c73f965d2d67232f44692379621...                   │ │
+│ │             sample_rate                                                  NaN                   │ │
+│ │             channels                                                     NaN                   │ │
+│ │             duration                                                     NaN                   │ │
+│ │             audio          {"raw": "/data2/data-cp/datasets/asr_datasets/...                   │ │
+│ │             transcripts                                                   {}                   │ │
+│ │             quality                                                       {}                   │ │
+│ │             labels                                                        {}                   │ │
+│ │             lineage        [{"operator": "ingest.scan", "version": "1.0.0...                   │ │
+│ │             status                              {"ingest.scan": "completed"}                   │ │
+│ │             errors                                                        {}                   │ │
+│ │             Name: 0, dtype: str                                                                │ │
+│ │   samples = []                                                                                 │ │
+│ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                    │
+│ /home/lizi/audio-data-engine/src/audio_engine/core/sample.py:121 in from_flat_dict                 │
+│                                                                                                    │
+│   118 │                                                                                            │
+│   119 │   @classmethod                                                                             │
+│   120 │   def from_flat_dict(cls, data: dict[str, Any]) -> Sample:                                 │
+│ ❱ 121 │   │   return cls(                                                                          │
+│   122 │   │   │   id=data["id"],                                                                   │
+│   123 │   │   │   source_path=data["source_path"],                                                 │
+│   124 │   │   │   sha256=data.get("sha256", ""),                                                   │
+│                                                                                                    │
+│ ╭──────────────────────────────────────────── locals ────────────────────────────────────────────╮ │
+│ │ data = {                                                                                       │ │
+│ │        │   'id': 'fenshen-00007bc4-03f70015',                                                  │ │
+│ │        │   'source_path':                                                                      │ │
+│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5,   │ │
+│ │        │   'sha256': '6f75d924f18fbecf352c73f965d2d67232f446923796217b5bd53bb62a66db1b',       │ │
+│ │        │   'sample_rate': nan,                                                                 │ │
+│ │        │   'channels': nan,                                                                    │ │
+│ │        │   'duration': nan,                                                                    │ │
+│ │        │   'audio': {                                                                          │ │
+│ │        │   │   'raw':                                                                          │ │
+│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5    │ │
+│ │        │   },                                                                                  │ │
+│ │        │   'transcripts': {},                                                                  │ │
+│ │        │   'quality': {},                                                                      │ │
+│ │        │   'labels': {},                                                                       │ │
+│ │        │   ... +3                                                                              │ │
+│ │        }                                                                                       │ │
+│ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                    │
+│ /data2/data-cp/lizi/conda_envs/asr/lib/python3.11/site-packages/pydantic/main.py:250 in __init__   │
+│                                                                                                    │
+│    247 │   │   """                                                                                 │
+│    248 │   │   # `__tracebackhide__` tells pytest and some other tools to omit this function fr    │
+│    249 │   │   __tracebackhide__ = True                                                            │
+│ ❱  250 │   │   validated_self = self.__pydantic_validator__.validate_python(data, self_instance    │
+│    251 │   │   if self is not validated_self:                                                      │
+│    252 │   │   │   warnings.warn(                                                                  │
+│    253 │   │   │   │   'A custom validator is returning a value other than `self`.\n'              │
+│                                                                                                    │
+│ ╭──────────────────────────────────────────── locals ────────────────────────────────────────────╮ │
+│ │ data = {                                                                                       │ │
+│ │        │   'id': 'fenshen-00007bc4-03f70015',                                                  │ │
+│ │        │   'source_path':                                                                      │ │
+│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5,   │ │
+│ │        │   'sha256': '6f75d924f18fbecf352c73f965d2d67232f446923796217b5bd53bb62a66db1b',       │ │
+│ │        │   'sample_rate': nan,                                                                 │ │
+│ │        │   'channels': nan,                                                                    │ │
+│ │        │   'duration': nan,                                                                    │ │
+│ │        │   'audio': {                                                                          │ │
+│ │        │   │   'raw':                                                                          │ │
+│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5    │ │
+│ │        │   },                                                                                  │ │
+│ │        │   'transcripts': {},                                                                  │ │
+│ │        │   'quality': {},                                                                      │ │
+│ │        │   'labels': {},                                                                       │ │
+│ │        │   ... +3                                                                              │ │
+│ │        }                                                                                       │ │
+│ │ self = Sample()                                                                                │ │
+│ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ValidationError: 2 validation errors for Sample
+sample_rate
+  Input should be a finite number [type=finite_number, input_value=nan, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.12/v/finite_number
+channels
+  Input should be a finite number [type=finite_number, input_value=nan, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.12/v/finite_number

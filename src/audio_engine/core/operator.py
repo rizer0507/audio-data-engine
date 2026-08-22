@@ -186,3 +186,17 @@ class BaseOperator(ABC):
         self.save_cache(cache_key, config, cache_data)
 
         return OperatorResult(sample=updated, message="processed")
+
+
+class BatchOperator(BaseOperator):
+    """Sample-preserving operator that can process several samples in one call.
+
+    The runner still owns checkpointing, metrics, failure policy and ordering.
+    Subclasses may override this method to perform true batched inference while
+    retaining the same one-result-per-sample contract as ``BaseOperator``.
+    """
+
+    def process_batch(
+        self, samples: list[Sample], config: OperatorConfig
+    ) -> list[OperatorResult]:
+        return [self.process(sample, config) for sample in samples]
