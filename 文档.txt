@@ -10,15 +10,31 @@ pip install -e '.[sensevoice]'
 
 二、准备模型与输入
 ------------------
-1. 将 SenseVoiceSmall 下载到本机，例如 /data/models/SenseVoiceSmall。
+1. 服务器上的 SenseVoiceSmall 权重目录为：
+   /data2/data-cp/xijujun/models/SenseVoiceSmall
 2. 设置模型路径（环境变量优先于配置文件）：
-   export SENSEVOICE_MODEL_PATH=/data/models/SenseVoiceSmall
+   export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+   test -d "$SENSEVOICE_MODEL_PATH" || { echo "SenseVoice 模型目录不存在"; exit 1; }
 3. 确认 Qwen-ASR 已完成，输入文件存在：
    datasets/manifests/qwen_asr_source_A.parquet
 4. 输入 manifest 的每条样本应包含 resampled_16k 音频，并已有 transcripts.qwen。
 
-三、切为 4 个时长均衡分片
---------------------------
+三、先在 GPU 4 做真实推理冒烟验证
+---------------------------------
+# 必须先验证真实权重和真实音频；退出码必须为 0，报告中的文本必须非空。
+CUDA_VISIBLE_DEVICES=4 PYTHONPATH=src python scripts/validate_sensevoice_pipeline.py \
+  --manifest datasets/manifests/qwen_asr_source_A.parquet \
+  --model-path "$SENSEVOICE_MODEL_PATH" \
+  --device cuda:0 \
+  --samples 3 \
+  --batch-size 1
+
+echo $?
+python -m json.tool runs/sensevoice_validation.json
+
+四、切为 4 个时长均衡分片（首次全新执行）
+------------------------------------------
+# 只有确定要从头执行时才删除旧目录。续跑时不要执行下面两条 rm 命令。
 rm -rf runs/sensevoice_shards
 mkdir -p runs/sensevoice_shards
 
@@ -27,7 +43,7 @@ audio-data manifest shard datasets/manifests/qwen_asr_source_A.parquet \
   --strategy duration-balanced \
   --output-dir runs/sensevoice_shards/input
 
-四、在 GPU 4、5、6、7 上并行识别
+五、在 GPU 4、5、6、7 上并行识别
 ---------------------------------
 # 每张卡启动一个常驻模型进程，进程内 batch_size=32。
 audio-data pipeline run-shards pipelines/sensevoice_asr_batch.yaml \
@@ -39,15 +55,37 @@ audio-data pipeline run-shards pipelines/sensevoice_asr_batch.yaml \
   --executor sequential \
   --run-root runs/sensevoice_shards/output
 
-若任务中断，原样重跑上面的 run-shards 命令；固定 run-root 会利用 checkpoint 和逐样本缓存续跑。不要增加 --force，否则会忽略缓存。
+启动后另开终端检查：
+watch -n 1 nvidia-smi
+tail -F runs/sensevoice_shards/output/shard-*.log
 
-五、合并结果
+日志必须出现 "SenseVoice inference starting"。如果出现以下信息：
+- "SenseVoice model initialization failed"：模型路径、FunASR 依赖或 CUDA 初始化失败，任务会立即退出；
+- "SenseVoice inference was not called"：样本已完成、命中缓存或恢复了 checkpoint，本次没有执行真实推理；
+- GPU 进程存在但短时间显存仍为 0：继续查看 shard 日志中的模型加载异常，不要只等待流水线跑完。
+
+若任务中断，原样重跑上面的 run-shards 命令。固定 run-root 会利用 checkpoint 和逐样本缓存续跑，
+不要删除 runs/sensevoice_shards，也不要增加 --force。
+
+如果明确需要忽略旧 checkpoint、completed 状态和缓存，重新做一次真实推理，使用新的 run-root 并增加 --force：
+rm -rf runs/sensevoice_shards/recheck
+audio-data pipeline run-shards pipelines/sensevoice_asr_batch.yaml \
+  --shard-dir runs/sensevoice_shards/input \
+  --parallel-shards 4 \
+  --gpus 4,5,6,7 \
+  --instances-per-gpu 1 \
+  --workers 1 \
+  --executor sequential \
+  --run-root runs/sensevoice_shards/recheck \
+  --force
+
+六、合并结果
 ------------
 audio-data manifest merge 'runs/sensevoice_shards/output/shard-*.parquet' \
   --expected-shards 4 \
   --output datasets/manifests/qwen_sensevoice_source_A.parquet
 
-六、检查与比对
+七、检查与比对
 --------------
 audio-data stats datasets/manifests/qwen_sensevoice_source_A.parquet
 
@@ -57,20 +95,6 @@ audio-data compare qwen sensevoice \
 
 最终 manifest 同时保存 transcripts.qwen 与 transcripts.sensevoice。SenseVoice 结果包含 text、model、version、confidence，以及 extra.raw_text、language、emotion、events；失败样本记录在 status/errors，不会写入伪造识别结果。
 
-七、显存调优
+八、显存调优
 ------------
 默认 batch_size=32（configs/asr/sensevoice.yaml）。先观察 nvidia-smi；如 OOM 改为 16，如显存余量超过 15% 可压测 64。修改配置后重新执行时缓存键会变化。建议先保持每卡一个实例，确认稳定后再评估每卡两个实例。
-
-
-
-cd /workspace/audio-data-engine
-source .venv/bin/activate
-
-CUDA_VISIBLE_DEVICES=4 PYTHONPATH=src python scripts/validate_sensevoice_pipeline.py \
-  --manifest datasets/manifests/qwen_asr_source_A.parquet \
-  --model-path /data2/data-cp/xijujun/models/SenseVoiceSmall \
-  --samples 3 \
-  --batch-size 1
-
-echo $?
-python -m json.tool runs/sensevoice_validation.json
