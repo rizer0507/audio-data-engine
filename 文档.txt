@@ -60,3 +60,17 @@ audio-data compare qwen sensevoice \
 七、显存调优
 ------------
 默认 batch_size=32（configs/asr/sensevoice.yaml）。先观察 nvidia-smi；如 OOM 改为 16，如显存余量超过 15% 可压测 64。修改配置后重新执行时缓存键会变化。建议先保持每卡一个实例，确认稳定后再评估每卡两个实例。
+
+
+
+cd /workspace/audio-data-engine
+source .venv/bin/activate
+
+CUDA_VISIBLE_DEVICES=4 PYTHONPATH=src python scripts/validate_sensevoice_pipeline.py \
+  --manifest datasets/manifests/qwen_asr_source_A.parquet \
+  --model-path /data2/data-cp/xijujun/models/SenseVoiceSmall \
+  --samples 3 \
+  --batch-size 1
+
+echo $?
+python -m json.tool runs/sensevoice_validation.json
