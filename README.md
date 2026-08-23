@@ -64,6 +64,26 @@ audio-data export raw_20260820 --format jsonl
 audio-data export raw_20260820 --format scp
 ```
 
+### 7. 清洗并核对已有 ASR 结果
+
+输入包含 Qwen 识别结果的 XLSX，以及 SenseVoice 识别产生的 `fenp`（逐行 JSON）、
+JSONL、JSON、Parquet 或 XLSX 文件：
+
+```bash
+audio-data reconcile-transcripts \
+  --xlsx data/qwen_results.xlsx \
+  --sensevoice-result data/sensevoice_results.fenp \
+  --output data/exports/asr_reconciled.xlsx \
+  --threshold 0.90
+```
+
+流水线会按 `id`（也支持 `sample_id`、`audio_id`、`utt_id` 等常见列名）合并两份结果，
+删除工作簿所有字符串单元格内的 SenseVoice `<|...|>` 控制字段，再忽略空白、标点、
+大小写和全半角差异计算字符级 Levenshtein 相似度。输出包含清洗文本、归一化文本、
+`character_similarity`、`asr_consistent` 和判断原因，并在 Excel 同目录写出
+`*.summary.json`。默认相似度不低于 `0.90` 才认为一致；无法自动识别列名时可使用
+`--id-column`、`--sensevoice-id-column`、`--qwen-column` 和 `--sensevoice-column` 显式指定。
+
 ## 目录结构
 
 ```

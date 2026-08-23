@@ -24,6 +24,7 @@ from audio_engine.core.pipeline import (
     PipelineStep,
 )
 from audio_engine.core.registry import OperatorRegistry
+from audio_engine.core.transcript_reconcile import reconcile_transcripts
 
 app = typer.Typer(
     name="audio-data",
@@ -607,6 +608,52 @@ def compare(
 
     console.print(f"[green]OK[/green] Compare finished: {summary['match']}/{summary['total']} match")
     console.print(f"  Run dir: [cyan]{run_dir}[/cyan]")
+
+
+@app.command("reconcile-transcripts")
+def reconcile_transcript_files(
+    xlsx: Path = typer.Option(..., "--xlsx", help="包含Qwen识别结果的Excel文件"),
+    sensevoice_result: Path = typer.Option(
+        ..., "--sensevoice-result", help="SenseVoice结果（fenp/JSONL/JSON/Parquet/Excel）"
+    ),
+    output: Path = typer.Option(..., "--output", "-o", help="清洗和比对后的Excel文件"),
+    id_column: Optional[str] = typer.Option(None, "--id-column", help="Excel中的关联ID列"),
+    sensevoice_id_column: Optional[str] = typer.Option(
+        None, "--sensevoice-id-column", help="SenseVoice结果中的关联ID列"
+    ),
+    qwen_column: Optional[str] = typer.Option(None, "--qwen-column", help="Qwen文本列"),
+    sensevoice_column: Optional[str] = typer.Option(
+        None, "--sensevoice-column", help="SenseVoice文本列"
+    ),
+    threshold: float = typer.Option(
+        0.9, "--threshold", min=0.0, max=1.0, help="可认为一致的最低字符相似度"
+    ),
+) -> None:
+    """清洗SenseVoice控制字段，并与Qwen结果做字符级一致性比对。"""
+    try:
+        summary = reconcile_transcripts(
+            xlsx,
+            sensevoice_result,
+            output,
+            id_column=id_column,
+            sensevoice_id_column=sensevoice_id_column,
+            qwen_column=qwen_column,
+            sensevoice_column=sensevoice_column,
+            threshold=threshold,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    summary_path = output.with_suffix(".summary.json")
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    console.print(f"[green]OK[/green] 转写清洗和比对完成: [cyan]{output}[/cyan]")
+    console.print(
+        f"  一致: {summary['consistent']}/{summary['total']} "
+        f"({summary['consistent_rate']:.2%}), 缺失SenseVoice: {summary['missing_sensevoice']}"
+    )
+    console.print(f"  汇总: [cyan]{summary_path}[/cyan]")
 
 
 @app.command("operators")
