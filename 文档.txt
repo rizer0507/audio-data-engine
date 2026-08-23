@@ -98,3 +98,53 @@ audio-data compare qwen sensevoice \
 八、显存调优
 ------------
 默认 batch_size=32（configs/asr/sensevoice.yaml）。先观察 nvidia-smi；如 OOM 改为 16，如显存余量超过 15% 可压测 64。修改配置后重新执行时缓存键会变化。建议先保持每卡一个实例，确认稳定后再评估每卡两个实例。
+
+九、清洗 SenseVoice 字段并与 Qwen 做字符比对
+-----------------------------------------------
+完成识别和汇总后，准备以下两个输入：
+1. 包含 Qwen 识别结果的 XLSX 文档；
+2. SenseVoice 识别产生的 fenp 文件。fenp 文件按逐行 JSON 读取，也支持 JSONL、JSON、Parquet 和 XLSX。
+
+在项目根目录、已激活虚拟环境的终端执行：
+
+cd /workspace/audio-data-engine
+source .venv/bin/activate
+
+audio-data reconcile-transcripts \
+  --xlsx /实际路径/qwen_results.xlsx \
+  --sensevoice-result /实际路径/sensevoice_results.fenp \
+  --output data/exports/qwen_sensevoice_cleaned.xlsx \
+  --threshold 0.90
+
+默认情况下，程序会自动查找以下列名：
+- 关联 ID：id、sample_id、audio_id、utt_id、文件名、音频、音频文件；
+- Qwen 文本：qwen_text、qwen、qwen_result、qwen识别结果、Qwen识别结果；
+- SenseVoice 文本：sensevoice_text、sensevoice、text、result、sentence、识别结果。
+
+如果实际列名不在以上列表中，必须显式指定，例如：
+
+audio-data reconcile-transcripts \
+  --xlsx /实际路径/qwen_results.xlsx \
+  --sensevoice-result /实际路径/sensevoice_results.fenp \
+  --output data/exports/qwen_sensevoice_cleaned.xlsx \
+  --id-column 音频编号 \
+  --sensevoice-id-column wav_id \
+  --qwen-column Qwen转写 \
+  --sensevoice-column SenseVoice转写 \
+  --threshold 0.90
+
+执行结果：
+- data/exports/qwen_sensevoice_cleaned.xlsx：清洗后的明细，所有字符串单元格中的 <|...|> 字段都会被删除；
+- data/exports/qwen_sensevoice_cleaned.summary.json：总数、一致数、不一致数、SenseVoice 缺失数和一致率汇总。
+
+输出 XLSX 中重点查看以下列：
+- sensevoice_clean_text：清洗后的 SenseVoice 文本；
+- qwen_normalized、sensevoice_normalized：忽略空白、标点、大小写和全半角差异后的比对文本；
+- character_similarity：字符级相似度，范围为 0 到 1；
+- asr_consistent：相似度达到 --threshold 且存在 SenseVoice 结果时为 TRUE；
+- comparison_reason：一致、不一致或未找到 SenseVoice 结果的原因。
+
+默认 --threshold 0.90，即字符相似度大于等于 0.90 才认为 Qwen 与 SenseVoice 一致。
+如果业务要求完全一致，设置 --threshold 1.0。执行结束后可检查：
+
+python -m json.tool data/exports/qwen_sensevoice_cleaned.summary.json
