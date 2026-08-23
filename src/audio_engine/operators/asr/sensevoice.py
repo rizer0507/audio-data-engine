@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,13 @@ _TAG_RE = re.compile(r"<\|([^|<>]+)\|>")
 _LANGUAGES = {"zh", "en", "yue", "ja", "ko", "nospeech"}
 _EMOTIONS = {"HAPPY", "SAD", "ANGRY", "NEUTRAL"}
 _EVENTS = {"Speech", "BGM", "Applause", "Laughter", "Cry", "Sneeze", "Breath", "Cough"}
+
+# ── 诊断采样配置 ─────────────────────────────────────────────────────────────
+# 每处理 _DIAG_INTERVAL 条样本打印一次完整诊断快照（模型输出 + 写入结果）。
+# 40 万条数据约产生 4000 行诊断日志，不会撑爆日志文件。
+_DIAG_INTERVAL: int = 100
+_diag_lock = threading.Lock()
+_diag_counter: int = 0  # 跨 chunk 的全局已处理样本计数（含 cache hit 和 skip）
 
 
 def _load_asr_config(config_path: str | None) -> dict[str, Any]:
@@ -73,6 +81,10 @@ def _load_sensevoice_model(settings: dict[str, Any]) -> Any:
     cache_key = json.dumps(model_kwargs, sort_keys=True, ensure_ascii=False)
     with _MODEL_LOCK:
         if cache_key in _MODEL_CACHE:
+            logger.debug(
+                "[DIAG][MODEL] cache hit: model_path={} device={}",
+                model_path, model_kwargs["device"],
+            )
             return _MODEL_CACHE[cache_key]
         try:
             from funasr import AutoModel  # type: ignore
@@ -80,7 +92,17 @@ def _load_sensevoice_model(settings: dict[str, Any]) -> Any:
             raise RuntimeError(
                 "SenseVoice 推理依赖未安装，请执行：pip install 'audio-data-engine[sensevoice]'"
             ) from exc
+        logger.info(
+            "[DIAG][MODEL] loading SenseVoice: path={} device={} disable_update={}",
+            model_path, model_kwargs["device"], model_kwargs["disable_update"],
+        )
+        t0 = time.perf_counter()
         model = AutoModel(**model_kwargs)
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "[DIAG][MODEL] SenseVoice loaded OK in {:.2f}s | type={} | path={} | device={}",
+            elapsed, type(model).__name__, model_path, model_kwargs["device"],
+        )
         _MODEL_CACHE[cache_key] = model
         return model
 
@@ -108,7 +130,8 @@ def parse_sensevoice_text(raw_text: str) -> dict[str, Any]:
 
 
 def _transcribe_many(
-    model: Any, audio_paths: list[str], settings: dict[str, Any]
+    model: Any, audio_paths: list[str], settings: dict[str, Any],
+    *, _diag: bool = False,
 ) -> list[dict[str, Any]]:
     kwargs: dict[str, Any] = {
         "input": audio_paths,
@@ -116,16 +139,41 @@ def _transcribe_many(
         "use_itn": bool(settings.get("use_itn", True)),
         "batch_size": int(settings.get("batch_size", 32)),
     }
+    logger.debug(
+        "[DIAG][INFER] generate() called: n_inputs={} language={} use_itn={} batch_size={}",
+        len(audio_paths), kwargs["language"], kwargs["use_itn"], kwargs["batch_size"],
+    )
     raw_results = model.generate(**kwargs)
+
+    # ── 原始返回结构诊断（每次触发 _diag 时打印，便于确认 FunASR 版本行为）──
+    if _diag:
+        preview = raw_results[:2] if isinstance(raw_results, list) else raw_results
+        logger.info(
+            "[DIAG][INFER] raw generate() output (first 2): type={} count={} preview={}",
+            type(raw_results).__name__,
+            len(raw_results) if isinstance(raw_results, list) else "N/A",
+            repr(preview),
+        )
+
     if not isinstance(raw_results, list) or len(raw_results) != len(audio_paths):
         count = len(raw_results) if isinstance(raw_results, list) else 1
         raise RuntimeError(f"SenseVoice 返回 {count} 条结果，输入为 {len(audio_paths)} 条")
+
     results = []
-    for raw in raw_results:
+    for i, raw in enumerate(raw_results):
         raw_text = str(raw.get("text", "")) if isinstance(raw, dict) else str(raw)
         parsed = parse_sensevoice_text(raw_text)
         if isinstance(raw, dict) and raw.get("confidence") is not None:
             parsed["confidence"] = raw["confidence"]
+        # 空文本告警：模型有返回但 text 为空（VAD 未命中 或 raw 字段名不对）
+        if not parsed["text"].strip():
+            logger.warning(
+                "[DIAG][INFER] empty text at index {}: raw_type={} raw_keys={} raw_text={!r}",
+                i,
+                type(raw).__name__,
+                list(raw.keys()) if isinstance(raw, dict) else "N/A",
+                raw_text[:200],
+            )
         results.append(parsed)
     return results
 
@@ -208,20 +256,31 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
         return super().compute_cache_key(sample, _cache_config(config, settings))
 
     def process_batch(self, samples: list[Sample], config: OperatorConfig) -> list[OperatorResult]:
+        global _diag_counter  # noqa: PLW0603
         settings = _resolve_settings(config)
         cache_config = _cache_config(config, settings)
         results: list[OperatorResult | None] = [None] * len(samples)
         pending: list[tuple[int, Sample, str]] = []
+        skipped_count = 0
+        cache_hit_count = 0
+
         for index, sample in enumerate(samples):
             if self.should_skip(sample, config):
                 results[index] = OperatorResult(sample=sample, skipped=True)
+                skipped_count += 1
                 continue
             cache_key = super().compute_cache_key(sample, cache_config)
             cached = None if config.force else self.load_cache(cache_key, config)
             if cached is not None:
                 results[index] = OperatorResult(sample=self.apply_cached(sample, cached), cache_hit=True)
+                cache_hit_count += 1
             else:
                 pending.append((index, sample, cache_key))
+
+        logger.info(
+            "[DIAG][BATCH] process_batch: total={} pending={} skipped={} cache_hit={}",
+            len(samples), len(pending), skipped_count, cache_hit_count,
+        )
 
         if pending and (config.mock or config.params.get("mock")):
             for index, sample, cache_key in pending:
@@ -229,7 +288,7 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
                 results[index] = self._finalize(sample, parsed, cache_key, config, settings)
         elif pending:
             logger.info(
-                "SenseVoice inference starting: pending={}, model={}, device={}, batch_size={}",
+                "[DIAG][BATCH] SenseVoice inference starting: pending={} model={} device={} batch_size={}",
                 len(pending), settings["model_path"], settings.get("device", "cuda:0"),
                 settings.get("batch_size", 32),
             )
@@ -237,7 +296,7 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
                 model = _load_sensevoice_model(settings)
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
-                    "SenseVoice model initialization failed; all {} pending samples will fail: {}",
+                    "[DIAG][BATCH] SenseVoice model initialization failed; all {} pending samples will fail: {}",
                     len(pending), exc,
                 )
                 for index, sample, _ in pending:
@@ -245,11 +304,16 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
             else:
                 size = max(1, int(settings.get("batch_size", 32)))
                 for start in range(0, len(pending), size):
-                    self._process_chunk(pending[start : start + size], model, config, settings, results)
+                    chunk = pending[start : start + size]
+                    # 判断本 chunk 是否需要触发诊断采样
+                    with _diag_lock:
+                        _diag_counter += len(chunk)
+                        do_diag = (_diag_counter % _DIAG_INTERVAL) < len(chunk)
+                    self._process_chunk(chunk, model, config, settings, results, diag=do_diag)
         else:
             logger.warning(
-                "SenseVoice inference was not called: all {} samples were already completed or cache hits. "
-                "Use --force to perform real inference again.",
+                "[DIAG][BATCH] SenseVoice inference was not called: all {} samples were already "
+                "completed or cache hits. Use --force to re-run inference.",
                 len(samples),
             )
 
@@ -257,28 +321,35 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
             raise RuntimeError("SenseVoice batch operator produced an incomplete result set")
         return [result for result in results if result is not None]
 
-    def _process_chunk(self, chunk, model, config, settings, results) -> None:
+    def _process_chunk(self, chunk, model, config, settings, results, *, diag: bool = False) -> None:
         input_key = config.params.get("input_audio_key", "raw")
+        audio_paths = [sample.audio_path(input_key) for _, sample, _ in chunk]
         try:
-            transcripts = _transcribe_many(
-                model, [sample.audio_path(input_key) for _, sample, _ in chunk], settings
-            )
+            transcripts = _transcribe_many(model, audio_paths, settings, _diag=diag)
         except Exception:  # noqa: BLE001
+            logger.warning(
+                "[DIAG][CHUNK] batch inference failed for {} samples, falling back to per-sample retry",
+                len(chunk),
+            )
             for index, sample, cache_key in chunk:
                 try:
                     transcript = _transcribe_many(
-                        model, [sample.audio_path(input_key)], settings
+                        model, [sample.audio_path(input_key)], settings, _diag=diag
                     )[0]
                     results[index] = self._finalize(
-                        sample, transcript, cache_key, config, settings
+                        sample, transcript, cache_key, config, settings, diag=diag
                     )
                 except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "[DIAG][CHUNK] per-sample retry failed: sample={} error={}",
+                        sample.id, exc,
+                    )
                     results[index] = self._failed(sample, exc)
             return
         for (index, sample, cache_key), transcript in zip(chunk, transcripts):
-            results[index] = self._finalize(sample, transcript, cache_key, config, settings)
+            results[index] = self._finalize(sample, transcript, cache_key, config, settings, diag=diag)
 
-    def _finalize(self, sample, result, cache_key, config, settings) -> OperatorResult:
+    def _finalize(self, sample, result, cache_key, config, settings, *, diag: bool = False) -> OperatorResult:
         updates = self._updates(result, config, settings)
         updated = self._apply_updates(sample, updates)
         entry = updates["lineage_entry"]
@@ -288,6 +359,21 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
         )
         updated.mark_completed(self.full_name)
         self.save_cache(cache_key, config, updates)
+        # ── 诊断采样：打印写入确认 ──────────────────────────────────────────
+        if diag:
+            sv = updated.transcripts.get("sensevoice", {})
+            logger.info(
+                "[DIAG][WRITE] sample={} | text={!r} | model={} | version={} | "
+                "language={} | emotion={} | events={} | raw_text={!r}",
+                updated.id,
+                sv.get("text", "<MISSING>"),
+                sv.get("model", "<MISSING>"),
+                sv.get("version", "<MISSING>"),
+                sv.get("extra", {}).get("language"),
+                sv.get("extra", {}).get("emotion"),
+                sv.get("extra", {}).get("events"),
+                sv.get("extra", {}).get("raw_text", "")[:200],
+            )
         return OperatorResult(sample=updated, message="processed")
 
     def _failed(self, sample: Sample, exc: Exception) -> OperatorResult:
