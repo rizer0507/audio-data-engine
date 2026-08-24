@@ -369,6 +369,8 @@ class PipelineRunner:
             cache_dir=self.config.cache_dir,
             force=self.config.force,
             mock=self.config.mock,
+            run_dir=self.run_dir,
+            step_name=step.name,
         )
         if step.input_audio_key:
             op_config.params.setdefault("input_audio_key", step.input_audio_key)
