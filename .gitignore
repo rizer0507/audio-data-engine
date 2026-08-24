@@ -50,6 +50,10 @@ datasets/manifests/*
 !datasets/manifests/.gitkeep
 !datasets/manifests/README.md
 
+# 比对/评测产物（含超大 parquet，勿提交）
+qwen_vs_sensevoice/
+*.parquet
+
 # 本地临时 / 杂项
 *.bak
 *.bak_*
