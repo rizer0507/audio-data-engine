@@ -104,6 +104,85 @@ class PipelineStep:
     execution: dict[str, Any] = field(default_factory=dict)
 
 
+SHARD_STRATEGIES = ("hash", "duration-balanced")
+
+
+@dataclass(frozen=True)
+class ShardingConfig:
+    """When set on a pipeline, ``pipeline run`` does split → parallel shards → merge."""
+
+    shards: int
+    strategy: str = "hash"
+    parallel_shards: int | None = None
+    gpus: tuple[str, ...] = ()
+    instances_per_gpu: int = 1
+    workers: int | None = None
+    executor: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.shards < 1:
+            raise ValueError(f"sharding.shards must be >= 1, got {self.shards}")
+        if self.strategy not in SHARD_STRATEGIES:
+            raise ValueError(
+                f"Unknown sharding.strategy '{self.strategy}'. "
+                f"Use one of {SHARD_STRATEGIES}."
+            )
+        if self.instances_per_gpu < 1:
+            raise ValueError(
+                f"sharding.instances_per_gpu must be >= 1, got {self.instances_per_gpu}"
+            )
+        if self.parallel_shards is not None and self.parallel_shards < 1:
+            raise ValueError(
+                f"sharding.parallel_shards must be >= 1, got {self.parallel_shards}"
+            )
+        if self.executor is not None and self.executor not in EXECUTORS:
+            raise ValueError(
+                f"Unsupported sharding.executor '{self.executor}'. Use one of {EXECUTORS}."
+            )
+        if len(self.gpus) != len(set(self.gpus)):
+            raise ValueError("sharding.gpus must not contain duplicate ids")
+
+    @property
+    def effective_parallel(self) -> int:
+        return self.parallel_shards if self.parallel_shards is not None else self.shards
+
+    @property
+    def gpu_slots(self) -> int:
+        return len(self.gpus) * self.instances_per_gpu if self.gpus else 0
+
+    def validate_parallel(self) -> None:
+        parallel = self.effective_parallel
+        if self.gpus and parallel > self.gpu_slots:
+            raise ValueError(
+                "sharding.parallel_shards cannot exceed GPUs * instances_per_gpu "
+                f"({len(self.gpus)} * {self.instances_per_gpu} = {self.gpu_slots}); "
+                "also written as --instances-per-gpu on the CLI"
+            )
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any] | None) -> ShardingConfig | None:
+        if not data:
+            return None
+        raw_gpus = data.get("gpus") or []
+        if isinstance(raw_gpus, str):
+            gpus = tuple(item.strip() for item in raw_gpus.split(",") if item.strip())
+        else:
+            gpus = tuple(str(item).strip() for item in raw_gpus if str(item).strip())
+        cfg = cls(
+            shards=int(data["shards"]),
+            strategy=str(data.get("strategy", "hash")),
+            parallel_shards=(
+                int(data["parallel_shards"]) if data.get("parallel_shards") is not None else None
+            ),
+            gpus=gpus,
+            instances_per_gpu=int(data.get("instances_per_gpu", 1)),
+            workers=int(data["workers"]) if data.get("workers") is not None else None,
+            executor=str(data["executor"]) if data.get("executor") is not None else None,
+        )
+        cfg.validate_parallel()
+        return cfg
+
+
 @dataclass
 class PipelineConfig:
     name: str
@@ -125,6 +204,9 @@ class PipelineConfig:
     resume: str | None = None
     # Exact run dir to use, created when missing; reuses checkpoints found inside.
     run_dir: str | None = None
+    sharding: ShardingConfig | None = None
+    # Original YAML path; used by sharded runs to re-invoke ``pipeline run``.
+    config_path: str | None = None
 
     def step_execution(self, step: PipelineStep) -> ExecutionConfig:
         return self.execution.merged(step.execution).merged(self.execution_override)
@@ -163,6 +245,11 @@ class PipelineConfig:
             )
 
         output_manifest = output_cfg.get("manifest") or data.get("output_manifest")
+        sharding = ShardingConfig.from_mapping(data.get("sharding"))
+        if sharding is not None and not output_manifest:
+            raise ValueError(
+                f"Pipeline '{path}' enables sharding but has no output.manifest"
+            )
         return cls(
             name=data.get("name", path.stem),
             input_manifest=manifest,
@@ -177,6 +264,8 @@ class PipelineConfig:
             mock=data.get("mock", False),
             filter_expr=data.get("filter"),
             execution=ExecutionConfig().merged(data.get("execution") or {}),
+            sharding=sharding,
+            config_path=str(path.resolve()),
         )
 
 

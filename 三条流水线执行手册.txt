@@ -1,0 +1,123 @@
+三条流水线执行手册（单条 pipeline run）
+=======================================================
+每条业务链只需一条命令。YAML 的 sharding 自动完成：分片 → 并行 → 合并。
+顺序：1 数据切片落库 → 2 Qwen 识别 → 3 SenseVoice 识别。
+
+
+通用准备（首次部署）
+-------------------------------------------------------
+cd /workspace/audio-data-engine
+python -m venv .venv
+source .venv/bin/activate
+
+export PIP_INDEX_URL=http://maven.paic.com.cn/repository/pypi/simple/
+export PIP_TRUSTED_HOST=maven.paic.com.cn
+
+pip install -e .
+# Qwen：      pip install -e ".[asr]"
+# SenseVoice：pip install -e ".[sensevoice]"
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+
+=======================================================
+一、数据切片落库流水线
+=======================================================
+目标：外部 wav/pcm → 入库 + 清洗（pcm/resample/probe/筛选）→ cleaned manifest
+YAML：pipelines/data_cleaning_source_A.yaml
+输入：resources/manifest.yaml 中登记的 source_A（path 指向物理目录）
+输出：datasets/manifests/cleaned_source_A.parquet
+
+按机器修改 YAML 里 sharding.shards / parallel_shards / workers（默认 32 片）。
+
+# 1. 确认数据源已登记（path 指向 wav 目录）
+# 2. 一条命令跑完整条清洗链
+audio-data pipeline run pipelines/data_cleaning_source_A.yaml
+
+# 续跑：把上次的 run root 传给 --resume（目录名形如 runs/<ts>_data_cleaning_source_A_shards）
+# audio-data pipeline run pipelines/data_cleaning_source_A.yaml --resume runs/<上次_shards目录>
+
+
+=======================================================
+二、Qwen 识别流水线
+=======================================================
+目标：cleaned → Qwen ASR → qwen_asr manifest
+YAML：pipelines/qwen_asr_batch.yaml
+输入：datasets/manifests/cleaned_source_A.parquet（须含 resampled_16k）
+输出：datasets/manifests/qwen_asr_source_A.parquet
+
+export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+# 按 GPU 改 YAML：sharding.gpus / instances_per_gpu / shards
+# 约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
+# 默认示例：4 卡 × 每卡 2 实例 = 8 分片
+
+audio-data pipeline run pipelines/qwen_asr_batch.yaml
+
+# 可选后处理：合并进业务 XLSX
+# python scripts/merge_qwen_results.py \
+#   --parquet datasets/manifests/qwen_asr_source_A.parquet \
+#   --xlsx test0923_new.xlsx --threshold 0.85
+
+
+=======================================================
+三、SenseVoice 识别流水线
+=======================================================
+目标：在 Qwen 结果上再跑 SenseVoice
+YAML：pipelines/sensevoice_asr_batch.yaml
+输入：datasets/manifests/qwen_asr_source_A.parquet
+输出：datasets/manifests/qwen_sensevoice_source_A.parquet
+
+export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+test -d "$SENSEVOICE_MODEL_PATH" || { echo "SenseVoice 模型目录不存在"; exit 1; }
+
+# 可选冒烟（首次部署建议）
+# CUDA_VISIBLE_DEVICES=4 PYTHONPATH=src python scripts/validate_sensevoice_pipeline.py \
+#   --manifest datasets/manifests/qwen_asr_source_A.parquet \
+#   --model-path "$SENSEVOICE_MODEL_PATH" --device cuda:0 --samples 3 --batch-size 1
+
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml
+
+# 可选比对
+# audio-data compare qwen sensevoice \
+#   --dataset datasets/manifests/qwen_sensevoice_source_A.parquet \
+#   --output runs/qwen_vs_sensevoice
+
+
+=======================================================
+数据衔接
+=======================================================
+物理 wav/pcm
+  →【一】pipeline run data_cleaning_source_A.yaml
+      → cleaned_source_A.parquet
+  →【二】pipeline run qwen_asr_batch.yaml
+      → qwen_asr_source_A.parquet
+  →【三】pipeline run sensevoice_asr_batch.yaml
+      → qwen_sensevoice_source_A.parquet
+
+
+=======================================================
+YAML sharding 字段（改并行度只改 YAML）
+=======================================================
+sharding:
+  shards: 8                      # 分片数
+  strategy: hash                 # 清洗常用 hash；ASR 常用 duration-balanced
+  parallel_shards: 8             # 同时跑的子进程数（默认等于 shards）
+  gpus: [4, 5, 6, 7]             # 可选；省略则为 CPU 多进程
+  instances_per_gpu: 2
+  workers: 8                     # 传给每个子进程的 --workers
+  executor: thread               # 可选
+
+产物目录：runs/<时间>_<name>_shards/
+  prepared_input.parquet / shards/ / shard-XXX/ / shard-XXX.parquet / shard-XXX.log
+
+
+=======================================================
+兼容：旧的三步命令（一般不必再用）
+=======================================================
+audio-data manifest shard <manifest> --shards N -o <shard-dir>
+audio-data pipeline run-shards <yaml> --shard-dir ... --gpus ...
+audio-data manifest merge 'runs/.../shard-*.parquet' --output ...

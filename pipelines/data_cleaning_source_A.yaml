@@ -2,13 +2,11 @@
 #
 # 输入：已登记的逻辑数据源 source_A（见 resources/manifest.yaml）
 #   - 若已有样本索引 → 直接加载
-#   - 若仅有外部 path → 第一步 ingest.scan 只读扫描
+#   - 若仅有外部 path → 父进程先 ingest.scan，再分片
 # 输出：datasets/manifests/cleaned_source_A.parquet（仅 audio_pass 样本）
 #
-# 音频 key 链：raw → pcm_wav → resampled_16k
-# pcm_to_wav / resample 都会先判断是否已满足需求：
-#   - 已是 wav/flac/... → pcm_to_wav 透传，不转码
-#   - 已是目标采样率 → resample 透传，不重采样、不整文件解码
+# 一条命令：audio-data pipeline run pipelines/data_cleaning_source_A.yaml
+# sharding 自动完成 分片 → 多进程并行 → 合并
 
 name: data_cleaning_source_A
 
@@ -18,26 +16,31 @@ input:
 output:
   manifest: datasets/manifests/cleaned_source_A.parquet
 
-# 步骤内样本级并发（ManifestOperator 如 ingest.scan / quality.select 始终串行）
-# CLI 可临时覆盖：--workers 8 --executor sequential|thread|process
+# 步骤内样本级并发（子进程内生效；ManifestOperator 始终串行）
 execution:
-  executor: thread      # thread | process | sequential
-  workers: 4            # 全局默认并发数，step 内可覆盖
-  max_in_flight: 0      # 0 → workers * 4
+  executor: thread
+  workers: 4
+  max_in_flight: 0
   fail_fast: false
-  checkpoint_every: 1000  # 每 1000 条落一个 checkpoint part；0 关闭（短任务可省约 20% 开销）
+  checkpoint_every: 1000
+
+# 顶层分片并行：一条 pipeline run 即完成 split+run+merge（无 GPU）
+sharding:
+  shards: 32
+  strategy: hash
+  parallel_shards: 32
+  workers: 8
+  executor: thread
 
 pipeline:
-  # 若 source 尚无样本索引、只有外部 path，保留本步；已有 manifest 时会按 sha256 去重跳过
   - name: ingest
     operator: ingest.scan
 
   - name: pcm_convert
     operator: audio.pcm_to_wav
     execution:
-      workers: 8          # 磁盘读写为主，线程即可
+      workers: 8
     params:
-      # 仅对 .pcm/.raw 生效；已是容器格式时透传。此处 sample_rate 是 PCM 缺省解码参数
       sample_rate: 8000
       channels: 1
       input_audio_key: raw
@@ -46,10 +49,8 @@ pipeline:
   - name: resample
     operator: audio.resample
     execution:
-      # CPU 密集：若线程加速不足，可改为 executor: process、workers: 物理核数
       workers: 4
     params:
-      # 已是 16k 时透传，不写新文件
       sample_rate: 16000
       input_audio_key: pcm_wav
       output_audio_key: resampled_16k
@@ -57,12 +58,10 @@ pipeline:
   - name: probe
     operator: quality.probe
     execution:
-      workers: 16         # 只读文件头，I/O 为主
+      workers: 16
     params:
       input_audio_key: resampled_16k
 
-  # 输入已是 VAD 后片段，不再跑 audio.vad；仅按损坏 / 时长过滤
-  # 批量算子：一次性对整表求值（分块 chunk_size），不受 execution.workers 影响
   - name: audio_pass
     operator: quality.filter
     params:

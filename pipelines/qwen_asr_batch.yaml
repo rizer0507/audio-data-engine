@@ -1,8 +1,9 @@
 # Qwen3-ASR 高吞吐识别流水线
 #
 # 前置：输入 manifest 必须已有 resampled_16k 音频 key。
-# A800 80G：进程内 batch=32；四卡用 run-shards --gpus 0,1,2,3
-# --instances-per-gpu 2 --parallel-shards 8，每张卡同时跑 2 个模型实例。
+# 一条命令：audio-data pipeline run pipelines/qwen_asr_batch.yaml
+# sharding 自动完成 时长均衡分片 → 多卡并行 → 合并。
+# 按机器改 sharding.gpus / instances_per_gpu / shards（分片数 = GPU×每卡实例）。
 
 name: qwen_asr_batch
 
@@ -17,6 +18,13 @@ execution:
   workers: 1
   fail_fast: false
   checkpoint_every: 500
+
+sharding:
+  shards: 8
+  strategy: duration-balanced
+  parallel_shards: 8
+  gpus: [4, 5, 6, 7]
+  instances_per_gpu: 2
 
 pipeline:
   - name: qwen_asr

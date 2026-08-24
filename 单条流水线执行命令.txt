@@ -1,0 +1,80 @@
+单条流水线执行命令
+=======================================================
+用途：只维护「一条 pipeline run」命令；分片/并行/合并由 YAML sharding 自动完成。
+改批次、改路径、改并行度：优先改对应 pipelines/*.yaml，再改本文件中的命令与备注。
+执行顺序：1 → 2 → 3。
+
+
+-------------------------------------------------------
+0. 进入工程（每次开终端先做）
+-------------------------------------------------------
+cd /workspace/audio-data-engine
+source .venv/bin/activate
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+
+-------------------------------------------------------
+1. 数据切片落库
+-------------------------------------------------------
+# YAML: pipelines/data_cleaning_source_A.yaml
+# 输入: resources/manifest.yaml → source_A.path
+# 输出: datasets/manifests/cleaned_source_A.parquet
+# 并行: 改 YAML sharding.shards / parallel_shards / workers
+
+audio-data pipeline run pipelines/data_cleaning_source_A.yaml
+
+# 续跑（填入上次 runs/..._shards 目录）:
+# audio-data pipeline run pipelines/data_cleaning_source_A.yaml --resume runs/<上次_shards目录>
+
+
+-------------------------------------------------------
+2. Qwen 识别
+-------------------------------------------------------
+# YAML: pipelines/qwen_asr_batch.yaml
+# 输入: datasets/manifests/cleaned_source_A.parquet
+# 输出: datasets/manifests/qwen_asr_source_A.parquet
+# 并行: 改 YAML sharding.gpus / instances_per_gpu / shards
+# 约束: shards == parallel_shards <= len(gpus) * instances_per_gpu
+
+export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
+
+audio-data pipeline run pipelines/qwen_asr_batch.yaml
+
+# 续跑:
+# audio-data pipeline run pipelines/qwen_asr_batch.yaml --resume runs/<上次_shards目录>
+
+
+-------------------------------------------------------
+3. SenseVoice 识别
+-------------------------------------------------------
+# YAML: pipelines/sensevoice_asr_batch.yaml
+# 输入: datasets/manifests/qwen_asr_source_A.parquet
+# 输出: datasets/manifests/qwen_sensevoice_source_A.parquet
+# 并行: 改 YAML sharding.gpus / instances_per_gpu / shards
+
+export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml
+
+# 续跑:
+# audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --resume runs/<上次_shards目录>
+
+
+-------------------------------------------------------
+数据链（便于换批次时对照改名）
+-------------------------------------------------------
+source_A.path (wav/pcm)
+  → cleaned_source_A.parquet
+  → qwen_asr_source_A.parquet
+  → qwen_sensevoice_source_A.parquet
+
+
+-------------------------------------------------------
+换批次时改哪里（清单）
+-------------------------------------------------------
+[ ] resources/manifest.yaml          # 新 source_id / path
+[ ] pipelines/data_cleaning_*.yaml   # input.source、output.manifest、sharding
+[ ] pipelines/qwen_asr_batch.yaml    # input.manifest、output.manifest、gpus/shards
+[ ] pipelines/sensevoice_asr_batch.yaml
+[ ] 本文件中的命令路径与 export 模型路径

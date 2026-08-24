@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -22,8 +18,10 @@ from audio_engine.core.pipeline import (
     PipelineConfig,
     PipelineRunner,
     PipelineStep,
+    ShardingConfig,
 )
 from audio_engine.core.registry import OperatorRegistry
+from audio_engine.core.sharded_run import ShardedRunError, run_sharded_pipeline
 from audio_engine.core.transcript_reconcile import reconcile_transcripts
 
 app = typer.Typer(
@@ -244,8 +242,17 @@ def pipeline_run(
     skip_step: Optional[list[str]] = typer.Option(
         None, "--skip-step", help="Skip a step by name or operator (repeatable)"
     ),
+    no_sharding: bool = typer.Option(
+        False,
+        "--no-sharding",
+        help="Ignore YAML sharding and run as a single process (used by shard workers)",
+    ),
 ) -> None:
-    """Run a pipeline from YAML configuration."""
+    """Run a pipeline from YAML configuration.
+
+    When the YAML defines ``sharding:``, this command automatically splits the
+    input, runs shard workers in parallel, and merges into ``output.manifest``.
+    """
     cfg = PipelineConfig.from_yaml(config_path)
     cfg.force = force or cfg.force
     cfg.mock = mock or cfg.mock
@@ -267,6 +274,32 @@ def pipeline_run(
         if len(kept) != len(cfg.steps):
             console.print(f"  Skipping steps: {', '.join(sorted(skipped))}")
         cfg.steps = kept
+    if no_sharding:
+        cfg.sharding = None
+
+    if cfg.sharding is not None:
+        try:
+            result = run_sharded_pipeline(
+                cfg,
+                config_path=config_path.resolve(),
+                run_root=Path(cfg.resume) if cfg.resume else None,
+                log=lambda msg: console.print(msg),
+            )
+        except ShardedRunError as exc:
+            console.print(f"[red]{exc}[/red]")
+            console.print(f"  Logs: [cyan]{exc.run_root}[/cyan]")
+            raise typer.Exit(code=1) from exc
+        except (ValueError, FileNotFoundError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+        report = result.merge_report
+        console.print(f"[green]OK[/green] Sharded pipeline '{cfg.name}' finished")
+        console.print(
+            f"  Shards: {result.shard_count}, Samples: {report.get('total_out', len(result.manifest))}"
+        )
+        console.print(f"  Output: [cyan]{cfg.output_manifest}[/cyan]")
+        console.print(f"  Run root: [cyan]{result.run_root}[/cyan]")
+        return
 
     runner = PipelineRunner(cfg)
     result = runner.run()
@@ -350,126 +383,64 @@ def pipeline_run_shards(
     force: bool = typer.Option(False, "--force", help="Ignore cache"),
     run_root: Optional[Path] = typer.Option(None, "--run-root", help="Output root for this batch"),
 ) -> None:
-    """Run one independent pipeline process per shard, `parallel_shards` at a time.
+    """Run one independent pipeline process per pre-built shard (compat path).
 
-    Ingest steps are dropped: the shard manifest already lists the samples, so
-    rescanning the source directory would pull every sample into every shard.
-
-    Each shard uses a fixed run directory under `--run-root`, so re-issuing the
-    same command after a crash resumes every shard from its own checkpoints.
+    Prefer ``pipeline run`` with YAML ``sharding:`` for split+run+merge in one command.
+    Ingest steps are dropped: the shard manifest already lists the samples.
     """
     cfg = PipelineConfig.from_yaml(config_path)
-    shards = sorted(shard_dir.glob("shard-*.parquet"))
-    if not shards:
-        raise typer.BadParameter(f"No shard-*.parquet found in {shard_dir}")
-    if parallel_shards < 1:
-        raise typer.BadParameter("--parallel-shards must be >= 1")
-    if instances_per_gpu < 1:
-        raise typer.BadParameter("--instances-per-gpu must be >= 1")
-    gpu_ids = [item.strip() for item in (gpus or "").split(",") if item.strip()]
-    if len(gpu_ids) != len(set(gpu_ids)):
-        raise typer.BadParameter("--gpus must not contain duplicate ids")
-    gpu_slots = len(gpu_ids) * instances_per_gpu if gpu_ids else 0
-    if gpu_ids and parallel_shards > gpu_slots:
-        raise typer.BadParameter(
-            "--parallel-shards cannot exceed GPUs * --instances-per-gpu "
-            f"({len(gpu_ids)} * {instances_per_gpu} = {gpu_slots})"
-        )
+    cfg.force = force or cfg.force
+    if workers is not None or executor is not None:
+        cfg.execution_override = _execution_override(workers, executor)
 
-    ingest_steps = sorted({s.name for s in cfg.steps if s.operator.startswith("ingest.")})
+    gpu_ids = tuple(item.strip() for item in (gpus or "").split(",") if item.strip())
+    try:
+        override = ShardingConfig(
+            shards=max(parallel_shards, 1),
+            strategy="hash",
+            parallel_shards=parallel_shards,
+            gpus=gpu_ids,
+            instances_per_gpu=instances_per_gpu,
+            workers=workers,
+            executor=executor,
+        )
+        override.validate_parallel()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    # Compat: ensure an output path so the shared runner can merge shard parquets.
+    if not cfg.output_manifest:
+        root_for_out = run_root or RUNS_DIR
+        cfg.output_manifest = str(Path(root_for_out) / f"{cfg.name}_merged.parquet")
+        auto_output = True
+    else:
+        auto_output = False
+
     root = run_root or (RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cfg.name}_shards")
-    root.mkdir(parents=True, exist_ok=True)
-
-    console.print(f"Running {len(shards)} shards, {parallel_shards} at a time")
-    if gpu_ids:
-        console.print(
-            f"  GPUs: {','.join(gpu_ids)}  instances-per-gpu: {instances_per_gpu}"
+    try:
+        result = run_sharded_pipeline(
+            cfg,
+            config_path=config_path.resolve(),
+            run_root=root,
+            shard_dir=shard_dir,
+            sharding_override=override,
+            log=lambda msg: console.print(msg),
         )
-    console.print(f"  Run root: [cyan]{root}[/cyan]")
-    if ingest_steps:
-        console.print(f"  Dropping ingest steps: {', '.join(ingest_steps)}")
+    except ShardedRunError as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print(f"  Logs: [cyan]{exc.run_root}[/cyan]")
+        raise typer.Exit(code=1) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
-    queue = list(shards)
-    running: list[tuple[Path, subprocess.Popen, object, str | None]] = []
-    exit_codes: dict[str, int] = {}
-
-    while queue or running:
-        while queue and len(running) < parallel_shards:
-            gpu_id = None
-            if gpu_ids:
-                used: dict[str, int] = {}
-                for _shard, _proc, _log, assigned in running:
-                    if assigned is not None:
-                        used[assigned] = used.get(assigned, 0) + 1
-                gpu_id = next(
-                    (item for item in gpu_ids if used.get(item, 0) < instances_per_gpu),
-                    None,
-                )
-                if gpu_id is None:
-                    break
-            shard = queue.pop(0)
-            shard_run_dir = root / shard.stem
-            shard_run_dir.mkdir(parents=True, exist_ok=True)
-            command = [
-                sys.executable,
-                "-m",
-                "audio_engine.cli.main",
-                "pipeline",
-                "run",
-                str(config_path),
-                "--input-manifest",
-                str(shard),
-                "--output-manifest",
-                str(root / f"{shard.stem}.parquet"),
-                "--resume",
-                str(shard_run_dir),
-            ]
-            for name in ingest_steps:
-                command += ["--skip-step", name]
-            if workers is not None:
-                command += ["--workers", str(workers)]
-            if executor is not None:
-                command += ["--executor", executor]
-            if force:
-                command.append("--force")
-
-            log_file = (root / f"{shard.stem}.log").open("w", encoding="utf-8")
-            env = None
-            if gpu_id is not None:
-                env = os.environ.copy()
-                env["CUDA_VISIBLE_DEVICES"] = gpu_id
-            process = subprocess.Popen(
-                command,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                env=env,
-            )
-            running.append((shard, process, log_file, gpu_id))
-            gpu_label = f", GPU {gpu_id}" if gpu_id is not None else ""
-            console.print(f"  started {shard.name} (pid {process.pid}{gpu_label})")
-
-        time.sleep(0.2)
-        for entry in list(running):
-            shard, process, log_file, _gpu_id = entry
-            if process.poll() is None:
-                continue
-            log_file.close()
-            running.remove(entry)
-            exit_codes[shard.stem] = process.returncode
-            status = "[green]ok[/green]" if process.returncode == 0 else "[red]FAILED[/red]"
-            console.print(f"  {status} {shard.name} (exit {process.returncode})")
-
-    failed = [name for name, code in exit_codes.items() if code != 0]
-    if failed:
-        console.print(f"[red]{len(failed)} shard(s) failed:[/red] {', '.join(sorted(failed))}")
-        console.print(f"  Logs: [cyan]{root}[/cyan]")
-        raise typer.Exit(code=1)
-
-    console.print(f"[green]OK[/green] all {len(shards)} shards finished")
-    console.print(
-        "  Merge with: [cyan]audio-data manifest merge "
-        f'"{root}/shard-*.parquet" --output <path>[/cyan]'
-    )
+    console.print(f"[green]OK[/green] all {result.shard_count} shards finished")
+    console.print(f"  Run root: [cyan]{result.run_root}[/cyan]")
+    console.print(f"  Output: [cyan]{cfg.output_manifest}[/cyan]")
+    if auto_output:
+        console.print(
+            "  (compat) also: [cyan]audio-data manifest merge "
+            f'"{result.run_root}/shard-*.parquet" --output <path>[/cyan]'
+        )
 
 
 manifest_app = typer.Typer(help="Manifest sharding and merging for large-scale runs")
