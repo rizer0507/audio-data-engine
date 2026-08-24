@@ -51,6 +51,31 @@ audio-data pipeline run pipelines/baseline_qwen.yaml --mock
 audio-data pipeline run pipelines/denoise_qwen.yaml --mock
 ```
 
+流水线是唯一的生产运行入口。每次运行都会在 `runs/<时间>_<名称>/` 保存实际配置、
+manifest、metrics、checkpoint 和 `run.log`，无需再手工串联命令。
+
+### 自由脚本与高并发
+
+临时处理逻辑无需修改 core 或注册新算子。编写一个含
+`process(sample, params, context)` 的 Python 文件，然后在 YAML 使用 `script.python`：
+
+```yaml
+execution: {executor: process, workers: 16, max_in_flight: 64}
+pipeline:
+  - name: my_policy
+    operator: script.python
+    params:
+      path: scripts/my_policy.py
+      threshold: 0.9
+```
+
+`sample` 是可序列化字典，函数返回 `audio`、`transcripts`、`quality`、`labels` 或样本
+标量字段的增量更新。业务脚本通过 `context.log("message", key=value)` 写日志；引擎将其
+记录为 `runs/.../script_logs/<step>.jsonl`，自动附带 UTC 时间、step 和 sample_id，在线程
+和多进程高并发下仍可追溯。`context.artifact_path("result.json")` 可获得该步骤、该样本
+独占的产物路径。脚本内容参与缓存键计算，因此修改脚本后会自动重新处理。完整示例见
+`pipelines/script_example.yaml` 和 `scripts/examples/label_from_duration.py`。
+
 ### 5. 对比两个 ASR 模型
 
 ```bash
@@ -112,6 +137,7 @@ audio-data operators
 | asr | qwen, sensevoice | ASR 转写 |
 | augmentation | add_noise, speed_perturb, volume_perturb | 数据增强 |
 | quality | snr, cer, filter, transcript_diff | 质量评估 |
+| script | python | 将任意 Python 处理脚本接入流水线 |
 
 ## 扩展
 

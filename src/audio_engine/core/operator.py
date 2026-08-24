@@ -20,6 +20,8 @@ class OperatorConfig(BaseModel):
     cache_dir: Path = Path("data/cache")
     force: bool = False
     mock: bool = False
+    run_dir: Path | None = None
+    step_name: str | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 

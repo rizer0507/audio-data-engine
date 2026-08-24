@@ -1,0 +1,17 @@
+name: script_example
+
+input:
+  manifest: datasets/manifests/raw_example.parquet
+
+execution:
+  executor: process
+  workers: 8
+  max_in_flight: 32
+  checkpoint_every: 1000
+
+pipeline:
+  - name: duration_policy
+    operator: script.python
+    params:
+      path: scripts/examples/label_from_duration.py
+      minimum_seconds: 1.0
