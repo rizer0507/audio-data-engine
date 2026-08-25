@@ -118,6 +118,34 @@ class Sample(BaseModel):
 
     @classmethod
     def from_flat_dict(cls, data: dict[str, Any]) -> Sample:
+        transcripts = data.get("transcripts") or {}
+        if not isinstance(transcripts, dict):
+            transcripts = {}
+        else:
+            transcripts = dict(transcripts)
+        # Recover model texts from flat parquet columns when nested transcripts lost a key.
+        for key, value in data.items():
+            if not key.endswith("_text") or key in {"text", "gold_text"}:
+                continue
+            if value is None:
+                continue
+            try:
+                if value != value:  # NaN
+                    continue
+            except (TypeError, ValueError):
+                pass
+            text = str(value).strip()
+            if not text:
+                continue
+            model = key[: -len("_text")]
+            if not model:
+                continue
+            entry = transcripts.get(model)
+            if entry is None:
+                transcripts[model] = {"text": text}
+            elif isinstance(entry, dict) and not str(entry.get("text") or "").strip():
+                transcripts[model] = {**entry, "text": text}
+
         return cls(
             id=data["id"],
             source_path=data["source_path"],
@@ -126,7 +154,7 @@ class Sample(BaseModel):
             channels=_optional_number(data.get("channels"), as_int=True),
             duration=_optional_number(data.get("duration")),
             audio=data.get("audio") or {},
-            transcripts=data.get("transcripts") or {},
+            transcripts=transcripts,
             quality=data.get("quality") or {},
             labels=data.get("labels") or {},
             lineage=[LineageEntry(**e) for e in (data.get("lineage") or [])],

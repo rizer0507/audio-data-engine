@@ -1,12 +1,13 @@
 # 数据清洗流水线：只做音频质量，不做标注决策
 #
-# 输入：已登记的逻辑数据源 source_A（见 resources/manifest.yaml）
-#   - 若已有样本索引 → 直接加载
-#   - 若仅有外部 path → 父进程先 ingest.scan，再分片
-# 输出：datasets/manifests/cleaned_source_A.parquet（仅 audio_pass 样本）
+# 推荐（按批次名统一产物命名，无需改本文件路径）：
+#   audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
+#     --source-name mt3000 \
+#     --source-dir /path/to/wav_or_pcm
+#   → datasets/manifests/cleaned_mt3000.parquet|.jsonl
 #
-# 一条命令：audio-data pipeline run pipelines/data_cleaning_source_A.yaml
-# sharding 自动完成 分片 → 多进程并行 → 合并
+# 兼容旧用法：不传 --source-name 时，仍读下方 input.source / output.manifest
+#   （input.source 见 resources/manifest.yaml）
 
 name: data_cleaning_source_A
 

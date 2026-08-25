@@ -21,12 +21,26 @@ def empty_counts() -> dict[str, int]:
 
 
 def digest_samples(samples: list[Sample]) -> str:
-    """Fingerprint a step's input so a checkpoint is never replayed onto other data."""
+    """Fingerprint a step's input so a checkpoint is never replayed onto other data.
+
+    Includes transcript texts so an upstream ASR refresh (e.g. stage1 Qwen) invalidates
+    downstream checkpoints that only shared the same audio sha256.
+    """
     hasher = hashlib.sha256()
     for sample in samples:
         hasher.update(sample.id.encode("utf-8"))
         hasher.update(b"\0")
         hasher.update(sample_digest(sample).encode("utf-8"))
+        hasher.update(b"\0")
+        transcript_view = {
+            key: (value.get("text") if isinstance(value, dict) else value)
+            for key, value in sorted(sample.transcripts.items())
+        }
+        hasher.update(
+            json.dumps(transcript_view, ensure_ascii=False, sort_keys=True, default=str).encode(
+                "utf-8"
+            )
+        )
         hasher.update(b"\n")
     hasher.update(f"count={len(samples)}".encode())
     return hasher.hexdigest()

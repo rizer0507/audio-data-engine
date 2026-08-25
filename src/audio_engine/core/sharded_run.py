@@ -101,15 +101,39 @@ def run_staged_pipelines(
     force: bool = False,
     mock: bool = False,
     execution_override: dict | None = None,
+    source_name: str | None = None,
+    source_name_layout: list[dict] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> StagedRunResult:
     """Run each stage YAML to completion (including its own sharding) before the next.
 
     This is how 「先全量 Qwen，再全量 SenseVoice」 is expressed as one CLI command.
+
+    When ``source_name`` is set, each stage's input/output manifests are rewritten
+    from ``source_name_layout`` (or the multi-ASR default layout).
     """
+    from audio_engine.core.source_naming import (
+        expand_layout_templates,
+        resolve_existing_manifest,
+        validate_source_name,
+    )
+
     emit = log or (lambda msg: logger.info(msg))
     if not stage_paths:
         raise ValueError("run_staged_pipelines requires at least one stage")
+
+    path_overrides: list[tuple[str, str]] | None = None
+    if source_name is not None:
+        validate_source_name(source_name)
+        path_overrides = expand_layout_templates(source_name_layout, source_name)
+        if len(path_overrides) != len(stage_paths):
+            raise ValueError(
+                f"--source-name layout has {len(path_overrides)} entries but "
+                f"stages has {len(stage_paths)}; they must match"
+            )
+        emit(f"Source name: {source_name}")
+        for index, (inp, out) in enumerate(path_overrides, start=1):
+            emit(f"  Stage {index} paths: {inp} → {out}")
 
     root = resolve_staged_run_root(name, runs_dir, resume)
     emit(f"Staged run root: {root}")
@@ -125,10 +149,20 @@ def run_staged_pipelines(
         if execution_override:
             cfg.execution_override = dict(execution_override)
 
+        if path_overrides is not None:
+            inp_stem, out_path = path_overrides[index - 1]
+            resolved_in = resolve_existing_manifest(inp_stem)
+            cfg.input_manifest = str(resolved_in)
+            cfg.output_manifest = out_path
+            cfg.source_dir = None
+            cfg.source_id = None
+
         stage_root = root / f"stage-{index:02d}_{cfg.name}"
         stage_root.mkdir(parents=True, exist_ok=True)
         stage_roots.append(stage_root)
         emit(f"=== Stage {index}/{len(stage_paths)}: {cfg.name} ({stage_path.name}) ===")
+        emit(f"  input:  {cfg.input_manifest}")
+        emit(f"  output: {cfg.output_manifest}")
 
         if cfg.sharding is not None:
             # Resume stage subdir when it already has shard outputs / checkpoints.

@@ -1,10 +1,15 @@
 # 工序②-b：全量 SenseVoice → 纯文本清洗 → 相对基准编辑距离
 #
-# 一条命令：audio-data pipeline run pipelines/sensevoice_asr_batch.yaml
-# 前置：input 须含 resampled_16k + transcripts.qwen（先跑完 qwen_asr_batch）
+# 推荐经编排入口：
+#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
+# 单独跑本文件时也可：
+#   audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name mt3000
+#   → qwen_asr_mt3000 → multi_asr_aggregate_mt3000
+#
+# 兼容：不传 --source-name 时使用下方写死路径。
+# 前置：input 须含 resampled_16k + transcripts.qwen
 # 环境变量：SENSEVOICE_MODEL_PATH
 # 并行约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
-# 本阶段整卡只跑 SenseVoice，不再与 Qwen 同进程串行抢显存。
 
 name: sensevoice_asr_batch
 

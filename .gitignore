@@ -46,6 +46,7 @@ runs/*
 !runs/.gitkeep
 
 # 流水线生成的样本级 manifest（逻辑产物，体积大）
+datasets/*
 datasets/manifests/*
 !datasets/manifests/.gitkeep
 !datasets/manifests/README.md
@@ -57,3 +58,12 @@ qwen_vs_sensevoice/
 # 本地临时 / 杂项
 *.bak
 *.bak_*
+
+#本地数据集
+数据集/*
+
+#文档集
+docs/*
+
+#resource
+resources/source/*

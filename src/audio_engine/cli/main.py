@@ -27,6 +27,11 @@ from audio_engine.core.sharded_run import (
     run_sharded_pipeline,
     run_staged_pipelines,
 )
+from audio_engine.core.source_naming import (
+    apply_source_name_to_single_pipeline,
+    pipeline_run_name,
+    validate_source_name,
+)
 from audio_engine.core.transcript_reconcile import reconcile_transcripts
 
 app = typer.Typer(
@@ -252,6 +257,19 @@ def pipeline_run(
         "--no-sharding",
         help="Ignore YAML sharding and run as a single process (used by shard workers)",
     ),
+    source_name: Optional[str] = typer.Option(
+        None,
+        "--source-name",
+        help=(
+            "Batch tag for unified manifest naming, e.g. mt3000 → "
+            "cleaned_mt3000 / qwen_asr_mt3000 / multi_asr_aggregate_mt3000"
+        ),
+    ),
+    source_dir: Optional[Path] = typer.Option(
+        None,
+        "--source-dir",
+        help="Raw audio directory (required with --source-name for data-cleaning pipelines)",
+    ),
 ) -> None:
     """Run a pipeline from YAML configuration.
 
@@ -260,7 +278,13 @@ def pipeline_run(
 
     When the YAML defines ``sharding:``, splits the input, runs shard workers
     in parallel, and merges into ``output.manifest``.
+
+    ``--source-name`` sets unified dataset names under datasets/manifests/.
+    Cleaning also needs ``--source-dir``; multi_asr_aggregate only needs the name.
     """
+    if source_dir is not None and source_name is None:
+        raise typer.BadParameter("--source-dir requires --source-name")
+
     stage_paths = load_stage_paths(config_path.resolve())
     if stage_paths is not None:
         if no_sharding or skip_step or input_manifest or output_manifest:
@@ -268,9 +292,21 @@ def pipeline_run(
                 "staged pipelines do not support --no-sharding / --skip-step / "
                 "--input-manifest / --output-manifest; pass those on each stage YAML run"
             )
+        if source_dir is not None:
+            raise typer.BadParameter(
+                "staged pipelines do not use --source-dir; pass --source-name only "
+                "(input is cleaned_<name>.parquet/.jsonl)"
+            )
         root_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         stage_name = str(root_data.get("name") or config_path.stem)
+        if source_name is not None:
+            try:
+                validate_source_name(source_name)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            stage_name = pipeline_run_name(stage_name, source_name)
         stage_runs_dir = runs_dir or Path(root_data.get("runs_dir") or RUNS_DIR)
+        layout = root_data.get("source_name_layout")
         try:
             staged = run_staged_pipelines(
                 stage_paths,
@@ -282,6 +318,8 @@ def pipeline_run(
                 execution_override=_execution_override(
                     workers, executor, max_in_flight, checkpoint_every
                 ),
+                source_name=source_name,
+                source_name_layout=layout,
                 log=lambda msg: console.print(msg),
             )
         except ShardedRunError as exc:
@@ -305,6 +343,29 @@ def pipeline_run(
         workers, executor, max_in_flight, checkpoint_every
     )
     cfg.resume = resume or cfg.resume
+
+    if source_name is not None:
+        try:
+            overrides = apply_source_name_to_single_pipeline(
+                pipeline_name=cfg.name,
+                steps=cfg.steps,
+                source_name=source_name,
+                source_dir=source_dir,
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        cfg.source_dir = overrides["source_dir"]
+        cfg.input_manifest = overrides["input_manifest"]
+        cfg.source_id = overrides["source_id"]
+        cfg.output_manifest = overrides["output_manifest"]
+        cfg.name = pipeline_run_name(cfg.name, source_name)
+        console.print(f"  Source name: [cyan]{source_name}[/cyan]")
+        if cfg.source_dir:
+            console.print(f"  Source dir:  [cyan]{cfg.source_dir}[/cyan]")
+        if cfg.input_manifest:
+            console.print(f"  Input:       [cyan]{cfg.input_manifest}[/cyan]")
+        console.print(f"  Output:      [cyan]{cfg.output_manifest}[/cyan]")
+        console.print(f"  Run name:    [cyan]{cfg.name}[/cyan]")
 
     if input_manifest is not None:
         cfg.input_manifest = str(input_manifest)

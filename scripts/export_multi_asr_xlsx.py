@@ -22,6 +22,18 @@ from typing import Any
 DEFAULT_MAX_ROWS = 500_000
 
 
+def _nonempty_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        if value != value:  # NaN
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return text or None
+
+
 def _transcript_text(transcripts: Any, model: str) -> str:
     if not isinstance(transcripts, dict):
         return ""
@@ -45,8 +57,17 @@ def _parse_quality(record: dict[str, Any]) -> dict[str, Any]:
 
 def _metric(record: dict[str, Any], quality: dict[str, Any], key: str) -> Any:
     for candidate in (f"quality_{key}", key):
-        if candidate in record and record[candidate] is not None:
-            return record[candidate]
+        if candidate not in record:
+            continue
+        value = record[candidate]
+        if value is None:
+            continue
+        try:
+            if value != value:  # NaN
+                continue
+        except (TypeError, ValueError):
+            pass
+        return value
     return quality.get(key)
 
 
@@ -73,7 +94,10 @@ def flatten_row(record: dict[str, Any], models: list[str], baseline: str) -> dic
     }
     for model in models:
         text_col = f"{model}_text"
-        row[text_col] = record.get(text_col) or _transcript_text(transcripts, model)
+        # Prefer nested transcripts; flat parquet columns may be NaN even when nested text exists.
+        nested = _nonempty_text(_transcript_text(transcripts, model))
+        flat = _nonempty_text(record.get(text_col))
+        row[text_col] = nested or flat or ""
         if model == resolved_baseline:
             continue
         for metric, label in (

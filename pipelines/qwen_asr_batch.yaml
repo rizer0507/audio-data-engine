@@ -1,10 +1,15 @@
 # 工序②-a：全量 Qwen3-ASR（先跑完本阶段，再跑 sensevoice_asr_batch）
 #
-# 一条命令：audio-data pipeline run pipelines/qwen_asr_batch.yaml
+# 推荐经编排入口：
+#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
+# 单独跑本文件时也可：
+#   audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name mt3000
+#   → cleaned_mt3000 → qwen_asr_mt3000
+#
+# 兼容：不传 --source-name 时使用下方写死路径。
 # 前置：input 须含 resampled_16k
 # 环境变量：QWEN_ASR_MODEL_PATH
 # 并行约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
-# 2×A800 80G 默认：每卡 4 实例 → 共 8 分片（可按 nvidia-smi 再试 2/3）
 
 name: qwen_asr_batch
 

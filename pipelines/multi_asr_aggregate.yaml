@@ -1,18 +1,24 @@
 # 工序②：一条命令跑完多模型识别 + 清洗打分
 #
-#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml
+# 推荐：
+#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
+#   自动接线：
+#     cleaned_mt3000 → qwen_asr_mt3000 → multi_asr_aggregate_mt3000
+#   （自动查找 .parquet 或 .jsonl）
 #
-# 与「手动连续跑两条」等价，但只需一条命令：
-#   Stage1 全量 Qwen          → pipelines/qwen_asr_batch.yaml
-#   Stage2 全量 SenseVoice…   → pipelines/sensevoice_asr_batch.yaml
-# 每一段自己 sharding（整卡只跑一个模型），上一段合并完成后再开下一段。
+# 兼容旧用法：不传 --source-name 时，各 stage YAML 内写死的路径生效。
 #
-# 改并行度 / 卡号：改两个 stage YAML 里的 sharding（默认 2 卡×4 实例=8 分片）
 # 环境变量：QWEN_ASR_MODEL_PATH、SENSEVOICE_MODEL_PATH
-# 最终产物：datasets/manifests/multi_asr_aggregate_source_A.parquet|.jsonl
 # 续跑：--resume runs/<本命令打印的 *_stages 目录>
 
 name: multi_asr_aggregate
+
+# --source-name 时按此模板改写各 stage 的 input/output（条数须与 stages 一致）
+source_name_layout:
+  - input: cleaned_{source_name}
+    output: qwen_asr_{source_name}
+  - input: qwen_asr_{source_name}
+    output: multi_asr_aggregate_{source_name}
 
 stages:
   - pipelines/qwen_asr_batch.yaml
