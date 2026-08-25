@@ -1,8 +1,8 @@
 单条流水线执行命令
 =======================================================
-用途：只维护「一条 pipeline run」命令；分片/并行/合并由 YAML sharding 自动完成。
-改批次、改路径、改并行度：优先改对应 pipelines/*.yaml，再改本文件中的命令与备注。
-执行顺序：1 → 2（工序②）→ 导出 xlsx（可选）。
+用途：维护生产入口命令；分片/并行/合并由 YAML sharding 自动完成。
+改批次、改路径、改并行度：优先改对应 pipelines/*.yaml，再改本文件。
+执行顺序：1 → 2（一条命令：全量 Qwen → 全量 SenseVoice+清洗打分）→ 导出 xlsx（可选）。
 
 
 -------------------------------------------------------
@@ -20,40 +20,36 @@ export MKL_NUM_THREADS=1
 # YAML: pipelines/data_cleaning_source_A.yaml
 # 输入: resources/manifest.yaml → source_A.path
 # 输出: datasets/manifests/cleaned_source_A.parquet
-# 并行: 改 YAML sharding.shards / parallel_shards / workers
 
 audio-data pipeline run pipelines/data_cleaning_source_A.yaml
 
-# 续跑（填入上次 runs/..._shards 目录）:
+# 续跑:
 # audio-data pipeline run pipelines/data_cleaning_source_A.yaml --resume runs/<上次_shards目录>
 
 
 -------------------------------------------------------
-2. 多模型串行识别 + 编辑距离汇总（工序②，当前生产入口）
+2. 多模型识别 + 清洗打分（工序②，一条命令）
 -------------------------------------------------------
-# YAML: pipelines/multi_asr_aggregate.yaml
-# 输入: datasets/manifests/cleaned_source_A.parquet
-# 输出: datasets/manifests/multi_asr_aggregate_source_A.parquet
-#       datasets/manifests/multi_asr_aggregate_source_A.jsonl
-# 步骤: Qwen → 释放显存 → SenseVoice → 释放显存 → 纯文本清洗 → 相对基准(qwen)编辑距离
-# 并行: 改 YAML sharding.gpus / instances_per_gpu / shards（样本分片并行，模型串行）
+# YAML: pipelines/multi_asr_aggregate.yaml（stages 编排）
+#   Stage1: pipelines/qwen_asr_batch.yaml
+#           cleaned → qwen_asr_source_A.parquet
+#   Stage2: pipelines/sensevoice_asr_batch.yaml
+#           qwen_asr → multi_asr_aggregate_source_A.parquet/.jsonl
+# 并行: 改两个 stage YAML 的 sharding（默认 2×4=8）
 # 约束: shards == parallel_shards <= len(gpus) * instances_per_gpu
-# 清洗: quality.normalize_transcripts（models / keep_raw）；去掉标签与标点
-# 基准: pipeline 内 asr_edit_distance.params.baseline（默认 qwen）
 
 export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
 export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 
 audio-data pipeline run pipelines/multi_asr_aggregate.yaml
 
-# 续跑:
-# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --resume runs/<上次_shards目录>
+# 续跑（填入上次打印的 *_stages 目录）:
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --resume runs/<上次_stages目录>
 
 
 -------------------------------------------------------
 2b. 导出 xlsx（parquet/jsonl 全量保留后按需转换）
 -------------------------------------------------------
-# <=50万行：一个 xlsx；>50万行：自动 stem-part-001.xlsx ...
 python scripts/export_multi_asr_xlsx.py \
   --manifest datasets/manifests/multi_asr_aggregate_source_A.parquet \
   --output datasets/exports/multi_asr_aggregate_source_A.xlsx \
@@ -62,10 +58,11 @@ python scripts/export_multi_asr_xlsx.py \
 
 
 -------------------------------------------------------
-数据链（便于换批次时对照改名）
+数据链
 -------------------------------------------------------
 source_A.path (wav/pcm)
   → cleaned_source_A.parquet
+  → qwen_asr_source_A.parquet          # stage1 中间产物
   → multi_asr_aggregate_source_A.parquet / .jsonl
   → (可选) datasets/exports/multi_asr_aggregate_source_A.xlsx
 
@@ -73,41 +70,16 @@ source_A.path (wav/pcm)
 -------------------------------------------------------
 换批次时改哪里（清单）
 -------------------------------------------------------
-[ ] resources/manifest.yaml                 # 新 source_id / path
-[ ] pipelines/data_cleaning_*.yaml          # input.source、output.manifest、sharding
-[ ] pipelines/multi_asr_aggregate.yaml      # input/output.manifest、gpus/shards、baseline
-[ ] 本文件中的命令路径与 export 模型路径
-
-
-=======================================================
-旧流水线（备份，新流水线异常时仍可用；正常生产请用上面步骤 2）
-=======================================================
-
--------------------------------------------------------
-旧-2. Qwen 识别
--------------------------------------------------------
-# YAML: pipelines/qwen_asr_batch.yaml
-# 输入: datasets/manifests/cleaned_source_A.parquet
-# 输出: datasets/manifests/qwen_asr_source_A.parquet
-
-export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
-audio-data pipeline run pipelines/qwen_asr_batch.yaml
-# audio-data pipeline run pipelines/qwen_asr_batch.yaml --resume runs/<上次_shards目录>
+[ ] resources/manifest.yaml
+[ ] pipelines/data_cleaning_*.yaml
+[ ] pipelines/qwen_asr_batch.yaml              # input/output、gpus/shards
+[ ] pipelines/sensevoice_asr_batch.yaml        # input/output、gpus/shards、baseline
+[ ] pipelines/multi_asr_aggregate.yaml         # stages 列表（一般不用改）
+[ ] 本文件中的模型环境变量
 
 
 -------------------------------------------------------
-旧-3. SenseVoice 识别
+可选：单独跑某一段（排障）
 -------------------------------------------------------
-# YAML: pipelines/sensevoice_asr_batch.yaml
-# 输入: datasets/manifests/qwen_asr_source_A.parquet
-# 输出: datasets/manifests/qwen_sensevoice_source_A.parquet
-
-export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
-audio-data pipeline run pipelines/sensevoice_asr_batch.yaml
-# audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --resume runs/<上次_shards目录>
-
-
-旧数据链:
-cleaned_source_A.parquet
-  → qwen_asr_source_A.parquet
-  → qwen_sensevoice_source_A.parquet
+# audio-data pipeline run pipelines/qwen_asr_batch.yaml
+# audio-data pipeline run pipelines/sensevoice_asr_batch.yaml
