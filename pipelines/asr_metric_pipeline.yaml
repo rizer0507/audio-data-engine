@@ -1,4 +1,11 @@
-# 聚合完成后单独运行；Gold production 和 Evaluation 均调用同一 operator。
+# 工序② 之后：对聚合结果计算 agreement CER（与 Evaluation 共用 MetricRunner）。
+#
+#   audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name mt3000
+#   → multi_asr_aggregate_mt3000 → multi_asr_metrics_mt3000.parquet
+#
+# 配置：configs/metrics/gold_agreement.yaml + configs/normalization/zh_asr_v1.yaml
+# 兼容：不传 --source-name 时使用下方写死路径。
+
 name: asr_metric_pipeline
 input:
   manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet

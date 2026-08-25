@@ -1,10 +1,7 @@
 # 工序②-b：独立执行全量 SenseVoice（不依赖 Qwen，不计算指标）
 #
-# 推荐经编排入口：
-#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
-# 单独跑本文件时也可：
 #   audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name mt3000
-#   → qwen_asr_mt3000 → multi_asr_aggregate_mt3000
+#   → cleaned_mt3000 → sensevoice_asr_mt3000.parquet
 #
 # 兼容：不传 --source-name 时使用下方写死路径。
 # 前置：input 须含 resampled_16k

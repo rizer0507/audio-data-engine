@@ -3,7 +3,10 @@
 Convention (source_name=mt3000):
   datasets/manifests/cleaned_mt3000.parquet
   datasets/manifests/qwen_asr_mt3000.parquet
+  datasets/manifests/sensevoice_asr_mt3000.parquet
+  datasets/manifests/kimi_asr_mt3000.parquet   # future models: {model}_asr_{name}
   datasets/manifests/multi_asr_aggregate_mt3000.parquet
+  datasets/manifests/multi_asr_metrics_mt3000.parquet
 """
 
 from __future__ import annotations
@@ -14,11 +17,13 @@ from typing import Any
 
 DEFAULT_MANIFESTS_DIR = Path("datasets/manifests")
 _SOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+# kimi_asr_batch / qwen_asr / sensevoice_asr_batch → model stem before _asr
+_ASR_PIPELINE_RE = re.compile(r"^(.+)_asr(?:_batch)?$")
 
-# Default stage wiring for multi_asr_aggregate when YAML omits source_name_layout.
+# Legacy staged orchestrator layout (optional YAML ``stages:`` + source_name_layout).
 DEFAULT_MULTI_ASR_LAYOUT: list[dict[str, str]] = [
     {"input": "cleaned_{source_name}", "output": "qwen_asr_{source_name}"},
-    {"input": "qwen_asr_{source_name}", "output": "multi_asr_aggregate_{source_name}"},
+    {"input": "cleaned_{source_name}", "output": "sensevoice_asr_{source_name}"},
 ]
 
 
@@ -56,6 +61,16 @@ def manifest_path(
     ext: str = ".parquet",
 ) -> Path:
     return Path(manifests_dir) / f"{manifest_stem(kind, source_name)}{ext}"
+
+
+def model_asr_kind(model: str) -> str:
+    """Map transcript model key to manifest kind: sensevoice → sensevoice_asr."""
+    model = str(model or "").strip().strip("_")
+    if not model:
+        raise ValueError("model name must be non-empty")
+    if model.endswith("_asr"):
+        return model
+    return f"{model}_asr"
 
 
 def resolve_existing_manifest(
@@ -193,18 +208,102 @@ def apply_source_name_to_cleaning(
     }
 
 
+def resolve_model_asr_manifest(model: str, source_name: str) -> str:
+    """Resolve ``{model}_asr_{source_name}.parquet|.jsonl`` to an existing file path."""
+    kind = model_asr_kind(model)
+    return str(resolve_existing_manifest(manifest_stem(kind, source_name)))
+
+
+def rewrite_join_manifests_for_source(
+    manifests: list[dict[str, Any]] | None,
+    source_name: str,
+    *,
+    require_existing: bool = True,
+) -> list[dict[str, Any]]:
+    """Rewrite aggregate ``manifests`` entries to ``{model}_asr_{source_name}`` paths."""
+    name = validate_source_name(source_name)
+    rows = list(manifests or [])
+    if not rows:
+        raise ValueError(
+            "aggregate pipeline needs manifests to join "
+            "(YAML params.manifests or --join-manifest)"
+        )
+    rewritten: list[dict[str, Any]] = []
+    for index, item in enumerate(rows, start=1):
+        if not isinstance(item, dict) or "model" not in item:
+            raise ValueError(f"manifests[{index}] must be a mapping with `model`")
+        model = str(item["model"]).strip()
+        kind = model_asr_kind(model)
+        if require_existing:
+            path = str(resolve_existing_manifest(manifest_stem(kind, name)))
+        else:
+            path = _posix(manifest_path(kind, name))
+        rewritten.append({**item, "model": model, "path": path})
+    return rewritten
+
+
+def parse_join_manifest_arg(raw: str, source_name: str | None = None) -> dict[str, str]:
+    """Parse ``sensevoice`` or ``kimi=/path/to.parquet`` into `{model, path}`.
+
+    When only a model name is given, ``source_name`` is required and the path becomes
+    ``datasets/manifests/{model}_asr_{source_name}.parquet``.
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("--join-manifest value must be non-empty")
+    if "=" in text:
+        model, _, path = text.partition("=")
+        model = model.strip()
+        path = path.strip()
+        if not model or not path:
+            raise ValueError(
+                "--join-manifest expected `model` or `model=/path/to.parquet`"
+            )
+        return {"model": model, "path": path}
+    if source_name is None:
+        raise ValueError(
+            f"--join-manifest '{text}' needs --source-name "
+            f"(or use model=/explicit/path.parquet)"
+        )
+    kind = model_asr_kind(text)
+    return {
+        "model": text.strip(),
+        "path": _posix(manifest_path(kind, validate_source_name(source_name))),
+    }
+
+
+def _asr_output_kind(pipeline_name: str) -> str | None:
+    """Return manifest kind for an ASR batch pipeline, or None if not ASR-named."""
+    key = pipeline_name.lower().strip()
+    if "multi_asr" in key or "aggregate" in key:
+        return None
+    if "metric" in key:
+        return None
+    match = _ASR_PIPELINE_RE.match(key)
+    if match:
+        stem = match.group(1)
+        if stem in {"multi"}:
+            return None
+        return f"{stem}_asr"
+    return None
+
+
 def apply_source_name_to_single_pipeline(
     *,
     pipeline_name: str,
     steps: list[Any],
     source_name: str,
     source_dir: str | Path | None = None,
+    join_manifests: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Derive input/output overrides for a non-staged pipeline.
+    """Derive input/output (and aggregate join) overrides for a non-staged pipeline.
 
     - Cleaning (ingest steps or ``--source-dir``): write ``cleaned_<name>``.
-    - ``qwen_asr*``: ``cleaned_<name>`` → ``qwen_asr_<name>``.
-    - ``sensevoice*``: ``qwen_asr_<name>`` → ``multi_asr_aggregate_<name>``.
+    - ``qwen_asr*`` / ``sensevoice_asr*`` / ``{model}_asr*``:
+      ``cleaned_<name>`` → ``{model}_asr_<name>``.
+    - ``multi_asr_aggregate*``: ``qwen_asr_<name>`` → ``multi_asr_aggregate_<name>``,
+      and rewrite join manifests to ``{model}_asr_<name>``.
+    - ``asr_metric*``: ``multi_asr_aggregate_<name>`` → ``multi_asr_metrics_<name>``.
     """
     name = validate_source_name(source_name)
     has_ingest = any(
@@ -223,28 +322,71 @@ def apply_source_name_to_single_pipeline(
             "input_manifest": "",
             "source_id": None,
             "output_manifest": overrides["output_manifest"],
+            "aggregate_manifests": None,
         }
 
     key = pipeline_name.lower()
-    if "qwen" in key:
-        resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
-        return {
-            "source_dir": None,
-            "input_manifest": str(resolved),
-            "source_id": None,
-            "output_manifest": _posix(manifest_path("qwen_asr", name)),
-        }
-    if "sensevoice" in key or "multi_asr" in key:
+
+    if "multi_asr" in key or ("aggregate" in key and "asr" in key):
         resolved = resolve_existing_manifest(manifest_stem("qwen_asr", name))
+        if join_manifests is not None:
+            # CLI --join-manifest: keep explicit paths; only require files exist.
+            joins = [
+                {
+                    "model": str(item["model"]).strip(),
+                    "path": str(resolve_existing_manifest(str(item["path"]))),
+                }
+                for item in join_manifests
+            ]
+            if not joins:
+                raise ValueError("--join-manifest produced an empty join list")
+        else:
+            yaml_joins: list[dict[str, Any]] = []
+            for step in steps:
+                if getattr(step, "operator", "") == "quality.aggregate_manifests":
+                    params = getattr(step, "params", None) or {}
+                    yaml_joins = list(params.get("manifests") or [])
+                    break
+            joins = rewrite_join_manifests_for_source(yaml_joins, name)
         return {
             "source_dir": None,
             "input_manifest": str(resolved),
             "source_id": None,
             "output_manifest": _posix(manifest_path("multi_asr_aggregate", name)),
+            "aggregate_manifests": joins,
         }
+
+    if "asr_metric" in key or key in {"metric_pipeline", "text_metrics"}:
+        resolved = resolve_existing_manifest(manifest_stem("multi_asr_aggregate", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("multi_asr_metrics", name)),
+            "aggregate_manifests": None,
+        }
+
+    asr_kind = _asr_output_kind(pipeline_name)
+    if asr_kind is not None:
+        resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path(asr_kind, name)),
+            "aggregate_manifests": None,
+        }
+
+    # Fallback: any pipeline whose steps are pure ASR inference.
+    if any(getattr(step, "operator", "").startswith("asr.") for step in steps):
+        raise ValueError(
+            f"--source-name on pipeline '{pipeline_name}' needs a name like "
+            f"qwen_asr_batch / sensevoice_asr_batch / kimi_asr_batch "
+            f"(output becomes <model>_asr_{name}.parquet)"
+        )
 
     raise ValueError(
         f"--source-name on pipeline '{pipeline_name}' is unsupported without "
-        "--source-dir; use multi_asr_aggregate.yaml or pass --input-manifest / "
-        "--output-manifest"
+        "--source-dir; use qwen/sensevoice/aggregate/metric pipelines or pass "
+        "--input-manifest / --output-manifest"
     )

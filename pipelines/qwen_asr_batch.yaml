@@ -1,10 +1,7 @@
-# 工序②-a：全量 Qwen3-ASR（先跑完本阶段，再跑 sensevoice_asr_batch）
+# 工序②-a：全量 Qwen3-ASR（与其他模型独立；可先于/并行于 sensevoice）
 #
-# 推荐经编排入口：
-#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
-# 单独跑本文件时也可：
 #   audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name mt3000
-#   → cleaned_mt3000 → qwen_asr_mt3000
+#   → cleaned_mt3000 → qwen_asr_mt3000.parquet
 #
 # 兼容：不传 --source-name 时使用下方写死路径。
 # 前置：input 须含 resampled_16k

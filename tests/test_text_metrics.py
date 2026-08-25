@@ -6,6 +6,7 @@ from audio_engine.core.manifest import Manifest
 from audio_engine.core.operator import OperatorConfig
 from audio_engine.core.registry import OperatorRegistry
 from audio_engine.core.sample import Sample
+from audio_engine.metrics.align import align_characters
 from audio_engine.metrics.cer import calculate_cer
 from audio_engine.metrics.normalization import normalize_text
 from audio_engine.metrics.runner import MetricConfigError, run_text_metrics
@@ -23,6 +24,13 @@ def test_cer_operations_and_empty_reference():
         "insertions": 2,
         "reference_length": 0,
     }
+
+
+def test_align_characters_substitution_and_deletion():
+    ops = align_characters("不需要", "需要")
+    assert any(item["operation"] == "deletion" and item["reference"] == "不" for item in ops)
+    ops = align_characters("贷款", "代款")
+    assert any(item["operation"] == "substitution" for item in ops)
 
 
 def test_normalization_preserves_fillers():
@@ -54,6 +62,25 @@ def test_runner_validates_fields_and_collisions():
         )
 
 
+def test_runner_reads_gold_provenance_fields_from_labels():
+    comparison = {
+        "purpose": "model_evaluation",
+        "reference": {"field": "gold_text"},
+        "hypothesis": {"field": "old_model_text"},
+        "metrics": ["cer"],
+        "output": {"prefix": "old_model"},
+    }
+    record = {
+        "gold_text": "不需要",
+        "gold_source": "human",
+        "gold_status": "verified",
+        "gold_version": "gold_v1",
+        "old_model_text": "需要",
+    }
+    out = run_text_metrics(record, comparison, {})
+    assert out["old_model_cer"] == pytest.approx(1 / 3, rel=1e-4)
+
+
 def test_aggregate_requires_aligned_ids(tmp_path: Path):
     other = tmp_path / "sense.parquet"
     Manifest(
@@ -65,6 +92,7 @@ def test_aggregate_requires_aligned_ids(tmp_path: Path):
         OperatorConfig(params={"manifests": [{"model": "sensevoice", "path": str(other)}]}),
     )
     assert result[0].get_transcript_text("sensevoice") == "需要"
+    assert result[0].transcripts["sensevoice"]["extra"]["source_manifest"] == str(other)
     with pytest.raises(ValueError, match="not aligned"):
         operator.run(
             [Sample(id="b", source_path="b.wav")],

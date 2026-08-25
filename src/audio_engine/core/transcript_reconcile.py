@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
 
 from audio_engine.metrics.cer import calculate_cer
+from audio_engine.metrics.normalization import normalize_text
 
 # SenseVoice / FunASR style: <|zh|>、<|EMO_UNKNOW|>、<|HAPPY|> …
 _CONTROL_TAG_RE = re.compile(r"<\|.*?\|>")
@@ -25,6 +25,16 @@ _SENSEVOICE_COLUMNS = (
     "识别结果",
 )
 
+# Prefer the same profile as MetricRunner when the file exists.
+_ZH_ASR_V1 = {
+    "unicode": {"normalize": True, "form": "NFKC"},
+    "punctuation": {"remove": True},
+    "whitespace": {"remove": True},
+    "english": {"lowercase": True},
+    "number": {"normalize": False},
+    "filler": {"remove": False},
+}
+
 
 def clean_control_tags(value: Any) -> Any:
     """Remove SenseVoice / emotion control fields from a cell."""
@@ -36,11 +46,15 @@ def clean_control_tags(value: Any) -> Any:
 
 
 def normalize_transcript(value: Any) -> str:
-    """Normalize transcript text for character-level comparison."""
-    if value is None or pd.isna(value):
+    """Normalize transcript text via the shared Metric Engine normalizer."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
-    text = unicodedata.normalize("NFKC", str(clean_control_tags(value))).casefold()
-    return "".join(ch for ch in text if ch.isalnum())
+    try:
+        if value != value:  # NaN
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return normalize_text(clean_control_tags(value), _ZH_ASR_V1)
 
 
 def plain_transcript_text(value: Any) -> str:
@@ -50,22 +64,6 @@ def plain_transcript_text(value: Any) -> str:
     cells contain characters only (no ``<|EMO_UNKNOW|>``, ``。``，``，``，etc.).
     """
     return normalize_transcript(value)
-
-
-def _levenshtein(a: str, b: str) -> int:
-    if len(a) < len(b):
-        a, b = b, a
-    previous = list(range(len(b) + 1))
-    for index, char_a in enumerate(a, 1):
-        current = [index]
-        for offset, char_b in enumerate(b, 1):
-            current.append(
-                min(
-                    current[-1] + 1, previous[offset] + 1, previous[offset - 1] + (char_a != char_b)
-                )
-            )
-        previous = current
-    return previous[-1]
 
 
 def levenshtein_ops(reference: str, hypothesis: str) -> dict[str, int | float | None]:
@@ -118,7 +116,9 @@ def character_similarity(left: Any, right: Any) -> float:
     a, b = normalize_transcript(left), normalize_transcript(right)
     if not a and not b:
         return 1.0
-    return round(1 - _levenshtein(a, b) / max(len(a), len(b)), 4)
+    metric = calculate_cer(a, b)
+    total = metric["substitutions"] + metric["deletions"] + metric["insertions"]
+    return round(1 - total / max(len(a), len(b)), 4)
 
 
 def _pick_column(

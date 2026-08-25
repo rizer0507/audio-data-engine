@@ -1,3 +1,6 @@
+# 工序⑤ 示例：模型评测 CER（与 Gold production 共用 quality.text_metrics / MetricRunner）
+# reference = gold_text；hypothesis = old_model_text / new_model_text
+# 配置：configs/metrics/model_eval.yaml
 name: asr_eval
 input:
   manifest: datasets/manifests/asr_eval_source_A.parquet

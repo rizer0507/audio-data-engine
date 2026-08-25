@@ -1,5 +1,16 @@
 # 工序②：仅按 id 聚合各个独立 ASR 流水线的结果；不执行推理或指标计算。
-# 新模型只需在 manifests 参数中增加 model/path，不必修改本流水线实现。
+#
+#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
+#   → base: qwen_asr_mt3000.parquet
+#   → join: sensevoice_asr_mt3000.parquet（YAML 中 path 随 --source-name 自动改写）
+#   → out:  multi_asr_aggregate_mt3000.parquet
+#
+# 新模型：在 manifests 增加一项，或 CLI：
+#   --join-manifest sensevoice --join-manifest kimi
+#   --join-manifest kimi=/path/to/kimi_asr_mt3000.parquet
+#
+# 兼容：不传 --source-name 时使用下方写死路径。
+
 name: multi_asr_aggregate
 input:
   manifest: datasets/manifests/qwen_asr_source_A.parquet

@@ -29,6 +29,7 @@ from audio_engine.core.sharded_run import (
 )
 from audio_engine.core.source_naming import (
     apply_source_name_to_single_pipeline,
+    parse_join_manifest_arg,
     pipeline_run_name,
     validate_source_name,
 )
@@ -44,6 +45,20 @@ console = Console()
 MANIFESTS_DIR = Path("datasets/manifests")
 EXPORTS_DIR = Path("data/exports")
 RUNS_DIR = Path("runs")
+
+
+def _apply_aggregate_manifests(cfg: PipelineConfig, manifests: list[dict]) -> None:
+    """Patch ``quality.aggregate_manifests`` step params with resolved join list."""
+    updated = False
+    for step in cfg.steps:
+        if step.operator == "quality.aggregate_manifests":
+            step.params = {**step.params, "manifests": list(manifests)}
+            updated = True
+    if not updated:
+        raise typer.BadParameter(
+            "--join-manifest / aggregate source-name rewrite requires a "
+            "quality.aggregate_manifests step"
+        )
 
 
 def _resolve_dataset(name: str) -> Path:
@@ -262,7 +277,8 @@ def pipeline_run(
         "--source-name",
         help=(
             "Batch tag for unified manifest naming, e.g. mt3000 → "
-            "cleaned_mt3000 / qwen_asr_mt3000 / multi_asr_aggregate_mt3000"
+            "cleaned_mt3000 / qwen_asr_mt3000 / sensevoice_asr_mt3000 / "
+            "multi_asr_aggregate_mt3000 / multi_asr_metrics_mt3000"
         ),
     ),
     source_dir: Optional[Path] = typer.Option(
@@ -270,17 +286,27 @@ def pipeline_run(
         "--source-dir",
         help="Raw audio directory (required with --source-name for data-cleaning pipelines)",
     ),
+    join_manifest: Optional[list[str]] = typer.Option(
+        None,
+        "--join-manifest",
+        help=(
+            "For multi_asr_aggregate: model to join, e.g. sensevoice or "
+            "kimi=/path/to.parquet (repeatable). With --source-name, bare "
+            "model names resolve to {model}_asr_<name>.parquet"
+        ),
+    ),
 ) -> None:
     """Run a pipeline from YAML configuration.
 
     When the YAML defines ``stages:``, runs each stage YAML sequentially
-    (e.g. full Qwen, then full SenseVoice) under one command.
+    under one command (legacy orchestrator).
 
     When the YAML defines ``sharding:``, splits the input, runs shard workers
     in parallel, and merges into ``output.manifest``.
 
     ``--source-name`` sets unified dataset names under datasets/manifests/.
-    Cleaning also needs ``--source-dir``; multi_asr_aggregate only needs the name.
+    Cleaning also needs ``--source-dir``. ASR / aggregate / metric only need
+    the name (each model writes ``{model}_asr_<name>.parquet``).
     """
     if source_dir is not None and source_name is None:
         raise typer.BadParameter("--source-dir requires --source-name")
@@ -296,6 +322,11 @@ def pipeline_run(
             raise typer.BadParameter(
                 "staged pipelines do not use --source-dir; pass --source-name only "
                 "(input is cleaned_<name>.parquet/.jsonl)"
+            )
+        if join_manifest:
+            raise typer.BadParameter(
+                "staged pipelines do not support --join-manifest; "
+                "run multi_asr_aggregate.yaml as a single pipeline instead"
             )
         root_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         stage_name = str(root_data.get("name") or config_path.stem)
@@ -344,6 +375,19 @@ def pipeline_run(
     )
     cfg.resume = resume or cfg.resume
 
+    cli_joins: list[dict] | None = None
+    if join_manifest:
+        try:
+            from audio_engine.core.source_naming import resolve_existing_manifest
+
+            cli_joins = []
+            for item in join_manifest:
+                parsed = parse_join_manifest_arg(item, source_name)
+                parsed["path"] = str(resolve_existing_manifest(parsed["path"]))
+                cli_joins.append(parsed)
+        except (ValueError, FileNotFoundError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
     if source_name is not None:
         try:
             overrides = apply_source_name_to_single_pipeline(
@@ -351,6 +395,7 @@ def pipeline_run(
                 steps=cfg.steps,
                 source_name=source_name,
                 source_dir=source_dir,
+                join_manifests=cli_joins,
             )
         except (ValueError, FileNotFoundError) as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -358,6 +403,8 @@ def pipeline_run(
         cfg.input_manifest = overrides["input_manifest"]
         cfg.source_id = overrides["source_id"]
         cfg.output_manifest = overrides["output_manifest"]
+        if overrides.get("aggregate_manifests") is not None:
+            _apply_aggregate_manifests(cfg, overrides["aggregate_manifests"])
         cfg.name = pipeline_run_name(cfg.name, source_name)
         console.print(f"  Source name: [cyan]{source_name}[/cyan]")
         if cfg.source_dir:
@@ -366,6 +413,15 @@ def pipeline_run(
             console.print(f"  Input:       [cyan]{cfg.input_manifest}[/cyan]")
         console.print(f"  Output:      [cyan]{cfg.output_manifest}[/cyan]")
         console.print(f"  Run name:    [cyan]{cfg.name}[/cyan]")
+        if overrides.get("aggregate_manifests"):
+            for item in overrides["aggregate_manifests"]:
+                console.print(
+                    f"  Join:        [cyan]{item['model']}[/cyan] ← {item['path']}"
+                )
+    elif cli_joins is not None:
+        _apply_aggregate_manifests(cfg, cli_joins)
+        for item in cli_joins:
+            console.print(f"  Join:        [cyan]{item['model']}[/cyan] ← {item['path']}")
 
     if input_manifest is not None:
         cfg.input_manifest = str(input_manifest)

@@ -1,4 +1,6 @@
 comparisons:
+  # Gold production：pseudo-reference = 当前强基线（暂用 qwen）。
+  # 后续接入 Model C 时改为 reference.field: model_c_text，并增加各模型 vs model_c 项。
   - name: sensevoice_vs_qwen
     purpose: gold_generation_agreement
     reference: {field: qwen_text}

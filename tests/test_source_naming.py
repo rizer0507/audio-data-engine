@@ -14,8 +14,11 @@ from audio_engine.core.source_naming import (
     cleaned_output_path,
     expand_layout_templates,
     manifest_path,
+    model_asr_kind,
+    parse_join_manifest_arg,
     pipeline_run_name,
     resolve_existing_manifest,
+    rewrite_join_manifests_for_source,
     validate_source_name,
 )
 
@@ -44,6 +47,8 @@ def test_manifest_paths():
     assert manifest_path("qwen_asr", "mt3000").as_posix() == (
         "datasets/manifests/qwen_asr_mt3000.parquet"
     )
+    assert model_asr_kind("sensevoice") == "sensevoice_asr"
+    assert model_asr_kind("kimi_asr") == "kimi_asr"
 
 
 def test_resolve_existing_prefers_parquet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -63,23 +68,30 @@ def test_expand_layout_templates():
     pairs = expand_layout_templates(None, "mt3000")
     assert pairs == [
         ("cleaned_mt3000", "datasets/manifests/qwen_asr_mt3000.parquet"),
-        ("qwen_asr_mt3000", "datasets/manifests/multi_asr_aggregate_mt3000.parquet"),
+        ("cleaned_mt3000", "datasets/manifests/sensevoice_asr_mt3000.parquet"),
     ]
 
 
-def test_apply_cleaning_and_qwen_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     wav_dir = tmp_path / "wav"
     wav_dir.mkdir()
     manifests = tmp_path / "datasets" / "manifests"
     manifests.mkdir(parents=True)
-    Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
-        manifests / "cleaned_mt3000.parquet"
-    )
+    for stem in (
+        "cleaned_mt3000",
+        "qwen_asr_mt3000",
+        "sensevoice_asr_mt3000",
+        "multi_asr_aggregate_mt3000",
+    ):
+        Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
+            manifests / f"{stem}.parquet"
+        )
 
     class _Step:
-        def __init__(self, operator: str):
+        def __init__(self, operator: str, params: dict | None = None):
             self.operator = operator
+            self.params = params or {}
 
     cleaning = apply_source_name_to_single_pipeline(
         pipeline_name="data_cleaning_source_A",
@@ -97,6 +109,79 @@ def test_apply_cleaning_and_qwen_overrides(tmp_path: Path, monkeypatch: pytest.M
     )
     assert qwen["input_manifest"].endswith("cleaned_mt3000.parquet")
     assert qwen["output_manifest"].endswith("qwen_asr_mt3000.parquet")
+
+    sense = apply_source_name_to_single_pipeline(
+        pipeline_name="sensevoice_asr_batch",
+        steps=[_Step("asr.sensevoice_batch")],
+        source_name="mt3000",
+    )
+    assert sense["input_manifest"].endswith("cleaned_mt3000.parquet")
+    assert sense["output_manifest"].endswith("sensevoice_asr_mt3000.parquet")
+
+    kimi = apply_source_name_to_single_pipeline(
+        pipeline_name="kimi_asr_batch",
+        steps=[_Step("asr.kimi_batch")],
+        source_name="mt3000",
+    )
+    assert kimi["output_manifest"].endswith("kimi_asr_mt3000.parquet")
+
+    aggregate = apply_source_name_to_single_pipeline(
+        pipeline_name="multi_asr_aggregate",
+        steps=[
+            _Step(
+                "quality.aggregate_manifests",
+                {
+                    "manifests": [
+                        {
+                            "model": "sensevoice",
+                            "path": "datasets/manifests/sensevoice_asr_source_A.parquet",
+                        }
+                    ]
+                },
+            )
+        ],
+        source_name="mt3000",
+    )
+    assert aggregate["input_manifest"].endswith("qwen_asr_mt3000.parquet")
+    assert aggregate["output_manifest"].endswith("multi_asr_aggregate_mt3000.parquet")
+    assert aggregate["aggregate_manifests"][0]["model"] == "sensevoice"
+    assert aggregate["aggregate_manifests"][0]["path"].endswith(
+        "sensevoice_asr_mt3000.parquet"
+    )
+
+    metric = apply_source_name_to_single_pipeline(
+        pipeline_name="asr_metric_pipeline",
+        steps=[_Step("quality.text_metrics")],
+        source_name="mt3000",
+    )
+    assert metric["input_manifest"].endswith("multi_asr_aggregate_mt3000.parquet")
+    assert metric["output_manifest"].endswith("multi_asr_metrics_mt3000.parquet")
+
+
+def test_parse_and_rewrite_join_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    manifests = tmp_path / "datasets" / "manifests"
+    manifests.mkdir(parents=True)
+    Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
+        manifests / "sensevoice_asr_mt3000.parquet"
+    )
+    Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
+        manifests / "kimi_asr_mt3000.parquet"
+    )
+
+    bare = parse_join_manifest_arg("sensevoice", "mt3000")
+    assert bare["model"] == "sensevoice"
+    assert bare["path"].endswith("sensevoice_asr_mt3000.parquet")
+
+    rewritten = rewrite_join_manifests_for_source(
+        [{"model": "sensevoice", "path": "ignored.parquet"}], "mt3000"
+    )
+    assert rewritten[0]["path"].endswith("sensevoice_asr_mt3000.parquet")
+
+    explicit = parse_join_manifest_arg(
+        f"kimi={manifests / 'kimi_asr_mt3000.parquet'}", None
+    )
+    assert explicit["model"] == "kimi"
 
 
 def test_run_staged_with_source_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -160,8 +245,8 @@ def test_run_staged_with_source_name(tmp_path: Path, monkeypatch: pytest.MonkeyP
                 "source_name_layout": [
                     {"input": "cleaned_{source_name}", "output": "qwen_asr_{source_name}"},
                     {
-                        "input": "qwen_asr_{source_name}",
-                        "output": "multi_asr_aggregate_{source_name}",
+                        "input": "cleaned_{source_name}",
+                        "output": "sensevoice_asr_{source_name}",
                     },
                 ],
                 "stages": [
@@ -183,12 +268,12 @@ def test_run_staged_with_source_name(tmp_path: Path, monkeypatch: pytest.MonkeyP
         source_name_layout=[
             {"input": "cleaned_{source_name}", "output": "qwen_asr_{source_name}"},
             {
-                "input": "qwen_asr_{source_name}",
-                "output": "multi_asr_aggregate_{source_name}",
+                "input": "cleaned_{source_name}",
+                "output": "sensevoice_asr_{source_name}",
             },
         ],
     )
-    assert result.final_manifest == "datasets/manifests/multi_asr_aggregate_mt3000.parquet"
+    assert result.final_manifest == "datasets/manifests/sensevoice_asr_mt3000.parquet"
     assert Path(result.final_manifest).exists()
     assert (manifests / "qwen_asr_mt3000.parquet").exists()
     loaded = Manifest.load(result.final_manifest)
