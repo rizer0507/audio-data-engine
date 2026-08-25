@@ -565,6 +565,8 @@ class PipelineRunner:
         )
 
         started = time.perf_counter()
+        total = len(samples)
+        already = len(done)
         for start in range(0, len(pending), batch_size):
             batch = pending[start : start + batch_size]
             if isinstance(operator, BatchOperator):
@@ -579,6 +581,28 @@ class PipelineRunner:
             done.extend(updated)
             if checkpoint is not None:
                 checkpoint.append(updated, count_in=len(batch), counts=counts)
+
+            elapsed = time.perf_counter() - started
+            done_now = already + (start + len(batch))
+            # Only count freshly processed pending for rate (resume-friendly).
+            processed_pending = start + len(batch)
+            rate = processed_pending / elapsed if elapsed > 0 else 0.0
+            remaining = max(len(pending) - processed_pending, 0)
+            eta = remaining / rate if rate > 0 else None
+            pct = (100.0 * done_now / total) if total else 0.0
+            eta_txt = f"{eta:.0f}s" if eta is not None else "n/a"
+            logger.info(
+                "[PROGRESS] step={} done={}/{} ({:.1f}%) rate={:.2f} samples/s "
+                "elapsed={:.1f}s eta={} checkpoint_every={}",
+                step.name,
+                done_now,
+                total,
+                pct,
+                rate,
+                elapsed,
+                eta_txt,
+                execution.checkpoint_every,
+            )
 
         if checkpoint is not None:
             checkpoint.finish(len(done))

@@ -16,6 +16,13 @@ import yaml
 
 from audio_engine.core.manifest import Manifest
 from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, ShardingConfig
+from audio_engine.core.progress import (
+    collect_sharded_progress,
+    emit_progress,
+    resolve_asr_batch_size,
+    shard_input_count,
+    sharding_config_summary,
+)
 
 
 class ShardedRunError(RuntimeError):
@@ -342,25 +349,62 @@ def spawn_shard_processes(
     workers_override: int | None = None,
     executor_override: str | None = None,
     log: Callable[[str], None] | None = None,
+    progress_config: dict | None = None,
+    progress_interval_s: float = 10.0,
 ) -> dict[str, int]:
-    """Run one child ``pipeline run --no-sharding`` per shard parquet."""
+    """Run one child ``pipeline run --no-sharding`` per shard parquet.
+
+    While shards run, periodically emit aggregate ``[PROGRESS]`` lines to the
+    parent log and ``run_root/PROGRESS.log`` (done count + throughput).
+    """
     emit = log or (lambda msg: logger.info(msg))
     parallel = sharding.effective_parallel
     workers = workers_override if workers_override is not None else sharding.workers
     executor = executor_override if executor_override is not None else sharding.executor
     gpu_ids = list(sharding.gpus)
 
-    emit(f"Running {len(shards)} shards, {parallel} at a time")
+    shard_totals = {shard.stem: shard_input_count(shard) for shard in shards}
+    total_samples = sum(shard_totals.values())
+    emit(f"Running {len(shards)} shards, {parallel} at a time ({total_samples} samples)")
     if gpu_ids:
         emit(
             f"  GPUs: {','.join(gpu_ids)}  instances-per-gpu: {sharding.instances_per_gpu}"
         )
     if ingest_step_names:
         emit(f"  Dropping ingest steps: {', '.join(ingest_step_names)}")
+    emit(f"  Progress log: {run_root / 'PROGRESS.log'}")
 
     queue = list(shards)
     running: list[tuple[Path, subprocess.Popen, object, str | None]] = []
     exit_codes: dict[str, int] = {}
+    started_at = time.time()
+    prev_done = 0
+    prev_at = started_at
+    last_progress_at = 0.0
+
+    def _emit_progress(*, force_emit: bool = False) -> None:
+        nonlocal prev_done, prev_at, last_progress_at
+        now = time.time()
+        if not force_emit and (now - last_progress_at) < progress_interval_s:
+            return
+        running_stems = {item[0].stem for item in running}
+        finished_stems = set(exit_codes)
+        queued_stems = {item.stem for item in queue}
+        snapshot = collect_sharded_progress(
+            run_root=run_root,
+            shard_totals=shard_totals,
+            running_stems=running_stems,
+            finished_stems=finished_stems,
+            queued_stems=queued_stems,
+            started_at=started_at,
+            prev_done=prev_done,
+            prev_at=prev_at,
+            config=progress_config,
+        )
+        emit_progress(snapshot, run_root=run_root, log=emit)
+        prev_done = snapshot.done
+        prev_at = snapshot.updated_at
+        last_progress_at = now
 
     while queue or running:
         while queue and len(running) < parallel:
@@ -406,6 +450,7 @@ def spawn_shard_processes(
             gpu_label = f", GPU {gpu_id}" if gpu_id is not None else ""
             emit(f"  started {shard.name} (pid {process.pid}{gpu_label})")
 
+        _emit_progress()
         time.sleep(0.2)
         for entry in list(running):
             shard, process, log_file, _gpu_id = entry
@@ -416,7 +461,9 @@ def spawn_shard_processes(
             exit_codes[shard.stem] = process.returncode
             status = "ok" if process.returncode == 0 else "FAILED"
             emit(f"  {status} {shard.name} (exit {process.returncode})")
+            _emit_progress(force_emit=True)
 
+    _emit_progress(force_emit=True)
     return exit_codes
 
 
@@ -478,6 +525,12 @@ def run_sharded_pipeline(
         shards = write_shards(full, root, sharding)
 
     ingest_names = sorted({s.name for s in cfg.steps if s.operator.startswith("ingest.")})
+    progress_config = sharding_config_summary(
+        sharding,
+        pipeline=cfg.name,
+        batch_size=resolve_asr_batch_size(cfg),
+        checkpoint_every=cfg.execution.checkpoint_every,
+    )
     exit_codes = spawn_shard_processes(
         config_path=path,
         shards=shards,
@@ -489,6 +542,7 @@ def run_sharded_pipeline(
         workers_override=cfg.execution_override.get("workers"),
         executor_override=cfg.execution_override.get("executor"),
         log=emit,
+        progress_config=progress_config,
     )
 
     failed = [name for name, code in exit_codes.items() if code != 0]

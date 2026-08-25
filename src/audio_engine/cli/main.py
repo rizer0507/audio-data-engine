@@ -487,6 +487,101 @@ def pipeline_run(
     console.print(f"  Run dir: [cyan]{runner.run_dir}[/cyan]")
 
 
+@pipeline_app.command("progress")
+def pipeline_progress(
+    run_root: Path = typer.Argument(
+        ...,
+        help="Sharded run directory (contains shards/ and shard-*.parquet / PROGRESS.log)",
+    ),
+    follow: bool = typer.Option(
+        False,
+        "--follow",
+        "-f",
+        help="Keep printing the latest PROGRESS.log line (Ctrl+C to stop)",
+    ),
+    interval: float = typer.Option(5.0, "--interval", help="Follow refresh seconds"),
+) -> None:
+    """Show aggregate recognition progress / throughput for a sharded run.
+
+    Prefer ``tail -f runs/<run>/PROGRESS.log`` while a job is running; this
+    command also rebuilds a snapshot from checkpoints if the log is missing.
+    """
+    import time as _time
+
+    from audio_engine.core.progress import (
+        PROGRESS_JSON,
+        PROGRESS_LOG,
+        checkpoint_consumed,
+        collect_sharded_progress,
+        shard_input_count,
+    )
+
+    root = run_root.resolve()
+    if not root.is_dir():
+        raise typer.BadParameter(f"run dir not found: {root}")
+
+    def _print_once() -> None:
+        progress_json = root / PROGRESS_JSON
+        if progress_json.is_file():
+            import json as _json
+
+            data = _json.loads(progress_json.read_text(encoding="utf-8"))
+            console.print(
+                f"[PROGRESS] done={data.get('done')}/{data.get('total')} "
+                f"({data.get('pct', 0):.1f}%) "
+                f"rate={data.get('rate_overall', 0):.2f} samples/s "
+                f"(window={data.get('rate_window', 0):.2f}/s) "
+                f"elapsed={data.get('elapsed_s', 0):.0f}s "
+                f"eta={data.get('eta_s')} "
+                f"shards[run={data.get('running')} done={data.get('finished')} "
+                f"queue={data.get('queued')}]"
+            )
+            console.print(f"  Source: [cyan]{progress_json}[/cyan]")
+            console.print(f"  Log:    [cyan]{root / PROGRESS_LOG}[/cyan]")
+            return
+
+        shard_dir = root / "shards"
+        shards = sorted(shard_dir.glob("shard-*.parquet")) if shard_dir.is_dir() else []
+        if not shards:
+            shards = sorted(root.glob("shard-*.parquet"))
+        if not shards:
+            raise typer.BadParameter(f"no shard-*.parquet under {root}")
+        totals = {p.stem: shard_input_count(p) for p in shards}
+        done = sum(min(checkpoint_consumed(root, stem), size) for stem, size in totals.items())
+        total = sum(totals.values())
+        finished = sum(1 for stem in totals if (root / f"{stem}.parquet").exists())
+        snapshot = collect_sharded_progress(
+            run_root=root,
+            shard_totals=totals,
+            running_stems=set(),
+            finished_stems={stem for stem in totals if (root / f"{stem}.parquet").exists()},
+            queued_stems=set(),
+            started_at=_time.time(),
+            prev_done=done,
+            prev_at=_time.time(),
+            config={},
+        )
+        # Override done/total from fresh scan (started_at unknown without progress.json).
+        snapshot.done = done
+        snapshot.total = total
+        snapshot.finished = finished
+        snapshot.pct = (100.0 * done / total) if total else 0.0
+        snapshot.rate_overall = 0.0
+        snapshot.rate_window = 0.0
+        snapshot.eta_s = None
+        console.print(snapshot.format_line())
+        console.print("  (no progress.json yet — counts from checkpoints only, rate n/a)")
+
+    try:
+        _print_once()
+        while follow:
+            _time.sleep(max(interval, 0.5))
+            console.print("---")
+            _print_once()
+    except KeyboardInterrupt:
+        console.print("\nstopped")
+
+
 @pipeline_app.command("clean-temp")
 def pipeline_clean_temp(
     config_path: Path = typer.Argument(..., help="Pipeline YAML file"),

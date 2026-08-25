@@ -39,6 +39,12 @@ export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/che
 
 audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name test_local --mock
 
+# 总进度（父进程控制台 + runs/<run>_shards/PROGRESS.log）：
+#   [PROGRESS] done=1234/8000 (15.4%) rate=42.30 samples/s ...
+# 另开终端查看：
+#   tail -f runs/<上次_shards目录>/PROGRESS.log
+#   audio-data pipeline progress runs/<上次_shards目录> -f
+
 
 -------------------------------------------------------
 2b. SenseVoice 全量识别（独立，不依赖 Qwen，不算字准率）
