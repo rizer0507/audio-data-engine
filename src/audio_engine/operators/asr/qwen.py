@@ -82,6 +82,14 @@ def _load_qwen_model(settings: dict[str, Any]) -> Any:
         return model
 
 
+def release_cached_models() -> int:
+    """Drop in-process Qwen model cache so the next ASR stage can reclaim GPU memory."""
+    with _MODEL_LOCK:
+        count = len(_MODEL_CACHE)
+        _MODEL_CACHE.clear()
+    return count
+
+
 def _transcribe_many(
     model: Any, audio_paths: list[str], settings: dict[str, Any]
 ) -> list[dict[str, Any]]:

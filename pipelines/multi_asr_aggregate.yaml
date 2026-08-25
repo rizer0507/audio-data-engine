@@ -1,0 +1,68 @@
+# 工序②：多模型串行识别 + 编辑距离汇总（金标/训练/评测前置）
+#
+# 短名: multi_asr_aggregate
+# 一条命令: audio-data pipeline run pipelines/multi_asr_aggregate.yaml
+# 步骤串行: Qwen → 释放显存 → SenseVoice → 释放显存 → 相对基准编辑距离
+# 分片并行的是「样本」，不是「模型」；后续若要模型并发，拆成多条 YAML 再 merge。
+#
+# 环境变量:
+#   QWEN_ASR_MODEL_PATH
+#   SENSEVOICE_MODEL_PATH
+#
+# 产物:
+#   datasets/manifests/multi_asr_aggregate_source_A.parquet
+#   datasets/manifests/multi_asr_aggregate_source_A.jsonl
+# xlsx 用 scripts/export_multi_asr_xlsx.py 从 parquet 转换（>50万行自动分片）
+
+name: multi_asr_aggregate
+
+input:
+  manifest: datasets/manifests/cleaned_source_A.parquet
+
+output:
+  manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet
+
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+  checkpoint_every: 500
+
+sharding:
+  shards: 4
+  strategy: duration-balanced
+  parallel_shards: 4
+  gpus: [4, 5, 6, 7]
+  instances_per_gpu: 1
+  workers: 1
+  executor: sequential
+
+pipeline:
+  - name: qwen_asr
+    operator: asr.qwen_batch
+    params:
+      input_audio_key: resampled_16k
+      config_path: configs/asr/qwen_asr.yaml
+
+  - name: release_after_qwen
+    operator: runtime.release_asr_models
+
+  - name: sensevoice_asr
+    operator: asr.sensevoice_batch
+    params:
+      input_audio_key: resampled_16k
+      config_path: configs/asr/sensevoice.yaml
+
+  - name: release_after_sensevoice
+    operator: runtime.release_asr_models
+
+  - name: asr_edit_distance
+    operator: quality.asr_edit_distance
+    execution:
+      executor: thread
+      workers: 8
+    params:
+      # 基准模型：其他模型相对它算 总编辑距离 / 错字 / 少字 / 多字
+      baseline: qwen
+      compare_models: [sensevoice]
+      quality_key: asr_edit

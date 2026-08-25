@@ -50,6 +50,83 @@ def _levenshtein(a: str, b: str) -> int:
     return previous[-1]
 
 
+def levenshtein_ops(reference: str, hypothesis: str) -> dict[str, int | float | None]:
+    """Character-level edit ops with ``reference`` as baseline.
+
+    Returns:
+      total: overall edit distance
+      sub / 错字: substitutions
+      delete / 少字: deletions (in hypothesis vs reference)
+      insert / 多字: insertions (extra in hypothesis)
+      cer: total / max(len(reference), 1)
+    """
+    ref = normalize_transcript(reference)
+    hyp = normalize_transcript(hypothesis)
+    if not ref and not hyp:
+        return {
+            "total": 0,
+            "sub": 0,
+            "delete": 0,
+            "insert": 0,
+            "错字": 0,
+            "少字": 0,
+            "多字": 0,
+            "cer": 0.0,
+            "ref_len": 0,
+            "hyp_len": 0,
+        }
+
+    # DP distance matrix for traceback of operation counts.
+    rows, cols = len(ref), len(hyp)
+    dist = [[0] * (cols + 1) for _ in range(rows + 1)]
+    for i in range(1, rows + 1):
+        dist[i][0] = i
+    for j in range(1, cols + 1):
+        dist[0][j] = j
+    for i in range(1, rows + 1):
+        for j in range(1, cols + 1):
+            cost = 0 if ref[i - 1] == hyp[j - 1] else 1
+            dist[i][j] = min(
+                dist[i - 1][j] + 1,  # deletion
+                dist[i][j - 1] + 1,  # insertion
+                dist[i - 1][j - 1] + cost,  # keep / substitute
+            )
+
+    i, j = rows, cols
+    sub = delete = insert = 0
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and ref[i - 1] == hyp[j - 1] and dist[i][j] == dist[i - 1][j - 1]:
+            i -= 1
+            j -= 1
+            continue
+        if i > 0 and j > 0 and dist[i][j] == dist[i - 1][j - 1] + 1:
+            sub += 1
+            i -= 1
+            j -= 1
+            continue
+        if j > 0 and dist[i][j] == dist[i][j - 1] + 1:
+            insert += 1
+            j -= 1
+            continue
+        # deletion
+        delete += 1
+        i -= 1
+
+    total = sub + delete + insert
+    return {
+        "total": total,
+        "sub": sub,
+        "delete": delete,
+        "insert": insert,
+        "错字": sub,
+        "少字": delete,
+        "多字": insert,
+        "cer": round(total / max(len(ref), 1), 4),
+        "ref_len": len(ref),
+        "hyp_len": len(hyp),
+    }
+
+
 def character_similarity(left: Any, right: Any) -> float:
     """Return normalized Levenshtein similarity in the inclusive range 0..1."""
     a, b = normalize_transcript(left), normalize_transcript(right)

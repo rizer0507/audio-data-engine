@@ -107,6 +107,14 @@ def _load_sensevoice_model(settings: dict[str, Any]) -> Any:
         return model
 
 
+def release_cached_models() -> int:
+    """Drop in-process SenseVoice model cache so another ASR stage can reclaim GPU memory."""
+    with _MODEL_LOCK:
+        count = len(_MODEL_CACHE)
+        _MODEL_CACHE.clear()
+    return count
+
+
 def parse_sensevoice_text(raw_text: str) -> dict[str, Any]:
     """Split SenseVoice control tags from comparable transcript text."""
     tags = _TAG_RE.findall(raw_text)
