@@ -1,0 +1,318 @@
+2026-08-25 11:22:47.072 | INFO     | audio_engine.core.pipeline:run:397 - Pipeline 'multi_asr_aggregate' resumed from runs/20260825_112125_multi_asr_aggregate_shards/shard-006: 12445 samples, 6 steps, execution=ExecutionConfig(executor='sequential', workers=1, max_in_flight=0, fail_fast=False, checkpoint_every=500)
+2026-08-25 11:22:47.084 | INFO     | audio_engine.core.pipeline:_run_sample_step:558 - Step 'qwen_asr' (asr.qwen_batch): 12445 samples, sequential, checkpoint every 500
+2026-08-25 11:22:59.125 | INFO     | audio_engine.core.pipeline:_run_sample_step:588 - Step 'qwen_asr' finished: 12445 samples in 12.04s (1033.5 samples/s)
+2026-08-25 11:22:59.136 | INFO     | audio_engine.core.pipeline:_run_manifest_step:497 - Step 'release_after_qwen' (runtime.release_asr_models): manifest operator, sequential
+2026-08-25 11:23:03.262 | INFO     | audio_engine.operators.runtime.release_models:run:54 - Step 'release_after_qwen': released ASR model caches {'qwen': 0, 'sensevoice': 0} (samples untouched=12445)
+2026-08-25 11:23:04.818 | INFO     | audio_engine.core.pipeline:_run_manifest_step:517 - Step 'release_after_qwen' finished: 12445 -> 12445 samples in 5.68s
+2026-08-25 11:23:04.830 | INFO     | audio_engine.core.pipeline:_run_sample_step:558 - Step 'sensevoice_asr' (asr.sensevoice_batch): 12445 samples, sequential, checkpoint every 500
+2026-08-25 11:23:05.060 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:05.061 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:06.076 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:06.076 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:06.809 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:06.809 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:10.353 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:10.354 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:14.299 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:14.300 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:17.694 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:17.694 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:21.629 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:21.630 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:25.834 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:25.834 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:29.353 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:29.353 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:32.441 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:32.441 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:39.712 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:39.712 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:40.822 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:40.822 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:41.277 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:41.278 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:41.815 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:41.816 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:42.271 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:42.271 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:42.795 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:42.795 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:43.292 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:43.292 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:43.618 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:43.618 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:44.017 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:44.017 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:45.012 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:45.012 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:45.365 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:45.365 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:45.746 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:45.746 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:48.236 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:48.236 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:52.258 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=500 pending=0 skipped=0 cache_hit=500
+2026-08-25 11:23:52.258 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 500 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:55.914 | INFO     | audio_engine.operators.asr.sensevoice:process_batch:288 - [DIAG][BATCH] process_batch: total=445 pending=0 skipped=0 cache_hit=445
+2026-08-25 11:23:55.914 | WARNING  | audio_engine.operators.asr.sensevoice:process_batch:322 - [DIAG][BATCH] SenseVoice inference was not called: all 445 samples were already completed or cache hits. Use --force to re-run inference.
+2026-08-25 11:23:56.072 | INFO     | audio_engine.core.pipeline:_run_sample_step:588 - Step 'sensevoice_asr' finished: 12445 samples in 51.24s (242.9 samples/s)
+2026-08-25 11:23:56.159 | INFO     | audio_engine.core.pipeline:_run_manifest_step:497 - Step 'release_after_sensevoice' (runtime.release_asr_models): manifest operator, sequential
+2026-08-25 11:23:56.548 | INFO     | audio_engine.operators.runtime.release_models:run:54 - Step 'release_after_sensevoice': released ASR model caches {'qwen': 0, 'sensevoice': 0} (samples untouched=12445)
+2026-08-25 11:23:58.184 | INFO     | audio_engine.core.pipeline:_run_manifest_step:517 - Step 'release_after_sensevoice' finished: 12445 -> 12445 samples in 2.02s
+2026-08-25 11:23:58.254 | INFO     | audio_engine.core.pipeline:_run_sample_step:558 - Step 'normalize_asr_text' (quality.normalize_transcripts): 12445 samples, sequential, checkpoint every 500
+2026-08-25 11:24:00.139 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:24:02.525 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:24:05.481 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:24:11.302 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:24:20.229 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:24:20.928 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:24:21.541 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:24:22.355 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:24:23.049 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:24:23.737 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:24:24.480 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:24:25.125 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:24:25.847 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:24:26.490 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:24:27.116 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:24:27.795 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:24:28.389 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:24:29.035 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:24:29.741 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:24:30.395 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:24:31.206 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:24:31.916 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:24:32.528 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:24:34.026 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:24:34.657 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:24:35.222 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:24:35.846 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:24:36.625 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:24:37.464 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:24:41.524 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:24:46.321 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:24:50.561 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:24:51.178 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:24:55.521 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:25:01.083 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:25:06.588 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:25:15.142 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:25:20.544 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:25:25.677 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:25:29.324 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:25:34.738 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:25:40.406 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:25:44.833 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:25:45.784 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:25:46.551 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:25:47.273 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:25:48.086 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:25:56.490 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:26:03.797 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:26:11.285 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:26:24.504 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:26:30.086 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:26:38.150 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:26:46.136 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:26:55.105 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:26:56.154 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:26:56.981 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:26:57.860 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:26:58.676 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:26:59.612 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:00.520 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:01.305 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:02.130 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:02.952 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:03.765 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:04.690 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:05.461 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:06.300 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:07.140 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:07.976 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:08.894 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:09.712 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:10.507 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:11.300 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:12.152 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:13.107 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:13.997 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:14.823 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:15.676 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:16.987 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:17.794 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:18.573 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:19.371 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:20.222 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:20.989 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:21.792 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:22.461 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:23.315 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:24.064 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:24.889 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:25.748 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:26.671 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:27.291 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:28.130 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:28.850 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:29.763 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:30.591 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:31.360 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:32.158 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:33.004 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:33.919 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:34.582 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:35.347 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:36.173 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:37.071 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:37.983 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:38.794 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:39.638 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:40.523 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:41.399 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:42.320 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:43.178 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:44.019 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:44.856 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:45.731 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:46.543 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/500
+2026-08-25 11:27:47.396 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/500
+2026-08-25 11:27:48.075 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/500
+2026-08-25 11:27:48.942 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/500
+2026-08-25 11:27:49.732 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 500/500
+2026-08-25 11:27:50.642 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 100/445
+2026-08-25 11:27:51.476 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 200/445
+2026-08-25 11:27:52.181 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 300/445
+2026-08-25 11:27:53.055 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'normalize_asr_text' progress: 400/445
+2026-08-25 11:27:53.536 | INFO     | audio_engine.core.pipeline:_run_sample_step:588 - Step 'normalize_asr_text' finished: 12445 samples in 235.28s (52.9 samples/s)
+2026-08-25 11:27:53.672 | INFO     | audio_engine.core.pipeline:_run_sample_step:558 - Step 'asr_edit_distance' (quality.asr_edit_distance): 12445 samples, sequential, checkpoint every 500
+2026-08-25 11:27:53.737 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:53.810 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:53.905 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:53.988 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:54.097 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:54.238 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:54.295 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:54.351 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:54.417 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:54.513 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:54.662 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:54.764 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:54.854 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:54.944 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:55.025 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:55.187 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:55.257 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:55.338 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:55.893 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:55.983 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:56.184 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:56.296 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:56.408 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:56.554 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:56.707 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:56.915 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:57.025 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:57.135 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:57.242 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:57.346 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:57.528 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:57.630 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:57.692 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:57.832 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:57.944 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:58.124 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:58.250 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:58.355 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:58.494 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:58.574 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:58.764 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:58.891 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:59.040 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:59.179 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:59.326 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:27:59.489 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:27:59.569 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:27:59.685 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:27:59.826 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:27:59.974 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:00.155 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:00.216 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:00.332 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:00.470 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:00.593 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:00.787 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:00.884 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:00.962 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:01.106 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:01.257 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:01.438 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:01.562 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:01.681 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:01.775 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:01.889 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:02.041 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:02.646 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:02.757 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:02.910 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:03.023 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:03.210 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:03.326 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:03.430 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:03.558 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:03.672 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:03.889 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:04.002 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:04.120 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:04.268 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:04.377 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:04.553 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:04.680 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:04.801 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:04.912 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:05.020 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:05.206 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:05.306 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:05.452 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:05.570 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:05.680 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:05.880 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:06.011 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:06.102 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:06.199 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:06.306 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:06.473 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:06.599 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:06.711 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:06.829 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:06.935 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:07.102 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:07.239 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:07.364 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:07.495 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:07.648 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:07.832 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:07.945 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:08.067 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:08.195 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:08.329 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:08.527 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:08.654 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:08.777 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:08.897 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:09.051 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:09.205 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/500
+2026-08-25 11:28:09.271 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/500
+2026-08-25 11:28:09.334 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/500
+2026-08-25 11:28:09.454 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/500
+2026-08-25 11:28:09.569 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 500/500
+2026-08-25 11:28:09.770 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 100/445
+2026-08-25 11:28:09.916 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 200/445
+2026-08-25 11:28:10.024 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 300/445
+2026-08-25 11:28:10.774 | DEBUG    | audio_engine.core.pipeline:_run_sequential:693 - Step 'asr_edit_distance' progress: 400/445
+2026-08-25 11:28:10.879 | INFO     | audio_engine.core.pipeline:_run_sample_step:588 - Step 'asr_edit_distance' finished: 12445 samples in 17.21s (723.3 samples/s)
+2026-08-25 11:28:12.550 | INFO     | audio_engine.core.pipeline:run:447 - Pipeline finished. Run dir: runs/20260825_112125_multi_asr_aggregate_shards/shard-006
+  Output: runs/20260825_112125_multi_asr_aggregate_shards/shard-006.parquet
+OK Pipeline 'multi_asr_aggregate' finished
+  Total: 12445, Processed: 11840, Failed: 0
+  Run dir: runs/20260825_112125_multi_asr_aggregate_shards/shard-006

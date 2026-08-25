@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from loguru import logger
+import yaml
 
 from audio_engine.core.manifest import Manifest
 from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, ShardingConfig
@@ -32,6 +33,136 @@ class ShardedRunResult:
     run_root: Path
     shard_count: int
     merge_report: dict
+
+
+@dataclass
+class StagedRunResult:
+    """Result of running ``stages:`` sequentially (full model A, then full model B)."""
+
+    run_root: Path
+    stage_roots: list[Path]
+    final_manifest: str | None
+
+
+def load_stage_paths(config_path: Path) -> list[Path] | None:
+    """Return absolute stage YAML paths when the root config defines ``stages:``."""
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    raw = data.get("stages")
+    if not raw:
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{config_path}: stages must be a non-empty list of YAML paths")
+    base = config_path.parent
+    paths: list[Path] = []
+    for item in raw:
+        text = str(item).strip()
+        if not text:
+            raise ValueError(f"{config_path}: empty stages entry")
+        candidate = Path(text)
+        if not candidate.is_absolute():
+            # Prefer paths relative to CWD (repo-root style: pipelines/foo.yaml),
+            # then fall back to relative-to-orchestrator-dir.
+            cwd_candidate = Path.cwd() / candidate
+            local_candidate = base / candidate
+            if cwd_candidate.is_file():
+                candidate = cwd_candidate
+            elif local_candidate.is_file():
+                candidate = local_candidate
+            else:
+                candidate = cwd_candidate
+        paths.append(candidate.resolve())
+    return paths
+
+
+def resolve_staged_run_root(
+    name: str,
+    runs_dir: Path,
+    resume: str | Path | None = None,
+) -> Path:
+    if resume is not None:
+        candidate = Path(resume)
+        if not candidate.exists():
+            candidate = runs_dir / str(resume)
+        if not candidate.is_dir():
+            raise FileNotFoundError(f"Cannot resume staged run: {resume}")
+        return candidate
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    root = runs_dir / f"{ts}_{name}_stages"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def run_staged_pipelines(
+    stage_paths: list[Path],
+    *,
+    name: str,
+    runs_dir: Path = Path("runs"),
+    resume: str | Path | None = None,
+    force: bool = False,
+    mock: bool = False,
+    execution_override: dict | None = None,
+    log: Callable[[str], None] | None = None,
+) -> StagedRunResult:
+    """Run each stage YAML to completion (including its own sharding) before the next.
+
+    This is how 「先全量 Qwen，再全量 SenseVoice」 is expressed as one CLI command.
+    """
+    emit = log or (lambda msg: logger.info(msg))
+    if not stage_paths:
+        raise ValueError("run_staged_pipelines requires at least one stage")
+
+    root = resolve_staged_run_root(name, runs_dir, resume)
+    emit(f"Staged run root: {root}")
+    stage_roots: list[Path] = []
+    final_manifest: str | None = None
+
+    for index, stage_path in enumerate(stage_paths, start=1):
+        if not stage_path.is_file():
+            raise FileNotFoundError(f"Stage YAML not found: {stage_path}")
+        cfg = PipelineConfig.from_yaml(stage_path)
+        cfg.force = force or cfg.force
+        cfg.mock = mock or cfg.mock
+        if execution_override:
+            cfg.execution_override = dict(execution_override)
+
+        stage_root = root / f"stage-{index:02d}_{cfg.name}"
+        stage_root.mkdir(parents=True, exist_ok=True)
+        stage_roots.append(stage_root)
+        emit(f"=== Stage {index}/{len(stage_paths)}: {cfg.name} ({stage_path.name}) ===")
+
+        if cfg.sharding is not None:
+            # Resume stage subdir when it already has shard outputs / checkpoints.
+            resume_stage = stage_root if any(stage_root.iterdir()) else None
+            result = run_sharded_pipeline(
+                cfg,
+                config_path=stage_path,
+                run_root=resume_stage or stage_root,
+                log=emit,
+            )
+            emit(
+                f"Stage {index} done: {result.shard_count} shards → {cfg.output_manifest} "
+                f"({result.merge_report.get('total_out', len(result.manifest))} samples)"
+            )
+        else:
+            cfg.run_dir = str(stage_root)
+            runner = PipelineRunner(cfg)
+            manifest = runner.run()
+            if cfg.output_manifest:
+                out = Path(cfg.output_manifest)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                manifest.save(out)
+                manifest.save(out.with_suffix(".jsonl"))
+                emit(f"Stage {index} done: {len(manifest)} samples → {out}")
+            else:
+                emit(f"Stage {index} done: {len(manifest)} samples")
+
+        final_manifest = cfg.output_manifest
+
+    return StagedRunResult(
+        run_root=root,
+        stage_roots=stage_roots,
+        final_manifest=final_manifest,
+    )
 
 
 def resolve_run_root(cfg: PipelineConfig, run_root: Path | None = None) -> Path:

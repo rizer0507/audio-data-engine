@@ -1,9 +1,10 @@
-# Qwen3-ASR 高吞吐识别流水线
+# 工序②-a：全量 Qwen3-ASR（先跑完本阶段，再跑 sensevoice_asr_batch）
 #
-# 前置：输入 manifest 必须已有 resampled_16k 音频 key。
 # 一条命令：audio-data pipeline run pipelines/qwen_asr_batch.yaml
-# sharding 自动完成 时长均衡分片 → 多卡并行 → 合并。
-# 按机器改 sharding.gpus / instances_per_gpu / shards（分片数 = GPU×每卡实例）。
+# 前置：input 须含 resampled_16k
+# 环境变量：QWEN_ASR_MODEL_PATH
+# 并行约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
+# 2×A800 80G 默认：每卡 4 实例 → 共 8 分片（可按 nvidia-smi 再试 2/3）
 
 name: qwen_asr_batch
 
@@ -23,8 +24,10 @@ sharding:
   shards: 8
   strategy: duration-balanced
   parallel_shards: 8
-  gpus: [4, 5, 6, 7]
-  instances_per_gpu: 2
+  gpus: [4, 5]
+  instances_per_gpu: 4
+  workers: 1
+  executor: sequential
 
 pipeline:
   - name: qwen_asr

@@ -21,7 +21,12 @@ from audio_engine.core.pipeline import (
     ShardingConfig,
 )
 from audio_engine.core.registry import OperatorRegistry
-from audio_engine.core.sharded_run import ShardedRunError, run_sharded_pipeline
+from audio_engine.core.sharded_run import (
+    ShardedRunError,
+    load_stage_paths,
+    run_sharded_pipeline,
+    run_staged_pipelines,
+)
 from audio_engine.core.transcript_reconcile import reconcile_transcripts
 
 app = typer.Typer(
@@ -250,9 +255,49 @@ def pipeline_run(
 ) -> None:
     """Run a pipeline from YAML configuration.
 
-    When the YAML defines ``sharding:``, this command automatically splits the
-    input, runs shard workers in parallel, and merges into ``output.manifest``.
+    When the YAML defines ``stages:``, runs each stage YAML sequentially
+    (e.g. full Qwen, then full SenseVoice) under one command.
+
+    When the YAML defines ``sharding:``, splits the input, runs shard workers
+    in parallel, and merges into ``output.manifest``.
     """
+    stage_paths = load_stage_paths(config_path.resolve())
+    if stage_paths is not None:
+        if no_sharding or skip_step or input_manifest or output_manifest:
+            raise typer.BadParameter(
+                "staged pipelines do not support --no-sharding / --skip-step / "
+                "--input-manifest / --output-manifest; pass those on each stage YAML run"
+            )
+        root_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        stage_name = str(root_data.get("name") or config_path.stem)
+        stage_runs_dir = runs_dir or Path(root_data.get("runs_dir") or RUNS_DIR)
+        try:
+            staged = run_staged_pipelines(
+                stage_paths,
+                name=stage_name,
+                runs_dir=stage_runs_dir,
+                resume=resume,
+                force=force,
+                mock=mock,
+                execution_override=_execution_override(
+                    workers, executor, max_in_flight, checkpoint_every
+                ),
+                log=lambda msg: console.print(msg),
+            )
+        except ShardedRunError as exc:
+            console.print(f"[red]{exc}[/red]")
+            console.print(f"  Logs: [cyan]{exc.run_root}[/cyan]")
+            raise typer.Exit(code=1) from exc
+        except (ValueError, FileNotFoundError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+        console.print(f"[green]OK[/green] Staged pipeline '{stage_name}' finished")
+        console.print(f"  Stages: {len(staged.stage_roots)}")
+        if staged.final_manifest:
+            console.print(f"  Output: [cyan]{staged.final_manifest}[/cyan]")
+        console.print(f"  Run root: [cyan]{staged.run_root}[/cyan]")
+        return
+
     cfg = PipelineConfig.from_yaml(config_path)
     cfg.force = force or cfg.force
     cfg.mock = mock or cfg.mock

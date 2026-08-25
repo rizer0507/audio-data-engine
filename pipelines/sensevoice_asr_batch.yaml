@@ -1,8 +1,10 @@
-# Qwen-ASR 输出之上的 SenseVoice 批量识别阶段。
+# 工序②-b：全量 SenseVoice → 纯文本清洗 → 相对基准编辑距离
 #
 # 一条命令：audio-data pipeline run pipelines/sensevoice_asr_batch.yaml
-# 前置：input 须含 resampled_16k + transcripts.qwen
+# 前置：input 须含 resampled_16k + transcripts.qwen（先跑完 qwen_asr_batch）
 # 环境变量：SENSEVOICE_MODEL_PATH
+# 并行约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
+# 本阶段整卡只跑 SenseVoice，不再与 Qwen 同进程串行抢显存。
 
 name: sensevoice_asr_batch
 
@@ -10,21 +12,21 @@ input:
   manifest: datasets/manifests/qwen_asr_source_A.parquet
 
 output:
-  manifest: datasets/manifests/qwen_sensevoice_source_A.parquet
+  manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet
 
 execution:
   executor: sequential
   workers: 1
-  # 模型没有加载成功时立即终止，避免整批样本被静默标记失败后继续跑完。
+  # 模型未加载成功时立即终止，避免整批被静默标失败。
   fail_fast: true
   checkpoint_every: 500
 
 sharding:
-  shards: 4
+  shards: 8
   strategy: duration-balanced
-  parallel_shards: 4
-  gpus: [4, 5, 6, 7]
-  instances_per_gpu: 1
+  parallel_shards: 8
+  gpus: [4, 5]
+  instances_per_gpu: 4
   workers: 1
   executor: sequential
 
@@ -34,3 +36,22 @@ pipeline:
     params:
       input_audio_key: resampled_16k
       config_path: configs/asr/sensevoice.yaml
+
+  - name: release_after_sensevoice
+    operator: runtime.release_asr_models
+
+  - name: normalize_asr_text
+    operator: quality.normalize_transcripts
+    params:
+      models: [qwen, sensevoice]
+      keep_raw: true
+
+  - name: asr_edit_distance
+    operator: quality.asr_edit_distance
+    execution:
+      executor: thread
+      workers: 8
+    params:
+      baseline: qwen
+      compare_models: [sensevoice]
+      quality_key: asr_edit
