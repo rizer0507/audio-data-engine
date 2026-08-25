@@ -9,4 +9,4 @@ dtype: bfloat16
 batch_size: 32
 max_new_tokens: 256
 return_time_stamps: false
-context:"vocabulary:没有，不需要/需要，用/不用，要/不要"
+context: "vocabulary:没有，不需要/需要，用/不用，要/不要"

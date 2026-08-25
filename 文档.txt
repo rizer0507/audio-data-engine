@@ -38,19 +38,55 @@ audio-data manifest merge "runs/cleaning_0823-test_shards/shard-*.parquet" \
 
 
 # ============================================================
-# 从 tmp 热更新正式工程：只覆盖代码和文档，不碰 data / datasets / runs
+# 从 tmp 热更新正式工程：只覆盖「代码 / 配置 / 重要文档」
+# 不碰资产与运行产物：data / datasets / runs / 数据集 / *.xlsx / .venv
 # tmp 打包目录：  /data2/data-cp/lizi/tmp/audio-data-engine
 # 正式工程：      /data2/data-cp/lizi/audio-data-engine
-# cp 只读取 tmp 里列出的目录，不会扫描正式工程的 derived / cache。
+# 说明：
+#   - 目录同步用 rsync（有则优先）：可排除 __pycache__，且不会误删 DST 独有资产
+#   - 无 rsync 时退回 cp -a（仅覆盖同名路径，不会删除 DST 多出来的文件）
+#   - resources/manifest.yaml 含正式机数据源 path，默认不同步；需要时解开下方注释
 # ============================================================
 SRC=/data2/data-cp/lizi/tmp/audio-data-engine
 DST=/data2/data-cp/lizi/audio-data-engine
-for d in src docs pipelines configs tests; do
+
+# 1) 代码与配置目录
+for d in src docs pipelines configs tests scripts; do
   mkdir -p "$DST/$d"
-  cp -a "$SRC/$d/." "$DST/$d/"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' \
+      "$SRC/$d/" "$DST/$d/"
+  else
+    cp -a "$SRC/$d/." "$DST/$d/"
+  fi
 done
-cp -a "$SRC/pyproject.toml" "$DST/pyproject.toml"
-cp -a "$SRC/文档.txt" "$DST/文档.txt"
+
+# 2) 工程元数据 + 重要文档（显式白名单，避免扫到根目录资产）
+for f in \
+  pyproject.toml \
+  README.md \
+  .gitignore \
+  文档.txt \
+  单条流水线执行命令.txt \
+  三条流水线执行手册.txt \
+  目录.txt
+do
+  if [ -e "$SRC/$f" ]; then
+    cp -a "$SRC/$f" "$DST/$f"
+  fi
+done
+
+# 3) 可选：同步 resources（会覆盖正式机 source path，确认后再开）
+# mkdir -p "$DST/resources"
+# if command -v rsync >/dev/null 2>&1; then
+#   rsync -a --exclude '__pycache__/' "$SRC/resources/" "$DST/resources/"
+# else
+#   cp -a "$SRC/resources/." "$DST/resources/"
+# fi
+
+# 明确不覆盖（勿加入上面列表）：
+#   data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/
+
 cd "$DST" && pip install -e .
 
 

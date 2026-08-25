@@ -8,7 +8,10 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+# SenseVoice / FunASR style: <|zh|>、<|EMO_UNKNOW|>、<|HAPPY|> …
 _CONTROL_TAG_RE = re.compile(r"<\|.*?\|>")
+# Malformed / truncated variants sometimes appear as <EMO_UNKNOW>| or <EMO_xxx>
+_LOOSE_EMO_TAG_RE = re.compile(r"<EMO_[A-Za-z0-9_]+>\|?|</?EMO_[A-Za-z0-9_]+>", re.IGNORECASE)
 _ID_COLUMNS = ("id", "sample_id", "audio_id", "utt_id", "文件名", "音频", "音频文件")
 _QWEN_COLUMNS = ("qwen_text", "qwen", "qwen_result", "qwen识别结果", "Qwen识别结果")
 _SENSEVOICE_COLUMNS = (
@@ -22,10 +25,12 @@ _SENSEVOICE_COLUMNS = (
 
 
 def clean_control_tags(value: Any) -> Any:
-    """Remove every SenseVoice ``<|...|>`` control field from a cell."""
+    """Remove SenseVoice / emotion control fields from a cell."""
     if not isinstance(value, str):
         return value
-    return _CONTROL_TAG_RE.sub("", value).strip()
+    text = _CONTROL_TAG_RE.sub("", value)
+    text = _LOOSE_EMO_TAG_RE.sub("", text)
+    return text.strip()
 
 
 def normalize_transcript(value: Any) -> str:
@@ -35,6 +40,14 @@ def normalize_transcript(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(clean_control_tags(value))).casefold()
     return "".join(ch for ch in text if ch.isalnum())
 
+
+def plain_transcript_text(value: Any) -> str:
+    """Keep only comparable plain text: drop tags, punctuation, and whitespace.
+
+    Used when exporting / rewriting ``transcripts.*.text`` so Qwen / SenseVoice
+    cells contain characters only (no ``<|EMO_UNKNOW|>``, ``。``，``，``，etc.).
+    """
+    return normalize_transcript(value)
 
 def _levenshtein(a: str, b: str) -> int:
     if len(a) < len(b):

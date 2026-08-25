@@ -49,3 +49,30 @@ def test_asr_edit_distance_operator_vs_baseline():
     assert quality["asr_edit_sensevoice_多字"] == 0
     assert quality["asr_edit_sensevoice_total"] == 2
     assert "sensevoice" in quality["asr_edit_json"]
+
+
+def test_normalize_transcripts_strips_tags_and_punct():
+    sample = Sample(
+        id="s1",
+        source_path="/tmp/a.wav",
+        transcripts={
+            "qwen": {"text": "您好，世界！", "model": "qwen"},
+            "sensevoice": {
+                "text": "<|zh|><|EMO_UNKNOW|>您好，世界",
+                "model": "sensevoice",
+                "extra": {"emotion": "EMO_UNKNOW"},
+            },
+        },
+    )
+    operator = OperatorRegistry.get("quality.normalize_transcripts")
+    result = operator.process(
+        sample,
+        OperatorConfig(params={"models": ["qwen", "sensevoice"], "keep_raw": True}),
+    )
+    qwen = result.sample.transcripts["qwen"]
+    sense = result.sample.transcripts["sensevoice"]
+    assert qwen["text"] == "您好世界"
+    assert qwen["extra"]["raw_text"] == "您好，世界！"
+    assert sense["text"] == "您好世界"
+    assert sense["extra"]["raw_text"] == "<|zh|><|EMO_UNKNOW|>您好，世界"
+    assert sense["extra"]["emotion"] == "EMO_UNKNOW"

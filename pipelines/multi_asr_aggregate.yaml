@@ -2,7 +2,7 @@
 #
 # 短名: multi_asr_aggregate
 # 一条命令: audio-data pipeline run pipelines/multi_asr_aggregate.yaml
-# 步骤串行: Qwen → 释放显存 → SenseVoice → 释放显存 → 相对基准编辑距离
+# 步骤串行: Qwen → 释放显存 → SenseVoice → 释放显存 → 纯文本清洗 → 相对基准编辑距离
 # 分片并行的是「样本」，不是「模型」；后续若要模型并发，拆成多条 YAML 再 merge。
 #
 # 环境变量:
@@ -55,6 +55,13 @@ pipeline:
 
   - name: release_after_sensevoice
     operator: runtime.release_asr_models
+
+  # 只保留纯文本：去掉 <|EMO_UNKNOW|> / 标点 / 空白；原文进 extra.raw_text
+  - name: normalize_asr_text
+    operator: quality.normalize_transcripts
+    params:
+      models: [qwen, sensevoice]
+      keep_raw: true
 
   - name: asr_edit_distance
     operator: quality.asr_edit_distance

@@ -35,9 +35,10 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml
 # 输入: datasets/manifests/cleaned_source_A.parquet
 # 输出: datasets/manifests/multi_asr_aggregate_source_A.parquet
 #       datasets/manifests/multi_asr_aggregate_source_A.jsonl
-# 步骤: Qwen → 释放显存 → SenseVoice → 释放显存 → 相对基准(qwen)编辑距离
+# 步骤: Qwen → 释放显存 → SenseVoice → 释放显存 → 纯文本清洗 → 相对基准(qwen)编辑距离
 # 并行: 改 YAML sharding.gpus / instances_per_gpu / shards（样本分片并行，模型串行）
 # 约束: shards == parallel_shards <= len(gpus) * instances_per_gpu
+# 清洗: quality.normalize_transcripts（models / keep_raw）；去掉标签与标点
 # 基准: pipeline 内 asr_edit_distance.params.baseline（默认 qwen）
 
 export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
