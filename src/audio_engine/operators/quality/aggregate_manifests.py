@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from pathlib import Path
+from audio_engine.core.manifest import Manifest
+from audio_engine.core.operator import ManifestOperator, OperatorConfig
+from audio_engine.core.registry import register_operator
+from audio_engine.core.sample import Sample
+
+
+@register_operator
+class AggregateManifestsOperator(ManifestOperator):
+    """Join independently produced ASR manifests by exact sample id."""
+
+    name = "aggregate_manifests"
+    version = "1.0.0"
+    category = "quality"
+
+    def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
+        base = {sample.id: sample.model_copy(deep=True) for sample in samples}
+        if len(base) != len(samples):
+            raise ValueError("aggregate input contains duplicate ids")
+        expected = set(base)
+        for item in config.params.get("manifests", []):
+            model, path = str(item["model"]), Path(item["path"])
+            incoming = Manifest.load(path).samples
+            indexed = {sample.id: sample for sample in incoming}
+            if len(indexed) != len(incoming):
+                raise ValueError(f"manifest {path} contains duplicate ids")
+            missing, extra = expected - indexed.keys(), indexed.keys() - expected
+            if missing or extra:
+                raise ValueError(
+                    f"manifest {path} ids are not aligned: missing={len(missing)}, extra={len(extra)}"
+                )
+            for sample_id, target in base.items():
+                text = indexed[sample_id].get_transcript_text(model)
+                if model in target.transcripts and not config.params.get("overwrite", False):
+                    raise ValueError(f"transcript `{model}` already exists for id {sample_id}")
+                source = indexed[sample_id].transcripts.get(model, {})
+                target.transcripts[model] = {
+                    **(source if isinstance(source, dict) else {}),
+                    "text": text,
+                    "extra": {
+                        **(source.get("extra", {}) if isinstance(source, dict) else {}),
+                        "source_manifest": str(path),
+                    },
+                }
+                target.add_lineage(
+                    self.full_name, self.version, {"model": model, "source_manifest": str(path)}
+                )
+        return [base[sample.id] for sample in samples]

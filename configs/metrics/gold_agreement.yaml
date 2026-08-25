@@ -1,0 +1,7 @@
+comparisons:
+  - name: sensevoice_vs_qwen
+    purpose: gold_generation_agreement
+    reference: {field: qwen_text}
+    hypothesis: {field: sensevoice_text}
+    metrics: [cer]
+    output: {prefix: sensevoice_vs_qwen_agreement}

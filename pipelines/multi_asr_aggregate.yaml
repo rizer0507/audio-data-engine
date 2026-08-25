@@ -1,25 +1,19 @@
-# 工序②：一条命令跑完多模型识别 + 清洗打分
-#
-# 推荐：
-#   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
-#   自动接线：
-#     cleaned_mt3000 → qwen_asr_mt3000 → multi_asr_aggregate_mt3000
-#   （自动查找 .parquet 或 .jsonl）
-#
-# 兼容旧用法：不传 --source-name 时，各 stage YAML 内写死的路径生效。
-#
-# 环境变量：QWEN_ASR_MODEL_PATH、SENSEVOICE_MODEL_PATH
-# 续跑：--resume runs/<本命令打印的 *_stages 目录>
-
+# 工序②：仅按 id 聚合各个独立 ASR 流水线的结果；不执行推理或指标计算。
+# 新模型只需在 manifests 参数中增加 model/path，不必修改本流水线实现。
 name: multi_asr_aggregate
-
-# --source-name 时按此模板改写各 stage 的 input/output（条数须与 stages 一致）
-source_name_layout:
-  - input: cleaned_{source_name}
-    output: qwen_asr_{source_name}
-  - input: qwen_asr_{source_name}
-    output: multi_asr_aggregate_{source_name}
-
-stages:
-  - pipelines/qwen_asr_batch.yaml
-  - pipelines/sensevoice_asr_batch.yaml
+input:
+  manifest: datasets/manifests/qwen_asr_source_A.parquet
+output:
+  manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: aggregate_asr_results
+    operator: quality.aggregate_manifests
+    params:
+      manifests:
+        - model: sensevoice
+          path: datasets/manifests/sensevoice_asr_source_A.parquet
+      overwrite: false
