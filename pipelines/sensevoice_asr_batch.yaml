@@ -1,4 +1,4 @@
-# 工序②-b：全量 SenseVoice → 纯文本清洗 → 相对基准编辑距离
+# 工序②-b：独立执行全量 SenseVoice（不依赖 Qwen，不计算指标）
 #
 # 推荐经编排入口：
 #   audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
@@ -7,17 +7,17 @@
 #   → qwen_asr_mt3000 → multi_asr_aggregate_mt3000
 #
 # 兼容：不传 --source-name 时使用下方写死路径。
-# 前置：input 须含 resampled_16k + transcripts.qwen
+# 前置：input 须含 resampled_16k
 # 环境变量：SENSEVOICE_MODEL_PATH
 # 并行约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
 
 name: sensevoice_asr_batch
 
 input:
-  manifest: datasets/manifests/qwen_asr_source_A.parquet
+  manifest: datasets/manifests/cleaned_source_A.parquet
 
 output:
-  manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet
+  manifest: datasets/manifests/sensevoice_asr_source_A.parquet
 
 execution:
   executor: sequential
@@ -44,19 +44,3 @@ pipeline:
 
   - name: release_after_sensevoice
     operator: runtime.release_asr_models
-
-  - name: normalize_asr_text
-    operator: quality.normalize_transcripts
-    params:
-      models: [qwen, sensevoice]
-      keep_raw: true
-
-  - name: asr_edit_distance
-    operator: quality.asr_edit_distance
-    execution:
-      executor: thread
-      workers: 8
-    params:
-      baseline: qwen
-      compare_models: [sensevoice]
-      quality_key: asr_edit

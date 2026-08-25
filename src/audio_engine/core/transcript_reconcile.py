@@ -8,6 +8,8 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from audio_engine.metrics.cer import calculate_cer
+
 # SenseVoice / FunASR style: <|zh|>、<|EMO_UNKNOW|>、<|HAPPY|> …
 _CONTROL_TAG_RE = re.compile(r"<\|.*?\|>")
 # Malformed / truncated variants sometimes appear as <EMO_UNKNOW>| or <EMO_xxx>
@@ -49,6 +51,7 @@ def plain_transcript_text(value: Any) -> str:
     """
     return normalize_transcript(value)
 
+
 def _levenshtein(a: str, b: str) -> int:
     if len(a) < len(b):
         a, b = b, a
@@ -57,7 +60,9 @@ def _levenshtein(a: str, b: str) -> int:
         current = [index]
         for offset, char_b in enumerate(b, 1):
             current.append(
-                min(current[-1] + 1, previous[offset] + 1, previous[offset - 1] + (char_a != char_b))
+                min(
+                    current[-1] + 1, previous[offset] + 1, previous[offset - 1] + (char_a != char_b)
+                )
             )
         previous = current
     return previous[-1]
@@ -89,42 +94,10 @@ def levenshtein_ops(reference: str, hypothesis: str) -> dict[str, int | float | 
             "hyp_len": 0,
         }
 
-    # DP distance matrix for traceback of operation counts.
-    rows, cols = len(ref), len(hyp)
-    dist = [[0] * (cols + 1) for _ in range(rows + 1)]
-    for i in range(1, rows + 1):
-        dist[i][0] = i
-    for j in range(1, cols + 1):
-        dist[0][j] = j
-    for i in range(1, rows + 1):
-        for j in range(1, cols + 1):
-            cost = 0 if ref[i - 1] == hyp[j - 1] else 1
-            dist[i][j] = min(
-                dist[i - 1][j] + 1,  # deletion
-                dist[i][j - 1] + 1,  # insertion
-                dist[i - 1][j - 1] + cost,  # keep / substitute
-            )
-
-    i, j = rows, cols
-    sub = delete = insert = 0
-    while i > 0 or j > 0:
-        if i > 0 and j > 0 and ref[i - 1] == hyp[j - 1] and dist[i][j] == dist[i - 1][j - 1]:
-            i -= 1
-            j -= 1
-            continue
-        if i > 0 and j > 0 and dist[i][j] == dist[i - 1][j - 1] + 1:
-            sub += 1
-            i -= 1
-            j -= 1
-            continue
-        if j > 0 and dist[i][j] == dist[i][j - 1] + 1:
-            insert += 1
-            j -= 1
-            continue
-        # deletion
-        delete += 1
-        i -= 1
-
+    metric = calculate_cer(ref, hyp)
+    sub = metric["substitutions"]
+    delete = metric["deletions"]
+    insert = metric["insertions"]
     total = sub + delete + insert
     return {
         "total": total,
@@ -148,7 +121,9 @@ def character_similarity(left: Any, right: Any) -> float:
     return round(1 - _levenshtein(a, b) / max(len(a), len(b)), 4)
 
 
-def _pick_column(frame: pd.DataFrame, requested: str | None, candidates: Iterable[str], label: str) -> str:
+def _pick_column(
+    frame: pd.DataFrame, requested: str | None, candidates: Iterable[str], label: str
+) -> str:
     if requested:
         if requested not in frame.columns:
             raise ValueError(f"{label}列不存在: {requested!r}; 可用列: {list(frame.columns)}")
@@ -246,8 +221,8 @@ def reconcile_transcripts(
         character_similarity(a, b)
         for a, b in zip(output[qwen], output["sensevoice_clean_text"], strict=False)
     ]
-    output["asr_consistent"] = (
-        output["sensevoice_raw_text"].notna() & (output["character_similarity"] >= threshold)
+    output["asr_consistent"] = output["sensevoice_raw_text"].notna() & (
+        output["character_similarity"] >= threshold
     )
     output["comparison_reason"] = output["asr_consistent"].map(
         {True: "字符相似度达到阈值", False: "字符相似度低于阈值"}

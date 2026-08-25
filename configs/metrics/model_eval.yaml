@@ -1,0 +1,13 @@
+comparisons:
+  - name: old_model_vs_gold
+    purpose: model_evaluation
+    reference: {field: gold_text}
+    hypothesis: {field: old_model_text}
+    metrics: [cer]
+    output: {prefix: old_model}
+  - name: new_model_vs_gold
+    purpose: model_evaluation
+    reference: {field: gold_text}
+    hypothesis: {field: new_model_text}
+    metrics: [cer]
+    output: {prefix: new_model}
