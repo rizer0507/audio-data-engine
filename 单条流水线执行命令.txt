@@ -98,6 +98,20 @@ python scripts/export_multi_asr_xlsx.py \
 
 
 -------------------------------------------------------
+2f. 外源标注 baseline 字准率（脚本，非流水线）
+-------------------------------------------------------
+# 以外部标注文件 A 为 reference，对齐模型 parquet/jsonl 后算 evaluation CER
+# 详见 docs/需求/字准率计算-外源.md
+
+# python scripts/eval_external_baseline_cer.py \
+#   --baseline 数据集/标注A.xlsx \
+#   --baseline-text-col label_text_raw \
+#   --model qwen=datasets/manifests/qwen_asr_mt3000.parquet \
+#   --model sensevoice=datasets/manifests/sensevoice_asr_mt3000.parquet \
+#   --output datasets/exports/external_baseline_cer_mt3000.parquet
+
+
+-------------------------------------------------------
 换批次时改哪里（清单）
 -------------------------------------------------------
 [ ] 命令中的 --source-name / --source-dir
