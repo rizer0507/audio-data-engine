@@ -78,8 +78,9 @@ def test_apply_cleaning_and_qwen_overrides(tmp_path: Path, monkeypatch: pytest.M
     )
 
     class _Step:
-        def __init__(self, operator: str):
+        def __init__(self, operator: str, params: dict | None = None):
             self.operator = operator
+            self.params = params or {}
 
     cleaning = apply_source_name_to_single_pipeline(
         pipeline_name="data_cleaning_source_A",
@@ -97,6 +98,42 @@ def test_apply_cleaning_and_qwen_overrides(tmp_path: Path, monkeypatch: pytest.M
     )
     assert qwen["input_manifest"].endswith("cleaned_mt3000.parquet")
     assert qwen["output_manifest"].endswith("qwen_asr_mt3000.parquet")
+
+    sensevoice = apply_source_name_to_single_pipeline(
+        pipeline_name="sensevoice_asr_batch",
+        steps=[_Step("asr.sensevoice_batch")],
+        source_name="mt3000",
+    )
+    assert sensevoice["input_manifest"].endswith("cleaned_mt3000.parquet")
+    assert sensevoice["output_manifest"].endswith("sensevoice_asr_mt3000.parquet")
+
+    Manifest([Sample(id="a", source_path="/tmp/a.wav")]).save(
+        manifests / "qwen_asr_mt3000.parquet"
+    )
+    aggregate_step = _Step(
+        "quality.aggregate_manifests",
+        {"manifests": [{"model": "sensevoice", "path": "placeholder.parquet"}]},
+    )
+    aggregate = apply_source_name_to_single_pipeline(
+        pipeline_name="multi_asr_aggregate",
+        steps=[aggregate_step],
+        source_name="mt3000",
+    )
+    assert aggregate["input_manifest"].endswith("qwen_asr_mt3000.parquet")
+    assert aggregate_step.params["manifests"][0]["path"].endswith(
+        "sensevoice_asr_mt3000.parquet"
+    )
+
+    Manifest([Sample(id="a", source_path="/tmp/a.wav")]).save(
+        manifests / "multi_asr_aggregate_mt3000.parquet"
+    )
+    metrics = apply_source_name_to_single_pipeline(
+        pipeline_name="asr_metric_pipeline",
+        steps=[_Step("quality.text_metrics")],
+        source_name="mt3000",
+    )
+    assert metrics["input_manifest"].endswith("multi_asr_aggregate_mt3000.parquet")
+    assert metrics["output_manifest"].endswith("multi_asr_metrics_mt3000.parquet")
 
 
 def test_run_staged_with_source_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -204,7 +204,9 @@ def apply_source_name_to_single_pipeline(
 
     - Cleaning (ingest steps or ``--source-dir``): write ``cleaned_<name>``.
     - ``qwen_asr*``: ``cleaned_<name>`` → ``qwen_asr_<name>``.
-    - ``sensevoice*``: ``qwen_asr_<name>`` → ``multi_asr_aggregate_<name>``.
+    - ``sensevoice*``: ``cleaned_<name>`` → ``sensevoice_asr_<name>``.
+    - ``multi_asr*``: ``qwen_asr_<name>`` + model manifests → aggregate output.
+    - ``asr_metric*``: aggregate output → standalone metric output.
     """
     name = validate_source_name(source_name)
     has_ingest = any(
@@ -234,13 +236,36 @@ def apply_source_name_to_single_pipeline(
             "source_id": None,
             "output_manifest": _posix(manifest_path("qwen_asr", name)),
         }
-    if "sensevoice" in key or "multi_asr" in key:
+    if "sensevoice" in key:
+        resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("sensevoice_asr", name)),
+        }
+    if "multi_asr" in key:
         resolved = resolve_existing_manifest(manifest_stem("qwen_asr", name))
+        for step in steps:
+            if getattr(step, "operator", "") != "quality.aggregate_manifests":
+                continue
+            for item in step.params.get("manifests", []):
+                model = str(item.get("model") or "").strip()
+                if model:
+                    item["path"] = _posix(manifest_path(f"{model}_asr", name))
         return {
             "source_dir": None,
             "input_manifest": str(resolved),
             "source_id": None,
             "output_manifest": _posix(manifest_path("multi_asr_aggregate", name)),
+        }
+    if "asr_metric" in key:
+        resolved = resolve_existing_manifest(manifest_stem("multi_asr_aggregate", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("multi_asr_metrics", name)),
         }
 
     raise ValueError(

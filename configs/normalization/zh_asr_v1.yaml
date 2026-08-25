@@ -1,0 +1,8 @@
+name: zh_asr_v1
+version: 1
+unicode: {normalize: true, form: NFKC}
+punctuation: {remove: true}
+whitespace: {remove: true}
+english: {lowercase: true}
+number: {normalize: false}
+filler: {remove: false}

@@ -1,0 +1,11 @@
+name: asr_eval
+input:
+  manifest: datasets/manifests/asr_eval_source_A.parquet
+output:
+  manifest: datasets/manifests/asr_eval_metrics_source_A.parquet
+pipeline:
+  - name: evaluation_metrics
+    operator: quality.text_metrics
+    params:
+      config_path: configs/metrics/model_eval.yaml
+      normalization_path: configs/normalization/zh_asr_v1.yaml

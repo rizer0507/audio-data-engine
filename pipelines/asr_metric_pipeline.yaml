@@ -1,0 +1,12 @@
+# 聚合完成后单独运行；Gold production 和 Evaluation 均调用同一 operator。
+name: asr_metric_pipeline
+input:
+  manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet
+output:
+  manifest: datasets/manifests/multi_asr_metrics_source_A.parquet
+pipeline:
+  - name: agreement_metrics
+    operator: quality.text_metrics
+    params:
+      config_path: configs/metrics/gold_agreement.yaml
+      normalization_path: configs/normalization/zh_asr_v1.yaml

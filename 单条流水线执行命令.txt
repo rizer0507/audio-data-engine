@@ -3,7 +3,7 @@
 用途：维护生产入口命令；分片/并行/合并由 YAML sharding 自动完成。
 改批次：用 --source-name（+ 清洗时的 --source-dir），一般不用改 YAML 路径。
 改并行度 / 卡号：改对应 pipelines/*.yaml 的 sharding。
-执行顺序：1 → 2（一条命令：全量 Qwen → 全量 SenseVoice+清洗打分）→ 导出 xlsx（可选）。
+执行顺序：1 → 2a/2b（两个模型可独立执行）→ 2c 聚合 → 2d 字准率 → 导出 xlsx（可选）。
 
 
 -------------------------------------------------------
@@ -32,26 +32,58 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 
 
 -------------------------------------------------------
-2. 多模型识别 + 清洗打分（工序②，一条命令）
+2a. Qwen 独立识别
 -------------------------------------------------------
-# YAML: pipelines/multi_asr_aggregate.yaml（stages 编排）
-#   Stage1: cleaned_<name> → qwen_asr_<name>
-#   Stage2: qwen_asr_<name> → multi_asr_aggregate_<name>
-# 并行: 改两个 stage YAML 的 sharding（默认 2×4=8）
+# cleaned_<name> → qwen_asr_<name>
+# 并行配置: pipelines/qwen_asr_batch.yaml 的 sharding
 # 约束: shards == parallel_shards <= len(gpus) * instances_per_gpu
 
 export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
-export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name test_local
 
-audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_local --mock
-
-# 续跑（填入上次打印的 *_stages 目录）:
-# audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
-#   --source-name mt3000 --resume runs/<上次_stages目录>
+# 续跑: 在命令末尾加 --resume runs/<上次_shards目录>
 
 
 -------------------------------------------------------
-2b. 导出 xlsx（parquet/jsonl 全量保留后按需转换）
+2b. SenseVoice 独立识别（不依赖 Qwen）
+-------------------------------------------------------
+# cleaned_<name> → sensevoice_asr_<name>
+# 并行配置: pipelines/sensevoice_asr_batch.yaml 的 sharding
+
+export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name test_local
+
+# Qwen 与 SenseVoice 只依赖 cleaned_<name>，可以分别执行，也可以同时在不同 GPU 上执行。
+
+
+-------------------------------------------------------
+2c. 按 id 聚合独立模型结果（不执行 ASR、不计算字准率）
+-------------------------------------------------------
+# qwen_asr_<name> + sensevoice_asr_<name> → multi_asr_aggregate_<name>
+# --source-name 会同步改写 input/output 以及 manifests 中各模型的文件路径。
+# 添加新模型时，在 pipelines/multi_asr_aggregate.yaml 的 manifests 中增加 model/path。
+
+audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_local
+
+# 聚合会严格检查所有 manifest 的 id：重复、缺失或额外 id 都会立即报错。
+
+
+-------------------------------------------------------
+2d. 独立计算字准率 / 文本指标
+-------------------------------------------------------
+# multi_asr_aggregate_<name> → multi_asr_metrics_<name>
+# Gold production 使用 configs/metrics/gold_agreement.yaml，指标语义为 agreement CER。
+
+audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name test_local
+
+# 模型评测示例（reference=gold_text）:
+# audio-data pipeline run pipelines/asr_eval.yaml \
+#   --input-manifest datasets/manifests/asr_eval_test_local.parquet \
+#   --output-manifest datasets/manifests/asr_eval_metrics_test_local.parquet
+
+
+-------------------------------------------------------
+2e. 导出 xlsx（parquet/jsonl 全量保留后按需转换）
 -------------------------------------------------------
 python scripts/export_multi_asr_xlsx.py \
   --manifest datasets/manifests/multi_asr_aggregate_mt3000.parquet \
@@ -65,8 +97,10 @@ python scripts/export_multi_asr_xlsx.py \
 -------------------------------------------------------
 --source-dir (wav/pcm)
   → cleaned_mt3000.parquet|.jsonl
-  → qwen_asr_mt3000.parquet          # stage1 中间产物
+  ├→ qwen_asr_mt3000.parquet
+  └→ sensevoice_asr_mt3000.parquet
   → multi_asr_aggregate_mt3000.parquet / .jsonl
+  → multi_asr_metrics_mt3000.parquet / .jsonl
   → (可选) datasets/exports/multi_asr_aggregate_mt3000.xlsx
 
 
@@ -75,6 +109,7 @@ python scripts/export_multi_asr_xlsx.py \
 -------------------------------------------------------
 [ ] 命令中的 --source-name / --source-dir
 [ ] （可选）pipelines/qwen_asr_batch.yaml、sensevoice_asr_batch.yaml 的 gpus/shards
+[ ] 新增模型时，在 pipelines/multi_asr_aggregate.yaml 增加 model/path
 [ ] 本文件中的模型环境变量
 # 一般不再改 resources/manifest.yaml 与 YAML 内 input/output 路径
 
@@ -84,3 +119,5 @@ python scripts/export_multi_asr_xlsx.py \
 -------------------------------------------------------
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name mt3000
 # audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name mt3000
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
+# audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name mt3000
