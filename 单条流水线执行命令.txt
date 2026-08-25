@@ -43,7 +43,7 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
 export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 
-audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000
+audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_local --mock
 
 # 续跑（填入上次打印的 *_stages 目录）:
 # audio-data pipeline run pipelines/multi_asr_aggregate.yaml \

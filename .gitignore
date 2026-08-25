@@ -62,8 +62,5 @@ qwen_vs_sensevoice/
 #本地数据集
 数据集/*
 
-#文档集
-docs/*
-
 #resource
 resources/source/*
