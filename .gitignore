@@ -64,3 +64,6 @@ qwen_vs_sensevoice/
 
 #resource
 resources/source/*
+
+#error记录
+error.log

@@ -4,6 +4,10 @@
 同一 id 可来自多个文件（如 qwen_asr_*.parquet + sensevoice_asr_*.parquet），
 合并为一行：id / source_path / qwen_text / sensevoice_text / …
 
+导出文本会去掉 SenseVoice ``<|…|>`` 标签、标点与空白，只保留可比对的纯文本。
+导出 ``id`` 会去掉派生文件名前的 ``<16hex>_`` 前缀（如 ``abcd…_fenshen-…`` → ``fenshen-…``）。
+不计算字准率 / 编辑距离（请用独立脚本处理）。
+
 Rules:
   - <= max-rows → one xlsx
   - > max-rows → stem-part-001.xlsx, part-002, ...
@@ -22,21 +26,35 @@ Example:
 
   # 多个 manifest + 模型名列表（按文件顺序对应 models）
   python scripts/export_multi_asr_xlsx.py \\
-    --manifest datasets/manifests/qwen_asr_mt3000.parquet \\
-    --manifest datasets/manifests/sensevoice_asr_mt3000.parquet \\
-    --models qwen,sensevoice \\
-    -o datasets/exports/asr_mt3000.xlsx
+    --manifest "D:/Work/asr数据/数据集/0827/qwen_asr_0827-test-qwen1.parquet" \\
+    --manifest "D:/Work/asr数据/数据集/0827/sensevoice_asr_0827-test-sensevoice1.parquet" \\
+    --models qwen1,sensevoice1 \\
+    -o "D:/Work/asr数据/数据集/0827/0827-test-all.xlsx"
+
+  # 单个 manifest 也可重命名列（源文件多为 transcripts.qwen / qwen_text）
+  python scripts/export_multi_asr_xlsx.py \\
+    --manifest "D:/Work/asr数据/数据集/0827/qwen_asr_0827-test-qwen-sft.parquet" \\
+    --models qwen-sft \\
+    -o "D:/Work/asr数据/数据集/0827/0827-test-qwen-sft.xlsx"
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from audio_engine.core.transcript_reconcile import plain_transcript_text  # noqa: E402
+
 DEFAULT_MAX_ROWS = 800_000
+# derived 文件名里的 sha16 前缀：``<16hex>_fenshen-...`` → ``fenshen-...``
+_ID_HASH_PREFIX_RE = re.compile(r"^[0-9a-fA-F]{16}_")
 
 
 def _nonempty_text(value: Any) -> str | None:
@@ -54,6 +72,12 @@ def _nonempty_text(value: Any) -> str | None:
 def _as_id(value: Any) -> str:
     text = _nonempty_text(value)
     return text or ""
+
+
+def clean_export_id(value: Any) -> str:
+    """Strip leading ``<16hex>_`` before export (keep join key unchanged)."""
+    text = _as_id(value)
+    return _ID_HASH_PREFIX_RE.sub("", text) if text else ""
 
 
 def _transcript_text(transcripts: Any, model: str) -> str:
@@ -89,22 +113,6 @@ def _parse_transcripts(record: dict[str, Any]) -> dict[str, Any]:
     return dict(transcripts)
 
 
-def _metric(record: dict[str, Any], quality: dict[str, Any], key: str) -> Any:
-    for candidate in (f"quality_{key}", key):
-        if candidate not in record:
-            continue
-        value = record[candidate]
-        if value is None:
-            continue
-        try:
-            if value != value:  # NaN
-                continue
-        except (TypeError, ValueError):
-            pass
-        return value
-    return quality.get(key)
-
-
 def extract_model_text(record: dict[str, Any], model: str) -> str:
     """Prefer nested transcripts[model].text, then flat {model}_text."""
     transcripts = _parse_transcripts(record)
@@ -112,6 +120,10 @@ def extract_model_text(record: dict[str, Any], model: str) -> str:
     flat = _nonempty_text(record.get(f"{model}_text"))
     return nested or flat or ""
 
+
+def clean_export_text(value: Any) -> str:
+    """Drop SenseVoice ``<|…|>`` tags, punctuation, and whitespace."""
+    return plain_transcript_text(value)
 
 def ensure_model_transcript(record: dict[str, Any], model: str) -> dict[str, Any]:
     """Bind this file's transcript text to ``model`` (even if source key differs).
@@ -243,76 +255,21 @@ def merge_by_id(
     return [merged[sample_id] for sample_id in order]
 
 
-def flatten_row(record: dict[str, Any], models: list[str], baseline: str) -> dict[str, Any]:
-    quality = _parse_quality(record)
+def flatten_row(record: dict[str, Any], models: list[str]) -> dict[str, Any]:
+    """Export meta + cleaned ASR text only (no CER / edit-distance columns)."""
     transcripts = _parse_transcripts(record)
-
-    resolved_baseline = _metric(record, quality, "asr_edit_baseline") or baseline
     row: dict[str, Any] = {
-        "id": record.get("id"),
+        "id": clean_export_id(record.get("id")),
         "source_path": record.get("source_path"),
         "duration": record.get("duration"),
         "sample_rate": record.get("sample_rate"),
         "channels": record.get("channels"),
-        "baseline_model": resolved_baseline,
     }
     for model in models:
         text_col = f"{model}_text"
         nested = _nonempty_text(_transcript_text(transcripts, model))
         flat = _nonempty_text(record.get(text_col))
-        row[text_col] = nested or flat or ""
-        if model == resolved_baseline:
-            continue
-        for metric, label in (
-            ("total", "total"),
-            ("错字", "错字"),
-            ("少字", "少字"),
-            ("多字", "多字"),
-            ("cer", "cer"),
-        ):
-            row[f"vs_{resolved_baseline}_{model}_{label}"] = _metric(
-                record, quality, f"asr_edit_{model}_{metric}"
-            )
-
-    # Also export agreement / evaluation CER fields if present in quality.
-    for key, value in quality.items():
-        if key.endswith("_cer") or key.endswith("_字准率") or key.endswith("_agreement_cer"):
-            row[f"quality_{key}"] = value
-        elif key.endswith(("_substitutions", "_deletions", "_insertions", "_reference_length")):
-            row[f"quality_{key}"] = value
-
-    payload_raw = _metric(record, quality, "asr_edit_json")
-    if isinstance(payload_raw, str) and payload_raw:
-        try:
-            payload = json.loads(payload_raw)
-        except json.JSONDecodeError:
-            payload = {}
-        if isinstance(payload, dict):
-            row["baseline_model"] = payload.get("baseline", resolved_baseline)
-            for model, ops in (payload.get("models") or {}).items():
-                if not isinstance(ops, dict):
-                    continue
-                for metric, label in (
-                    ("total", "total"),
-                    ("错字", "错字"),
-                    ("少字", "少字"),
-                    ("多字", "多字"),
-                    ("cer", "cer"),
-                ):
-                    col = f"vs_{row['baseline_model']}_{model}_{label}"
-                    if row.get(col) is None:
-                        row[col] = ops.get(metric)
-
-    status = record.get("status") or {}
-    if isinstance(status, str):
-        row["status_json"] = status
-    elif isinstance(status, dict):
-        row["status_json"] = json.dumps(status, ensure_ascii=False)
-    errors = record.get("errors") or {}
-    if isinstance(errors, str) and errors not in ("", "{}", "null"):
-        row["errors_json"] = errors
-    elif isinstance(errors, dict) and errors:
-        row["errors_json"] = json.dumps(errors, ensure_ascii=False)
+        row[text_col] = clean_export_text(nested or flat or "")
     return row
 
 
@@ -429,11 +386,6 @@ def main() -> int:
         "与多个 --manifest 一起用时，按顺序绑定到各文件",
     )
     parser.add_argument(
-        "--baseline",
-        default="qwen",
-        help="基线模型名（用于 vs_* 列命名）",
-    )
-    parser.add_argument(
         "--how",
         choices=("outer", "inner"),
         default="outer",
@@ -452,7 +404,9 @@ def main() -> int:
 
     model_list = [item.strip() for item in str(args.models).split(",") if item.strip()]
     for index, path in enumerate(args.manifest):
-        forced = model_list[index] if index < len(model_list) and len(args.manifest) > 1 else None
+        # Bind even for a single manifest so `--models qwen-sft` remaps
+        # source keys like transcripts.qwen / qwen_text → qwen-sft_text.
+        forced = model_list[index] if index < len(model_list) else None
         sources.append((forced, path))
 
     if not sources:
@@ -483,7 +437,8 @@ def main() -> int:
     if not export_models:
         export_models = infer_models_from_records(merged_records)
     if not export_models:
-        export_models = [args.baseline]
+        print("[ERROR] 无法推断模型列，请用 --models 或 --model name=path 指定", file=sys.stderr)
+        return 1
     # Deduplicate while preserving order.
     seen_models: set[str] = set()
     models: list[str] = []
@@ -492,11 +447,8 @@ def main() -> int:
             seen_models.add(name)
             models.append(name)
 
-    print(
-        f"[INFO] merged_ids={len(merged_records):,} models={models} "
-        f"baseline={args.baseline} how={args.how}"
-    )
-    flat = [flatten_row(record, models, args.baseline) for record in merged_records]
+    print(f"[INFO] merged_ids={len(merged_records):,} models={models} how={args.how}")
+    flat = [flatten_row(record, models) for record in merged_records]
 
     max_rows = max(1, int(args.max_rows))
     if len(flat) <= max_rows:

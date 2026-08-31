@@ -1,164 +1,1460 @@
-(/data2/data-cp/lizi/conda_envs/asr) lizi@17202207608:~/audio-data-engine$ audio-data manifest shard batch_A --shards 16 --output-dir datasets/shards/source_A
-╭──────────────────────────────── Traceback (most recent call last) ─────────────────────────────────╮
-│ /home/lizi/audio-data-engine/src/audio_engine/cli/main.py:442 in manifest_shard                    │
-│                                                                                                    │
-│   439 │   ),                                                                                       │
-│   440 ) -> None:                                                                                   │
-│   441 │   """Split a manifest into shards (hash or duration-balanced)."""                          │
-│ ❱ 442 │   manifest = Manifest.load(_resolve_dataset(dataset))                                      │
-│   443 │   try:                                                                                     │
-│   444 │   │   parts = manifest.split(shards, strategy=strategy)                                    │
-│   445 │   except ValueError as exc:                                                                │
-│                                                                                                    │
-│ ╭────────────────────── locals ──────────────────────╮                                             │
-│ │    dataset = 'batch_A'                             │                                             │
-│ │ output_dir = PosixPath('datasets/shards/source_A') │                                             │
-│ │     shards = 16                                    │                                             │
-│ │   strategy = 'hash'                                │                                             │
-│ ╰────────────────────────────────────────────────────╯                                             │
-│                                                                                                    │
-│ /home/lizi/audio-data-engine/src/audio_engine/core/manifest.py:67 in load                          │
-│                                                                                                    │
-│    64 │   │   if path.suffix == ".jsonl":                                                          │
-│    65 │   │   │   return cls._load_jsonl(path)                                                     │
-│    66 │   │   if path.suffix == ".parquet":                                                        │
-│ ❱  67 │   │   │   return cls._load_parquet(path)                                                   │
-│    68 │   │   raise ValueError(f"Unsupported manifest format: {path.suffix}")                      │
-│    69 │                                                                                            │
-│    70 │   @classmethod                                                                             │
-│                                                                                                    │
-│ ╭──────────────────────── locals ────────────────────────╮                                         │
-│ │ path = PosixPath('datasets/manifests/batch_A.parquet') │                                         │
-│ ╰────────────────────────────────────────────────────────╯                                         │
-│                                                                                                    │
-│ /home/lizi/audio-data-engine/src/audio_engine/core/manifest.py:98 in _load_parquet                 │
-│                                                                                                    │
-│    95 │   │   │   │   │   │   │   data[col] = {}                                                   │
-│    96 │   │   │   │   │   elif not isinstance(data[col], (dict, list)):                            │
-│    97 │   │   │   │   │   │   data[col] = {}                                                       │
-│ ❱  98 │   │   │   samples.append(Sample.from_flat_dict(data))                                      │
-│    99 │   │   return cls(samples)                                                                  │
-│   100 │                                                                                            │
-│   101 │   def save(self, path: str | Path) -> Path:                                                │
-│                                                                                                    │
-│ ╭──────────────────────────────────────────── locals ────────────────────────────────────────────╮ │
-│ │         _ = 0                                                                                  │ │
-│ │       col = 'errors'                                                                           │ │
-│ │      data = {                                                                                  │ │
-│ │             │   'id': 'fenshen-00007bc4-03f70015',                                             │ │
-│ │             │   'source_path':                                                                 │ │
-│ │             '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001… │ │
-│ │             │   'sha256': '6f75d924f18fbecf352c73f965d2d67232f446923796217b5bd53bb62a66db1b',  │ │
-│ │             │   'sample_rate': nan,                                                            │ │
-│ │             │   'channels': nan,                                                               │ │
-│ │             │   'duration': nan,                                                               │ │
-│ │             │   'audio': {                                                                     │ │
-│ │             │   │   'raw':                                                                     │ │
-│ │             '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001… │ │
-│ │             │   },                                                                             │ │
-│ │             │   'transcripts': {},                                                             │ │
-│ │             │   'quality': {},                                                                 │ │
-│ │             │   'labels': {},                                                                  │ │
-│ │             │   ... +3                                                                         │ │
-│ │             }                                                                                  │ │
-│ │        df = │   │   │   │   │   │   │      id  ... errors                                      │ │
-│ │             0       fenshen-00007bc4-03f70015  ...     {}                                      │ │
-│ │             1       fenshen-0000a0e7-4483c0da  ...     {}                                      │ │
-│ │             2       fenshen-00011bf6-bfb78174  ...     {}                                      │ │
-│ │             3       fenshen-00014942-1e66f231  ...     {}                                      │ │
-│ │             4       fenshen-00016f11-1bdef55e  ...     {}                                      │ │
-│ │             ...                           ...  ...    ...                                      │ │
-│ │             236876  fenshen-fffdca40-836872ad  ...     {}                                      │ │
-│ │             236877  fenshen-fffe13e6-7ca1bcd4  ...     {}                                      │ │
-│ │             236878  fenshen-fffe7ba8-2b03b35f  ...     {}                                      │ │
-│ │             236879  fenshen-ffffa75d-2cabf448  ...     {}                                      │ │
-│ │             236880  fenshen-ffffdcc6-cb98ab5d  ...     {}                                      │ │
-│ │                                                                                                │ │
-│ │             [236881 rows x 13 columns]                                                         │ │
-│ │ json_cols = ['audio', 'transcripts', 'quality', 'labels', 'lineage', 'status', 'errors']       │ │
-│ │      path = PosixPath('datasets/manifests/batch_A.parquet')                                    │ │
-│ │       row = id                                     fenshen-00007bc4-03f70015                   │ │
-│ │             source_path    /data2/data-cp/datasets/asr_datasets/fenshen/2...                   │ │
-│ │             sha256         6f75d924f18fbecf352c73f965d2d67232f44692379621...                   │ │
-│ │             sample_rate                                                  NaN                   │ │
-│ │             channels                                                     NaN                   │ │
-│ │             duration                                                     NaN                   │ │
-│ │             audio          {"raw": "/data2/data-cp/datasets/asr_datasets/...                   │ │
-│ │             transcripts                                                   {}                   │ │
-│ │             quality                                                       {}                   │ │
-│ │             labels                                                        {}                   │ │
-│ │             lineage        [{"operator": "ingest.scan", "version": "1.0.0...                   │ │
-│ │             status                              {"ingest.scan": "completed"}                   │ │
-│ │             errors                                                        {}                   │ │
-│ │             Name: 0, dtype: str                                                                │ │
-│ │   samples = []                                                                                 │ │
-│ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ │
-│                                                                                                    │
-│ /home/lizi/audio-data-engine/src/audio_engine/core/sample.py:121 in from_flat_dict                 │
-│                                                                                                    │
-│   118 │                                                                                            │
-│   119 │   @classmethod                                                                             │
-│   120 │   def from_flat_dict(cls, data: dict[str, Any]) -> Sample:                                 │
-│ ❱ 121 │   │   return cls(                                                                          │
-│   122 │   │   │   id=data["id"],                                                                   │
-│   123 │   │   │   source_path=data["source_path"],                                                 │
-│   124 │   │   │   sha256=data.get("sha256", ""),                                                   │
-│                                                                                                    │
-│ ╭──────────────────────────────────────────── locals ────────────────────────────────────────────╮ │
-│ │ data = {                                                                                       │ │
-│ │        │   'id': 'fenshen-00007bc4-03f70015',                                                  │ │
-│ │        │   'source_path':                                                                      │ │
-│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5,   │ │
-│ │        │   'sha256': '6f75d924f18fbecf352c73f965d2d67232f446923796217b5bd53bb62a66db1b',       │ │
-│ │        │   'sample_rate': nan,                                                                 │ │
-│ │        │   'channels': nan,                                                                    │ │
-│ │        │   'duration': nan,                                                                    │ │
-│ │        │   'audio': {                                                                          │ │
-│ │        │   │   'raw':                                                                          │ │
-│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5    │ │
-│ │        │   },                                                                                  │ │
-│ │        │   'transcripts': {},                                                                  │ │
-│ │        │   'quality': {},                                                                      │ │
-│ │        │   'labels': {},                                                                       │ │
-│ │        │   ... +3                                                                              │ │
-│ │        }                                                                                       │ │
-│ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ │
-│                                                                                                    │
-│ /data2/data-cp/lizi/conda_envs/asr/lib/python3.11/site-packages/pydantic/main.py:250 in __init__   │
-│                                                                                                    │
-│    247 │   │   """                                                                                 │
-│    248 │   │   # `__tracebackhide__` tells pytest and some other tools to omit this function fr    │
-│    249 │   │   __tracebackhide__ = True                                                            │
-│ ❱  250 │   │   validated_self = self.__pydantic_validator__.validate_python(data, self_instance    │
-│    251 │   │   if self is not validated_self:                                                      │
-│    252 │   │   │   warnings.warn(                                                                  │
-│    253 │   │   │   │   'A custom validator is returning a value other than `self`.\n'              │
-│                                                                                                    │
-│ ╭──────────────────────────────────────────── locals ────────────────────────────────────────────╮ │
-│ │ data = {                                                                                       │ │
-│ │        │   'id': 'fenshen-00007bc4-03f70015',                                                  │ │
-│ │        │   'source_path':                                                                      │ │
-│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5,   │ │
-│ │        │   'sha256': '6f75d924f18fbecf352c73f965d2d67232f446923796217b5bd53bb62a66db1b',       │ │
-│ │        │   'sample_rate': nan,                                                                 │ │
-│ │        │   'channels': nan,                                                                    │ │
-│ │        │   'duration': nan,                                                                    │ │
-│ │        │   'audio': {                                                                          │ │
-│ │        │   │   'raw':                                                                          │ │
-│ │        '/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1/fenshen-00007bc4-03f7001'+5    │ │
-│ │        │   },                                                                                  │ │
-│ │        │   'transcripts': {},                                                                  │ │
-│ │        │   'quality': {},                                                                      │ │
-│ │        │   'labels': {},                                                                       │ │
-│ │        │   ... +3                                                                              │ │
-│ │        }                                                                                       │ │
-│ │ self = Sample()                                                                                │ │
-│ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────╯
-ValidationError: 2 validation errors for Sample
-sample_rate
-  Input should be a finite number [type=finite_number, input_value=nan, input_type=float]
-    For further information visit https://errors.pydantic.dev/2.12/v/finite_number
-channels
-  Input should be a finite number [type=finite_number, input_value=nan, input_type=float]
-    For further information visit https://errors.pydantic.dev/2.12/v/finite_number
+PIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39072 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39106 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39132 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39130 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39120 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:43 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39146 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) INFO:     127.0.0.1:39156 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39168 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39170 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) 
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39198 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39180 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39188 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] An error occurred in `transformers` while applying chat template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] Traceback (most recent call last):
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     return tokenizer.apply_chat_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502]     raise ValueError(
+(APIServer pid=2977924) ERROR 08-26 17:01:44 [hf.py:502] ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) INFO:     127.0.0.1:39208 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+(APIServer pid=2977924) ERROR:    Exception in ASGI application
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 490, in safe_apply_chat_template
+(APIServer pid=2977924)     return tokenizer.apply_chat_template(
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1667, in apply_chat_template
+(APIServer pid=2977924)     rendered_chat, generation_indices = render_jinja_template(
+(APIServer pid=2977924)                                         ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/transformers/utils/chat_template_utils.py", line 550, in render_jinja_template
+(APIServer pid=2977924)     raise ValueError(
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.
+(APIServer pid=2977924) 
+(APIServer pid=2977924) The above exception was the direct cause of the following exception:
+(APIServer pid=2977924) 
+(APIServer pid=2977924) Traceback (most recent call last):
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+(APIServer pid=2977924)     result = await app(  # type: ignore[func-returns-value]
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+(APIServer pid=2977924)     return await self.app(scope, receive, send)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+(APIServer pid=2977924)     await super().__call__(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, _send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/cors.py", line 88, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 176, in __call__
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/prometheus_fastapi_instrumentator/middleware.py", line 174, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send_wrapper)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 660, in __call__
+(APIServer pid=2977924)     await self.middleware_stack(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 680, in app
+(APIServer pid=2977924)     await route.handle(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/routing.py", line 276, in handle
+(APIServer pid=2977924)     await self.app(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+(APIServer pid=2977924)     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+(APIServer pid=2977924)     raise exc
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+(APIServer pid=2977924)     await app(scope, receive, sender)
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+(APIServer pid=2977924)     response = await f(request)
+(APIServer pid=2977924)                ^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+(APIServer pid=2977924)     raw_response = await run_endpoint_function(
+(APIServer pid=2977924)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+(APIServer pid=2977924)     return await dependant.call(**values)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 95, in wrapper
+(APIServer pid=2977924)     return handler_task.result()
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/utils.py", line 116, in wrapper
+(APIServer pid=2977924)     return await func(*args, **kwargs)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/api_router.py", line 61, in create_chat_completion
+(APIServer pid=2977924)     generator = await handler.create_chat_completion(request, raw_request)
+(APIServer pid=2977924)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 230, in create_chat_completion
+(APIServer pid=2977924)     result = await self.render_chat_request(request)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/openai/chat_completion/serving.py", line 202, in render_chat_request
+(APIServer pid=2977924)     return await self.openai_serving_render.render_chat(request)
+(APIServer pid=2977924)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 240, in render_chat
+(APIServer pid=2977924)     conversation, engine_inputs = await self.preprocess_chat(
+(APIServer pid=2977924)                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/entrypoints/serve/render/serving.py", line 523, in preprocess_chat
+(APIServer pid=2977924)     (conversation,), (engine_input,) = await renderer.render_chat_async(
+(APIServer pid=2977924)                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/base.py", line 918, in render_chat_async
+(APIServer pid=2977924)     for conv, prompt in await asyncio.gather(*rendered):
+(APIServer pid=2977924)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 703, in render_messages_async
+(APIServer pid=2977924)     prompt_raw = await self._apply_chat_template_async(
+(APIServer pid=2977924)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+(APIServer pid=2977924)     result = self.fn(*self.args, **self.kwargs)
+(APIServer pid=2977924)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2977924)   File "/data2/data-cp/zk/env_hub/miniconda312_qw3tts/lib/python3.12/site-packages/vllm/renderers/hf.py", line 505, in safe_apply_chat_template
+(APIServer pid=2977924)     raise ValueError(str(e)) from e
+(APIServer pid=2977924) ValueError: continue_final_message is set but the final message does not appear in the chat after applying the chat template! This can happen if the chat template deletes portions of the final message. Please verify the chat template and final message in your chat to ensure they are compatible.

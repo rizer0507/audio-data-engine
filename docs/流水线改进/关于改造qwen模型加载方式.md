@@ -1,0 +1,2 @@
+现在我改变了qwen模型的加载方式，现在通过vllm启动，我的vllm启动命令是：CUDA_VISBLE_DEVICES=1 vllm_serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B --gpu-memory-utilization 0.5 --host 127.0.0.1 --port 5559 --tensor-parallel-size 1 --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+我需要完全重构qwen_asr_batch.yaml这条流水线。

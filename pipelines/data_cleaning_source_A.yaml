@@ -18,19 +18,21 @@ output:
   manifest: datasets/manifests/cleaned_source_A.parquet
 
 # 步骤内样本级并发（子进程内生效；ManifestOperator 始终串行）
+# 开了 sharding 时，子进程实际以 sharding.workers 为准
 execution:
   executor: thread
-  workers: 4
-  max_in_flight: 0
+  workers: 32
+  max_in_flight: 128
   fail_fast: false
-  checkpoint_every: 1000
+  checkpoint_every: 5000
 
 # 顶层分片并行：一条 pipeline run 即完成 split+run+merge（无 GPU）
+# 128 核：约 64 进程 × 每进程 16 线程；磁盘抖则把 parallel_shards 降到 32
 sharding:
-  shards: 32
+  shards: 128
   strategy: hash
-  parallel_shards: 32
-  workers: 8
+  parallel_shards: 64
+  workers: 16
   executor: thread
 
 pipeline:
@@ -40,7 +42,7 @@ pipeline:
   - name: pcm_convert
     operator: audio.pcm_to_wav
     execution:
-      workers: 8
+      workers: 32
     params:
       sample_rate: 8000
       channels: 1
@@ -50,7 +52,7 @@ pipeline:
   - name: resample
     operator: audio.resample
     execution:
-      workers: 4
+      workers: 32
     params:
       sample_rate: 16000
       input_audio_key: pcm_wav
@@ -59,7 +61,7 @@ pipeline:
   - name: probe
     operator: quality.probe
     execution:
-      workers: 16
+      workers: 48
     params:
       input_audio_key: resampled_16k
 

@@ -245,3 +245,61 @@ python scripts/merge_qwen_results.py \
     --parquet datasets/manifests/qwen_asr_0823-test.parquet \
     --xlsx test0923_new.xlsx \
     --threshold 0.85
+
+
+
+python scripts/export_multi_asr_xlsx.py \
+    --manifest "D:/Work/asr数据/数据集/0827/qwen_asr_0827-test-qwen1.parquet" \
+    --manifest "D:/Work/asr数据/数据集/0827/sensevoice_asr_0827-test-sensevoice1.parquet" \
+    --manifest "D:/Work/asr数据/数据集/0827/qwen_asr_0827-test-qwen2.parquet" \
+    --manifest "D:/Work/asr数据/数据集/0827/sensevoice_asr_0827-test-sensevoice2.parquet" \
+    --models qwen1,sensevoice1,qwen2,sensevoice2 \
+    -o "D:/Work/asr数据/数据集/0827/0827-test-all.xlsx"
+
+python scripts/export_multi_asr_xlsx.py \
+    --manifest "D:/Work/asr数据/数据集/0827/qwen_asr_0827-test-qwen-sft.parquet" \
+    --models qwen-sft \
+    -o "D:/Work/asr数据/数据集/0827/0827-test-qwen-sft.xlsx"
+
+python scripts/export_multi_asr_xlsx.py \
+    --manifest "D:/Work/asr数据/数据集/0827/sensevoice_asr_0827-test-sensevoice1.parquet" \
+    --manifest "D:/Work/asr数据/数据集/0827/sensevoice_asr_0827-test-sensevoice2.parquet" \
+    --models sensevoice1-重跑,sensevoice2-重跑 \
+    -o "D:/Work/asr数据/数据集/0827/0827-test-all-sensevoice重跑.xlsx"
+
+python scripts/export_multi_asr_xlsx.py \
+    --manifest "D:/Work/asr数据/数据集/0827/qwen_asr_mt3000-qwen1.parquet" \
+    --manifest "D:/Work/asr数据/数据集/0827/qwen_asr_mt3000-qwen-sft.parquet" \
+    --models qwen1,qwen-sft \
+    -o "D:/Work/asr数据/数据集/0827/mt3000.xlsx"
+
+python scripts/align_xlsx_by_base.py \
+    --base C:/Users/rizer/Desktop/0827-test/总表-mt.xlsx::id \
+    --xlsx D:/Work/asr数据/数据集/0827/mt3000.xlsx \
+    --output-dir D:/Work/asr数据/数据集/0827/aligned
+    "D:\Work\asr数据\数据集\0827\AI面谈提示词原版测试字准率.xlsx"
+    D:/Work/asr数据/数据集/0827/mt3000.xlsx
+
+
+
+python scripts/calc_xlsx_char_acc.py \
+    --base C:/Users/rizer/Desktop/0827-test/总表.xlsx::label \
+    --hyp  C:/Users/rizer/Desktop/0827-test/总表.xlsx::qwen1_text \
+    --hyp  C:/Users/rizer/Desktop/0827-test/总表.xlsx::qwen-sft_text \
+    --char-acc  --edit-distance \
+    --output "C:/Users/rizer/Desktop/0827-test/总表_字准.xlsx"
+
+python scripts/calc_xlsx_char_acc.py \
+    --base C:/Users/rizer/Desktop/0827-test/总表.xlsx::label \
+    --hyp  C:/Users/rizer/Desktop/0827-test/总表.xlsx::qwen1_text \
+    --hyp  C:/Users/rizer/Desktop/0827-test/总表.xlsx::qwen-sft_text \
+    --char-acc --edit-distance \
+    --output "C:/Users/rizer/Desktop/0827-test/0827-test-字准.xlsx"
+
+python scripts/calc_xlsx_char_acc.py \
+  --base C:/Users/rizer/Desktop/0827-test/总表.xlsx::label \
+  --hyp  C:/Users/rizer/Desktop/0827-test/总表.xlsx::qwen1_text \
+  --hyp  C:/Users/rizer/Desktop/0827-test/总表.xlsx::qwen-sft_text \
+  --char-acc --edit-distance \
+  --group-by type \
+  -o "C:/Users/rizer/Desktop/0827-test/总表.xlsx-字准率.xlsx"

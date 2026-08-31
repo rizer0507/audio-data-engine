@@ -7,16 +7,12 @@
   - 可用 ``--truncate`` 只保留前 N 行并写一个 xlsx
 
 Example:
-  python scripts/export_parquets_to_xlsx.py \\
-    --input datasets/manifests/qwen_asr_mt3000.parquet \\
-    --input datasets/manifests/sensevoice_asr_mt3000.parquet \\
-    --output datasets/exports/asr_mt3000.xlsx
-
-  python scripts/export_parquets_to_xlsx.py \\
-    datasets/manifests/qwen_asr_*.parquet \\
-    -o datasets/exports/qwen_all.xlsx \\
-    --models qwen \\
-    --dedupe-id
+python scripts/export_parquets_to_xlsx.py \\
+  --input "D:/Work/asr数据/数据集/0827/qwen_asr_0827-test-qwen1.parquet" \\
+  --input "D:/Work/asr数据/数据集/0827/qwen_asr_0827-test-qwen2.parquet" \\
+  --input "D:/Work/asr数据/数据集/0827/sensevoice_asr_0827-test-sensevoice1.parquet" \\
+  --input "D:/Work/asr数据/数据集/0827/sensevoice_asr_0827-test-sensevoice2.parquet" \\
+  --output "D:/Work/asr数据/数据集/0827/0827-test-all.xlsx"
 """
 
 from __future__ import annotations
@@ -119,11 +115,26 @@ def flatten_generic_row(record: dict[str, Any]) -> dict[str, Any]:
     return {key: _jsonable(value) for key, value in record.items()}
 
 
+def _load_parquet_duckdb(path: Path) -> list[dict[str, Any]]:
+    """Fallback when pyarrow hits page-index / histogram incompatibilities."""
+    import duckdb
+
+    uri = path.resolve().as_posix().replace("'", "''")
+    frame = duckdb.connect().execute(f"SELECT * FROM read_parquet('{uri}')").df()
+    return frame.to_dict(orient="records")
+
+
 def load_parquet(path: Path) -> list[dict[str, Any]]:
     import pandas as pd
 
-    frame = pd.read_parquet(path)
-    return frame.to_dict(orient="records")
+    try:
+        frame = pd.read_parquet(path)
+        return frame.to_dict(orient="records")
+    except OSError as exc:
+        # e.g. file written by pyarrow 23, read by pyarrow 19:
+        # "Repetition level histogram size mismatch"
+        print(f"[WARN] pandas/pyarrow failed on {path.name}: {exc}; trying duckdb")
+        return _load_parquet_duckdb(path)
 
 
 def expand_inputs(raw_paths: list[str]) -> list[Path]:

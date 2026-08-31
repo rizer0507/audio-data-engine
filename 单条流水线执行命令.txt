@@ -37,7 +37,7 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 # → cleaned_<name> → qwen_asr_<name>.parquet
 export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
 
-audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name test_local --mock
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name test_local --force
 
 # 总进度（父进程控制台 + runs/<run>_shards/PROGRESS.log）：
 #   [PROGRESS] done=1234/8000 (15.4%) rate=42.30 samples/s ...
@@ -52,7 +52,7 @@ audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name test_local -
 # → cleaned_<name> → sensevoice_asr_<name>.parquet
 export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 
-audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name test_local --mock
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name test_local
 
 # 后续新模型同理（pipeline 命名 {model}_asr_batch）：
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000

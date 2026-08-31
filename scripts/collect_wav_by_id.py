@@ -21,8 +21,10 @@ Usage
 # 仅提供 xlsx，扫描 derived 目录（兜底）
 python scripts/collect_wav_by_id.py ids.xlsx
 
-# 提供 manifest，优先走快速路径
+# 提供 manifest，优先走快速路径（可传多个，按顺序合并，后者不覆盖已命中 id）
 python scripts/collect_wav_by_id.py ids.xlsx --manifest datasets/manifests/cleaned_source_A.parquet
+python scripts/collect_wav_by_id.py ids.xlsx \\
+    --manifest datasets/manifests/a.parquet datasets/manifests/b.parquet
 
 # 完整参数
 python scripts/collect_wav_by_id.py ids.xlsx \\
@@ -232,8 +234,10 @@ def main() -> None:
     parser.add_argument("xlsx", help="包含 id 列的 Excel 文件路径")
     parser.add_argument(
         "--manifest",
+        nargs="+",
         default=None,
-        help="manifest parquet 路径（快速路径，推荐）；不提供则扫描文件系统",
+        metavar="PATH",
+        help="manifest parquet 路径（快速路径，推荐；可传多个，按顺序合并）；不提供则扫描文件系统",
     )
     parser.add_argument(
         "--derived-dir",
@@ -299,15 +303,20 @@ def main() -> None:
     # Step 2: 查找文件路径
     id_to_path: dict[str, Path] = {}
 
-    # 优先使用 manifest
+    # 优先使用 manifest（可多个，按顺序合并；已命中的 id 不再被后续覆盖）
     if args.manifest:
-        manifest_path = Path(args.manifest)
-        if not manifest_path.is_absolute():
-            manifest_path = project_root / manifest_path
-        if manifest_path.exists():
-            id_to_path = load_from_manifest(manifest_path, target_ids, args.audio_key)
-        else:
-            print(f"[WARN] manifest 不存在: {manifest_path}，改用文件系统扫描", file=sys.stderr)
+        for raw in args.manifest:
+            remaining = target_ids - set(id_to_path.keys())
+            if not remaining:
+                break
+            manifest_path = Path(raw)
+            if not manifest_path.is_absolute():
+                manifest_path = project_root / manifest_path
+            if not manifest_path.exists():
+                print(f"[WARN] manifest 不存在: {manifest_path}，跳过", file=sys.stderr)
+                continue
+            found = load_from_manifest(manifest_path, remaining, args.audio_key)
+            id_to_path.update(found)
 
     # 若 manifest 未能命中全部 id，补充扫描文件系统
     remaining = target_ids - set(id_to_path.keys())
