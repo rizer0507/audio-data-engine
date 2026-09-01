@@ -10,7 +10,6 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-import audio_engine.operators  # noqa: F401 — register all operators
 from audio_engine.core.manifest import Manifest
 from audio_engine.core.pipeline import (
     EXECUTORS,
@@ -41,6 +40,8 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+import audio_engine.operators  # noqa: F401, E402 — register all operators
 
 MANIFESTS_DIR = Path("datasets/manifests")
 EXPORTS_DIR = Path("data/exports")
@@ -922,5 +923,10 @@ def export_dataset(
     console.print(f"[green]OK[/green] Exported to [cyan]{out}[/cyan]")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console entry point for setuptools / typer."""
     app()
+
+
+if __name__ == "__main__":
+    main()
