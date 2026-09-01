@@ -1,0 +1,38 @@
+# 可恢复的任务级 DAG 示例。复制后替换 release、训练命令、模型路径和评测输入。
+# 人工 review 是显式审批边界：先完成 review import + release build，再启动本任务。
+name: train_and_evaluate
+nodes:
+  - id: train_candidate
+    command:
+      - audio-data
+      - training
+      - run
+      - --release
+      - ds_source_a_v1
+      - --recipe
+      - recipes/qwen_sft.yaml
+      - --command
+      - python /trainer/train.py
+      - --checkpoint
+      - /models/qwen_sft_v1
+      - --model-id
+      - qwen_sft_v1
+      - --base-model
+      - qwen_asr
+    outputs:
+      - /models/qwen_sft_v1
+
+  - id: evaluate_candidate
+    depends_on: [train_candidate]
+    command:
+      - audio-data
+      - pipeline
+      - run
+      - pipelines/evaluate_registered_models.yaml
+    env:
+      EVAL_MANIFEST: manifest_replace_with_eval_artifact_id
+      BASELINE_MODEL_ID: qwen_base_v1
+      CANDIDATE_MODEL_ID: qwen_sft_v1
+      EVAL_OUTPUT: datasets/manifests/asr_eval_metrics_source_A.parquet
+    outputs:
+      - datasets/manifests/asr_eval_metrics_source_A.parquet

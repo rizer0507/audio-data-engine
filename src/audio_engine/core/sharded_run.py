@@ -15,6 +15,7 @@ from loguru import logger
 import yaml
 
 from audio_engine.core.manifest import Manifest
+from audio_engine.core.catalog import register_manifest_output
 from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, ShardingConfig
 from audio_engine.core.progress import (
     collect_sharded_progress,
@@ -193,7 +194,16 @@ def run_staged_pipelines(
                 out.parent.mkdir(parents=True, exist_ok=True)
                 manifest.save(out)
                 manifest.save(out.with_suffix(".jsonl"))
+                artifact = register_manifest_output(
+                    out,
+                    catalog_dir=cfg.catalog_dir,
+                    pipeline=cfg.name,
+                    run_dir=stage_root,
+                    config_digest=cfg.digest(),
+                    sample_count=len(manifest),
+                )
                 emit(f"Stage {index} done: {len(manifest)} samples → {out}")
+                emit(f"Registered artifact: {artifact.artifact_id}")
             else:
                 emit(f"Stage {index} done: {len(manifest)} samples")
 
@@ -367,9 +377,7 @@ def spawn_shard_processes(
     total_samples = sum(shard_totals.values())
     emit(f"Running {len(shards)} shards, {parallel} at a time ({total_samples} samples)")
     if gpu_ids:
-        emit(
-            f"  GPUs: {','.join(gpu_ids)}  instances-per-gpu: {sharding.instances_per_gpu}"
-        )
+        emit(f"  GPUs: {','.join(gpu_ids)}  instances-per-gpu: {sharding.instances_per_gpu}")
     if ingest_step_names:
         emit(f"  Dropping ingest steps: {', '.join(ingest_step_names)}")
     emit(f"  Progress log: {run_root / 'PROGRESS.log'}")
@@ -478,9 +486,7 @@ def merge_shard_outputs(
     if missing:
         raise FileNotFoundError(f"Missing shard outputs: {missing}")
     if expected_shards is not None and len(paths) != expected_shards:
-        raise ValueError(
-            f"Expected {expected_shards} shard outputs, found {len(paths)}"
-        )
+        raise ValueError(f"Expected {expected_shards} shard outputs, found {len(paths)}")
     manifests = [Manifest.load(p) for p in paths]
     return Manifest.merge(manifests)
 
@@ -504,8 +510,7 @@ def run_sharded_pipeline(
     path = Path(config_path or cfg.config_path or "")
     if not path.is_file():
         raise ValueError(
-            "Sharded run needs the pipeline YAML path "
-            "(PipelineConfig.config_path or config_path=)"
+            "Sharded run needs the pipeline YAML path (PipelineConfig.config_path or config_path=)"
         )
     if not cfg.output_manifest:
         raise ValueError("Sharded run requires output.manifest")
@@ -562,7 +567,16 @@ def run_sharded_pipeline(
     out.parent.mkdir(parents=True, exist_ok=True)
     merged.save(out)
     merged.save(out.with_suffix(".jsonl"))
+    artifact = register_manifest_output(
+        out,
+        catalog_dir=cfg.catalog_dir,
+        pipeline=cfg.name,
+        run_dir=root,
+        config_digest=cfg.digest(),
+        sample_count=len(merged),
+    )
     emit(f"Merged {report['inputs']} shards → {out} ({report['total_out']} samples)")
+    emit(f"Registered artifact: {artifact.artifact_id}")
 
     return ShardedRunResult(
         manifest=merged,

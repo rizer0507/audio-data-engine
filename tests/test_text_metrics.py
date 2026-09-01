@@ -96,5 +96,40 @@ def test_aggregate_requires_aligned_ids(tmp_path: Path):
     with pytest.raises(ValueError, match="not aligned"):
         operator.run(
             [Sample(id="b", source_path="b.wav")],
-            OperatorConfig(params={"manifests": [{"model": "sensevoice", "path": str(other)}]}),
+            OperatorConfig(
+                params={"manifests": [{"model": "sensevoice", "path": str(other)}]},
+                run_dir=tmp_path / "run-missing",
+                step_name="aggregate",
+            ),
         )
+    assert (tmp_path / "run-missing/reports/aggregate_alignment.json").exists()
+
+
+def test_aggregate_rejects_same_id_with_different_audio_hash(tmp_path: Path):
+    other = tmp_path / "sense.parquet"
+    Manifest(
+        [
+            Sample(
+                id="same",
+                source_path="incoming.wav",
+                sha256="b" * 64,
+                transcripts={"sensevoice": {"text": "需要"}},
+            )
+        ]
+    ).save(other)
+    operator = OperatorRegistry.get("quality.aggregate_manifests")
+    config = OperatorConfig(
+        params={"manifests": [{"model": "sensevoice", "path": str(other)}]},
+        run_dir=tmp_path / "run-hash",
+        step_name="aggregate",
+    )
+
+    with pytest.raises(ValueError, match="audio hashes are not aligned"):
+        operator.run(
+            [Sample(id="same", source_path="base.wav", sha256="a" * 64)],
+            config,
+        )
+
+    report = (tmp_path / "run-hash/reports/aggregate_alignment.json").read_text(encoding="utf-8")
+    assert '"sha256_mismatches": 1' in report
+    assert '"aligned": false' in report

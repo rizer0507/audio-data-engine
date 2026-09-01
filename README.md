@@ -54,6 +54,65 @@ audio-data pipeline run pipelines/denoise_qwen.yaml --mock
 流水线是唯一的生产运行入口。每次运行都会在 `runs/<时间>_<名称>/` 保存实际配置、
 manifest、metrics、checkpoint 和 `run.log`，无需再手工串联命令。
 
+当流水线配置了 `output.manifest` 时，最终 Parquet 会自动注册到本地不可变产物目录
+`data/catalog/`，运行目录同时写入 `artifact.json`。后续命令可以使用 artifact ID，避免人工查找
+上一阶段的文件：
+
+```bash
+audio-data artifact list --kind manifest
+audio-data artifact show manifest_<内容摘要>_<记录摘要> --verify
+audio-data artifact path manifest_<内容摘要>_<记录摘要>
+audio-data stats manifest_<内容摘要>_<记录摘要>
+```
+
+`--verify` 会重新计算文件 SHA-256；文件丢失或在注册后被修改时命令会失败。已有文件可通过
+`audio-data artifact register <path> --kind manifest` 纳入目录。目录位置可在 Pipeline YAML 中用
+`catalog_dir` 配置，默认是 `data/catalog`。
+
+### 数据集生产、训练与评测闭环
+
+多模型指标完成后，使用有版本的规则分拣，并只导出需要人工处理的 review queue：
+
+```bash
+audio-data pipeline run pipelines/classify_dataset.yaml
+audio-data review export classified_source_A --output review.xlsx --revision review_v1
+audio-data review import classified_source_A --input review.xlsx \
+  --output datasets/manifests/reviewed_source_A.parquet --revision review_v1
+```
+
+审核完成后按说话人或会话分组拆分并冻结不可变 release。命令会校验每条数据都有 accepted Gold，
+输出并注册 train/dev/test Manifest：
+
+```bash
+audio-data release build reviewed_source_A --id ds_source_a_v1 \
+  --policy-version selection_zh_asr_v1 --normalization-version zh_asr_v1 \
+  --gold-revision review_v1 --group-key speaker_id --split-seed 42
+```
+
+通过窄接口调用外部训练框架。训练进程通过环境变量获得 train/dev Manifest、recipe 和 checkpoint
+路径；只有进程成功且 checkpoint 存在时才自动注册模型：
+
+```bash
+audio-data training run --release ds_source_a_v1 --recipe recipes/qwen_sft.yaml \
+  --command "python /trainer/train.py" --checkpoint /models/qwen_sft_v1 \
+  --model-id qwen_sft_v1 --base-model qwen_asr
+```
+
+`pipelines/evaluate_registered_models.yaml` 直接从 Model Registry 解析 baseline/candidate checkpoint，
+串行推理并释放旧模型显存；随后生成 `reports/evaluation.json`，计算 corpus CER、业务桶指标，并
+执行整体与 hardcase 回归门禁。门禁失败时保留报告并让流水线失败。
+
+训练与评测可以放入可恢复的任务 DAG；成功节点及其声明产物仍存在时会跳过，失败节点保留独立
+stdout/stderr 和原子状态，修复外部问题后执行同一任务即可继续：
+
+```bash
+audio-data task run tasks/train_and_evaluate.example.yaml
+audio-data task status runs/tasks/<task_id>
+```
+
+完整示例见 `tasks/train_and_evaluate.example.yaml`。人工审核被刻意保留为显式审批边界，不会在无人
+确认时自动越过并启动训练。
+
 ### 自由脚本与高并发
 
 临时处理逻辑无需修改 core 或注册新算子。编写一个含
