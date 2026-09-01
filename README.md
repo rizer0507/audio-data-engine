@@ -149,6 +149,12 @@ audio-data operators
 
 ASR Operator 继承 `BaseASROperator`，实现 `transcribe()` 即可。
 
+## 自动训练与评测闭环规划
+
+当前引擎已覆盖样本级流水线、分片、断点恢复和多 ASR 聚合。关于数据自动分拣、人工审核、
+不可变数据集版本、外部训练框架接入、模型注册以及新旧模型回归评测的整体改造，见
+[全自动训练与评测闭环改造方案](docs/流水线改进/全自动训练与评测闭环改造方案.md)。
+
 ## 技术栈
 
 Python 3.10+ · Pydantic · Typer · PyYAML · Pandas · PyArrow · SoundFile · SciPy · Loguru
