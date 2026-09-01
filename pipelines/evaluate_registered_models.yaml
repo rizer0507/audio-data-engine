@@ -1,0 +1,53 @@
+# 工序⑤：在冻结评测 Manifest 上串行运行注册表中的 baseline/candidate，计算指标并执行门禁。
+# 示例：
+#   EVAL_MANIFEST=manifest_xxx BASELINE_MODEL_ID=qwen_base_v1 \
+#   CANDIDATE_MODEL_ID=qwen_sft_v1 EVAL_OUTPUT=data/eval/run1.parquet \
+#     audio-data pipeline run pipelines/evaluate_registered_models.yaml
+name: evaluate_registered_models
+input:
+  manifest: ${EVAL_MANIFEST}
+output:
+  manifest: ${EVAL_OUTPUT}
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: baseline_inference
+    operator: asr.qwen_batch
+    params:
+      registered_model: ${BASELINE_MODEL_ID}
+      transcript_key: old_model
+      input_audio_key: resampled_16k
+      config_path: configs/asr/qwen_asr.yaml
+
+  - name: release_baseline
+    operator: runtime.release_asr_models
+
+  - name: candidate_inference
+    operator: asr.qwen_batch
+    params:
+      registered_model: ${CANDIDATE_MODEL_ID}
+      transcript_key: new_model
+      input_audio_key: resampled_16k
+      config_path: configs/asr/qwen_asr.yaml
+
+  - name: evaluation_metrics
+    operator: quality.text_metrics
+    params:
+      config_path: configs/metrics/model_eval.yaml
+      normalization_path: configs/normalization/zh_asr_v1.yaml
+
+  - name: evaluation_report
+    operator: quality.evaluation_report
+    params:
+      baseline_prefix: old_model
+      candidate_prefix: new_model
+      bucket_key: classification_bucket
+      fail_on_regression: true
+      gates:
+        - name: overall_cer_no_regression
+          max_cer_regression: 0.0
+        - name: hardcase_cer_no_regression
+          bucket: hardcase
+          max_cer_regression: 0.0

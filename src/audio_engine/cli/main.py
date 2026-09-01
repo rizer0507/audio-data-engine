@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,14 @@ from rich.table import Table
 
 import audio_engine.operators  # noqa: F401 — register all operators
 from audio_engine.core.manifest import Manifest
+from audio_engine.core.operator import OperatorConfig
+from audio_engine.core.catalog import (
+    ArtifactCatalog,
+    DatasetRelease,
+    ModelVersion,
+    current_git_commit,
+    register_manifest_output,
+)
 from audio_engine.core.pipeline import (
     EXECUTORS,
     ExecutionConfig,
@@ -34,6 +43,8 @@ from audio_engine.core.source_naming import (
     validate_source_name,
 )
 from audio_engine.core.transcript_reconcile import reconcile_transcripts
+from audio_engine.core.training import run_training_job
+from audio_engine.core.task import TaskRunner, load_task
 
 app = typer.Typer(
     name="audio-data",
@@ -45,6 +56,33 @@ console = Console()
 MANIFESTS_DIR = Path("datasets/manifests")
 EXPORTS_DIR = Path("data/exports")
 RUNS_DIR = Path("runs")
+CATALOG_DIR = Path("data/catalog")
+
+
+def _register_output(
+    path: Path,
+    *,
+    pipeline: str,
+    run_dir: Path,
+    catalog_dir: Path,
+    sample_count: int,
+    config_digest: str | None = None,
+) -> str:
+    record = register_manifest_output(
+        path,
+        catalog_dir=catalog_dir,
+        pipeline=pipeline,
+        run_dir=run_dir,
+        config_digest=config_digest,
+        sample_count=sample_count,
+    )
+    console.print(f"  Artifact:   [cyan]{record.artifact_id}[/cyan]")
+    return record.artifact_id
+
+
+def _review_queue_id(dataset_path: Path, bucket: str, revision: str) -> str:
+    raw = f"{dataset_path.resolve()}\0{bucket}\0{revision}"
+    return f"review_{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
 
 
 def _apply_aggregate_manifests(cfg: PipelineConfig, manifests: list[dict]) -> None:
@@ -62,6 +100,11 @@ def _apply_aggregate_manifests(cfg: PipelineConfig, manifests: list[dict]) -> No
 
 
 def _resolve_dataset(name: str) -> Path:
+    if name.startswith("manifest_"):
+        try:
+            return Path(ArtifactCatalog(CATALOG_DIR).get(name, verify=True).uri)
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
     return Manifest.resolve_path(name, MANIFESTS_DIR)
 
 
@@ -152,6 +195,14 @@ def ingest(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(out_path)
     result.save(out_path.with_suffix(".jsonl"))
+    _register_output(
+        out_path,
+        pipeline=cfg.name,
+        run_dir=runner.run_dir,
+        catalog_dir=cfg.catalog_dir,
+        sample_count=len(result),
+        config_digest=cfg.digest(),
+    )
 
     stats = result.stats()
     console.print(f"[green]OK[/green] {stats['files']} files discovered")
@@ -226,10 +277,20 @@ def run_operator(
     source_out = manifest_path
     result.save(source_out)
     result.save(source_out.with_suffix(".jsonl"))
+    _register_output(
+        source_out,
+        pipeline=pipeline_cfg.name,
+        run_dir=runner.run_dir,
+        catalog_dir=pipeline_cfg.catalog_dir,
+        sample_count=len(result),
+        config_digest=pipeline_cfg.digest(),
+    )
 
     m = runner.metrics.to_dict()
     console.print(f"[green]OK[/green] Operator '{op_name}' finished")
-    console.print(f"  Processed: {m['processed']}, Cache hits: {m['cache_hits']}, Skipped: {m['skipped']}")
+    console.print(
+        f"  Processed: {m['processed']}, Cache hits: {m['cache_hits']}, Skipped: {m['skipped']}"
+    )
     console.print(f"  Run dir: [cyan]{runner.run_dir}[/cyan]")
 
 
@@ -372,9 +433,7 @@ def pipeline_run(
     cfg = PipelineConfig.from_yaml(config_path)
     cfg.force = force or cfg.force
     cfg.mock = mock or cfg.mock
-    cfg.execution_override = _execution_override(
-        workers, executor, max_in_flight, checkpoint_every
-    )
+    cfg.execution_override = _execution_override(workers, executor, max_in_flight, checkpoint_every)
     cfg.resume = resume or cfg.resume
 
     cli_joins: list[dict] | None = None
@@ -417,9 +476,7 @@ def pipeline_run(
         console.print(f"  Run name:    [cyan]{cfg.name}[/cyan]")
         if overrides.get("aggregate_manifests"):
             for item in overrides["aggregate_manifests"]:
-                console.print(
-                    f"  Join:        [cyan]{item['model']}[/cyan] ← {item['path']}"
-                )
+                console.print(f"  Join:        [cyan]{item['model']}[/cyan] ← {item['path']}")
     elif cli_joins is not None:
         _apply_aggregate_manifests(cfg, cli_joins)
         for item in cli_joins:
@@ -474,6 +531,14 @@ def pipeline_run(
         result.save(out)
         result.save(out.with_suffix(".jsonl"))
         console.print(f"  Output: [cyan]{out}[/cyan]")
+        _register_output(
+            out,
+            pipeline=cfg.name,
+            run_dir=runner.run_dir,
+            catalog_dir=cfg.catalog_dir,
+            sample_count=len(result),
+            config_digest=cfg.digest(),
+        )
     elif cfg.input_manifest and not Path(cfg.input_manifest).is_absolute():
         # Save back to input manifest only when no dedicated output is configured
         try:
@@ -487,6 +552,450 @@ def pipeline_run(
     console.print(f"[green]OK[/green] Pipeline '{cfg.name}' finished")
     console.print(f"  Total: {m['total']}, Processed: {m['processed']}, Failed: {m['failed']}")
     console.print(f"  Run dir: [cyan]{runner.run_dir}[/cyan]")
+
+
+artifact_app = typer.Typer(help="Immutable artifact catalog commands")
+app.add_typer(artifact_app, name="artifact")
+
+
+@artifact_app.command("register")
+def artifact_register(
+    path: Path = typer.Argument(..., help="Existing artifact file"),
+    kind: str = typer.Option("manifest", "--kind", help="Artifact kind"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Register an existing file without changing or copying its payload."""
+    try:
+        record = ArtifactCatalog(catalog_dir).register_file(path, kind=kind)  # type: ignore[arg-type]
+    except (FileNotFoundError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]OK[/green] registered [cyan]{record.artifact_id}[/cyan]")
+    console.print(f"  URI: {record.uri}")
+    console.print(f"  SHA256: {record.sha256}")
+
+
+@artifact_app.command("list")
+def artifact_list(
+    kind: Optional[str] = typer.Option(None, "--kind", help="Filter by artifact kind"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """List catalog records newest first."""
+    try:
+        records = ArtifactCatalog(catalog_dir).list(kind=kind)  # type: ignore[arg-type]
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    table = Table(title="Artifact Catalog")
+    table.add_column("Artifact ID", style="cyan")
+    table.add_column("Kind")
+    table.add_column("Created (UTC)")
+    table.add_column("Pipeline")
+    table.add_column("URI")
+    for record in records:
+        table.add_row(
+            record.artifact_id,
+            record.kind,
+            record.created_at,
+            record.producer.pipeline or "-",
+            record.uri,
+        )
+    console.print(table)
+
+
+@artifact_app.command("show")
+def artifact_show(
+    artifact_id: str = typer.Argument(...),
+    verify: bool = typer.Option(False, "--verify", help="Re-hash payload and verify immutability"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Print a record; --verify also detects missing or modified payloads."""
+    try:
+        record = ArtifactCatalog(catalog_dir).get(artifact_id, verify=verify)
+    except (KeyError, FileNotFoundError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print_json(data=record.model_dump(mode="json"))
+
+
+@artifact_app.command("path")
+def artifact_path(
+    artifact_id: str = typer.Argument(...),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Resolve an artifact id to the immutable payload location."""
+    try:
+        record = ArtifactCatalog(catalog_dir).get(artifact_id, verify=True)
+    except (KeyError, FileNotFoundError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(record.uri)
+
+
+release_app = typer.Typer(help="Immutable dataset release commands")
+app.add_typer(release_app, name="release")
+
+
+@release_app.command("create")
+def release_create(
+    release_id: str = typer.Option(..., "--id"),
+    source: str = typer.Option(..., "--source", help="Source manifest artifact id"),
+    train: str = typer.Option(..., "--train", help="Train manifest artifact id"),
+    dev: str = typer.Option(..., "--dev", help="Dev manifest artifact id"),
+    test: str = typer.Option(..., "--test", help="Test manifest artifact id"),
+    policy_version: str = typer.Option(..., "--policy-version"),
+    normalization_version: str = typer.Option(..., "--normalization-version"),
+    gold_revision: str = typer.Option(..., "--gold-revision"),
+    split_seed: int = typer.Option(..., "--split-seed"),
+    group_key: str = typer.Option(..., "--group-key"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Freeze existing manifest artifacts as one reproducible dataset release."""
+    catalog = ArtifactCatalog(catalog_dir)
+    outputs = {"train": train, "dev": dev, "test": test}
+    try:
+        counts = {
+            split: int(catalog.get(artifact_id, verify=True).metadata.get("sample_count", 0))
+            for split, artifact_id in outputs.items()
+        }
+        release = catalog.put_release(
+            DatasetRelease(
+                release_id=release_id,
+                source_artifact_id=source,
+                outputs=outputs,
+                policy_version=policy_version,
+                normalization_version=normalization_version,
+                gold_revision=gold_revision,
+                split_seed=split_seed,
+                group_key=group_key,
+                counts=counts,
+                git_commit=current_git_commit(),
+            )
+        )
+    except (KeyError, FileNotFoundError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]OK[/green] frozen dataset release [cyan]{release.release_id}[/cyan]")
+
+
+@release_app.command("show")
+def release_show(
+    release_id: str,
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    try:
+        release = ArtifactCatalog(catalog_dir).get_release(release_id)
+    except KeyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print_json(data=release.model_dump(mode="json"))
+
+
+@release_app.command("build")
+def release_build(
+    dataset: str = typer.Argument(..., help="Reviewed manifest path/name/artifact id"),
+    release_id: str = typer.Option(..., "--id"),
+    policy_version: str = typer.Option(..., "--policy-version"),
+    normalization_version: str = typer.Option(..., "--normalization-version"),
+    gold_revision: str = typer.Option(..., "--gold-revision"),
+    group_key: str = typer.Option("speaker_id", "--group-key"),
+    split_seed: int = typer.Option(42, "--split-seed"),
+    train_ratio: float = typer.Option(0.8, "--train-ratio"),
+    dev_ratio: float = typer.Option(0.1, "--dev-ratio"),
+    test_ratio: float = typer.Option(0.1, "--test-ratio"),
+    stratify_key: Optional[str] = typer.Option("classification_bucket", "--stratify-key"),
+    output_dir: Path = typer.Option(Path("data/releases"), "--output-dir"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Validate reviewed Gold, split by group, register outputs and freeze a release."""
+    catalog = ArtifactCatalog(catalog_dir)
+    if dataset.startswith("manifest_"):
+        try:
+            source_record = catalog.get(dataset, verify=True)
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        source_path = Path(source_record.uri)
+    else:
+        source_path = _resolve_dataset(dataset)
+    manifest = Manifest.load(source_path)
+    if not dataset.startswith("manifest_"):
+        source_record = catalog.register_file(
+            source_path, kind="manifest", metadata={"sample_count": len(manifest)}
+        )
+    invalid = [
+        sample.id
+        for sample in manifest
+        if sample.labels.get("annotation_state") not in {"human_accepted", "auto_accepted"}
+        or not str(sample.labels.get("gold_text") or "").strip()
+    ]
+    if invalid:
+        raise typer.BadParameter(
+            f"release contains {len(invalid)} samples without accepted Gold: {invalid[:10]}"
+        )
+    ratios = {"train": train_ratio, "dev": dev_ratio, "test": test_ratio}
+    try:
+        split_samples = OperatorRegistry.get("quality.split_dataset").run(
+            manifest.samples,
+            OperatorConfig(
+                params={
+                    "group_key": group_key,
+                    "stratify_key": stratify_key,
+                    "seed": split_seed,
+                    "ratios": ratios,
+                }
+            ),
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    release_dir = output_dir / release_id
+    run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_release_{release_id}"
+    outputs: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    for split in ("train", "dev", "test"):
+        subset = Manifest([sample for sample in split_samples if sample.labels["split"] == split])
+        path = release_dir / f"{split}.parquet"
+        subset.save(path)
+        subset.save(path.with_suffix(".jsonl"))
+        record = register_manifest_output(
+            path,
+            catalog_dir=catalog_dir,
+            pipeline="release.build",
+            run_dir=run_dir / split,
+            sample_count=len(subset),
+        )
+        outputs[split] = record.artifact_id
+        counts[split] = len(subset)
+    release = catalog.put_release(
+        DatasetRelease(
+            release_id=release_id,
+            source_artifact_id=source_record.artifact_id,
+            outputs=outputs,
+            policy_version=policy_version,
+            normalization_version=normalization_version,
+            gold_revision=gold_revision,
+            split_seed=split_seed,
+            group_key=group_key,
+            counts=counts,
+            git_commit=current_git_commit(),
+        )
+    )
+    console.print(f"[green]OK[/green] built release [cyan]{release.release_id}[/cyan]")
+    console.print(f"  Counts: {counts}")
+
+
+model_app = typer.Typer(help="Trained model registry commands")
+app.add_typer(model_app, name="model")
+
+
+@model_app.command("register")
+def model_register(
+    model_id: str = typer.Option(..., "--id"),
+    base_model: str = typer.Option(..., "--base-model"),
+    release_id: str = typer.Option(..., "--release"),
+    recipe: str = typer.Option(..., "--recipe"),
+    checkpoint: Path = typer.Option(..., "--checkpoint"),
+    status: str = typer.Option("ready", "--status"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    if not checkpoint.exists():
+        raise typer.BadParameter(f"checkpoint does not exist: {checkpoint}")
+    try:
+        model = ArtifactCatalog(catalog_dir).put_model(
+            ModelVersion(
+                model_id=model_id,
+                base_model=base_model,
+                training_release_id=release_id,
+                training_recipe=recipe,
+                checkpoint_uri=str(checkpoint.resolve()),
+                status=status,  # type: ignore[arg-type]
+                git_commit=current_git_commit(),
+            )
+        )
+    except (KeyError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]OK[/green] registered model [cyan]{model.model_id}[/cyan]")
+
+
+@model_app.command("show")
+def model_show(
+    model_id: str,
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    try:
+        model = ArtifactCatalog(catalog_dir).get_model(model_id)
+    except KeyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print_json(data=model.model_dump(mode="json"))
+
+
+training_app = typer.Typer(help="External training framework adapter")
+app.add_typer(training_app, name="training")
+
+
+@training_app.command("run")
+def training_run(
+    release_id: str = typer.Option(..., "--release"),
+    recipe: Path = typer.Option(..., "--recipe"),
+    command: str = typer.Option(..., "--command", help="Trainer command, executed without a shell"),
+    checkpoint: Path = typer.Option(..., "--checkpoint"),
+    model_id: str = typer.Option(..., "--model-id"),
+    base_model: str = typer.Option(..., "--base-model"),
+    jobs_dir: Path = typer.Option(Path("runs/training"), "--jobs-dir"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Run an external trainer and register its checkpoint on verified success."""
+    try:
+        job, model = run_training_job(
+            catalog=ArtifactCatalog(catalog_dir),
+            jobs_dir=jobs_dir,
+            release_id=release_id,
+            recipe=recipe,
+            command=command,
+            checkpoint=checkpoint,
+            model_id=model_id,
+            base_model=base_model,
+        )
+    except (KeyError, FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]OK[/green] training job [cyan]{job.job_id}[/cyan] succeeded")
+    console.print(f"  Model: [cyan]{model.model_id}[/cyan]")
+    console.print(f"  Checkpoint: {model.checkpoint_uri}")
+
+
+review_app = typer.Typer(help="Human review queue import/export")
+app.add_typer(review_app, name="review")
+
+
+@review_app.command("export")
+def review_export(
+    dataset: str = typer.Argument(...),
+    output: Path = typer.Option(..., "--output", "-o"),
+    bucket: str = typer.Option("review_queue", "--bucket"),
+    revision: str = typer.Option(..., "--revision"),
+) -> None:
+    dataset_path = _resolve_dataset(dataset)
+    manifest = Manifest.load(dataset_path)
+    queue_id = _review_queue_id(dataset_path, bucket, revision)
+    rows = []
+    for sample in manifest:
+        if sample.labels.get("classification_bucket") != bucket:
+            continue
+        row = {
+            "sample_id": sample.id,
+            "sha256": sample.sha256,
+            "queue_id": queue_id,
+            "review_revision": revision,
+            "source_path": sample.source_path,
+            "decision": "",
+            "gold_text": "",
+            "reason": "",
+        }
+        row.update({f"{key}_text": sample.get_transcript_text(key) for key in sample.transcripts})
+        rows.append(row)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    import pandas as pd
+
+    pd.DataFrame(rows).to_excel(output, index=False)
+    console.print(f"[green]OK[/green] exported {len(rows)} review rows to [cyan]{output}[/cyan]")
+
+
+@review_app.command("import")
+def review_import(
+    dataset: str = typer.Argument(...),
+    review_file: Path = typer.Option(..., "--input"),
+    output: Path = typer.Option(..., "--output", "-o"),
+    expected_revision: str = typer.Option(..., "--revision"),
+    bucket: str = typer.Option("review_queue", "--bucket"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    import pandas as pd
+
+    dataset_path = _resolve_dataset(dataset)
+    manifest = Manifest.load(dataset_path)
+    frame = pd.read_excel(review_file, dtype=str).fillna("")
+    required = {
+        "sample_id",
+        "sha256",
+        "queue_id",
+        "review_revision",
+        "decision",
+        "gold_text",
+        "reason",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise typer.BadParameter(f"review file missing columns: {sorted(missing)}")
+    if frame["sample_id"].duplicated().any():
+        raise typer.BadParameter("review file contains duplicate sample_id")
+    expected_queue_id = _review_queue_id(dataset_path, bucket, expected_revision)
+    if set(frame["queue_id"]) != {expected_queue_id}:
+        raise typer.BadParameter(f"review queue identity mismatch: expected {expected_queue_id}")
+    indexed = {sample.id: sample.model_copy(deep=True) for sample in manifest}
+    for row in frame.to_dict(orient="records"):
+        sample_id = str(row["sample_id"])
+        if sample_id not in indexed:
+            raise typer.BadParameter(f"unknown review sample_id: {sample_id}")
+        sample = indexed[sample_id]
+        if str(row["sha256"]) != sample.sha256:
+            raise typer.BadParameter(f"audio hash changed for review sample: {sample_id}")
+        if str(row["review_revision"]) != expected_revision:
+            raise typer.BadParameter(f"stale review revision for sample: {sample_id}")
+        existing_revision = sample.labels.get("annotation_revision")
+        existing_state = sample.labels.get("annotation_state")
+        if (
+            existing_state in {"human_accepted", "rejected"}
+            and existing_revision != expected_revision
+        ):
+            raise typer.BadParameter(
+                f"refusing to overwrite annotated sample {sample_id} revision {existing_revision}"
+            )
+        decision = str(row["decision"]).strip()
+        if decision not in {"accepted", "rejected"}:
+            raise typer.BadParameter(f"invalid decision for {sample_id}: {decision!r}")
+        gold_text = str(row["gold_text"]).strip()
+        if decision == "accepted" and not gold_text:
+            raise typer.BadParameter(f"accepted sample requires gold_text: {sample_id}")
+        sample.labels.update(
+            {
+                "annotation_state": "human_accepted" if decision == "accepted" else "rejected",
+                "gold_text": gold_text,
+                "annotation_revision": expected_revision,
+                "annotation_reason": str(row["reason"]).strip(),
+            }
+        )
+    result = Manifest([indexed[sample.id] for sample in manifest])
+    result.save(output)
+    result.save(output.with_suffix(".jsonl"))
+    run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_review_import"
+    record = register_manifest_output(
+        output,
+        catalog_dir=catalog_dir,
+        pipeline="review.import",
+        run_dir=run_dir,
+        sample_count=len(result),
+    )
+    console.print(f"[green]OK[/green] imported review decisions to [cyan]{output}[/cyan]")
+    console.print(f"  Artifact: [cyan]{record.artifact_id}[/cyan]")
+
+
+task_app = typer.Typer(help="Resumable task DAG orchestration")
+app.add_typer(task_app, name="task")
+
+
+@task_app.command("run")
+def task_run(
+    config: Path = typer.Argument(..., help="Task DAG YAML"),
+    runs_dir: Path = typer.Option(Path("runs/tasks"), "--runs-dir"),
+) -> None:
+    try:
+        runner = TaskRunner(load_task(config), runs_dir=runs_dir)
+        state = runner.run()
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]OK[/green] task [cyan]{state.task_id}[/cyan] succeeded")
+    console.print(f"  Run dir: {runner.run_dir}")
+
+
+@task_app.command("status")
+def task_status(run_dir: Path = typer.Argument(..., help="Task run directory")) -> None:
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        raise typer.BadParameter(f"task state not found: {state_path}")
+    console.print_json(state_path.read_text(encoding="utf-8"))
 
 
 @pipeline_app.command("progress")
@@ -768,8 +1277,7 @@ def manifest_merge(
 
     if expected_shards is not None and len(paths) != expected_shards:
         raise typer.BadParameter(
-            f"Expected {expected_shards} shard files, found {len(paths)}: "
-            f"{[p.name for p in paths]}"
+            f"Expected {expected_shards} shard files, found {len(paths)}: {[p.name for p in paths]}"
         )
 
     manifests = [Manifest.load(p) for p in paths]
@@ -829,14 +1337,18 @@ def compare(
         "mismatch": int(len(mismatches)),
         "match_rate": round(float(df["match"].mean()), 4) if len(df) else 0,
     }
-    (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     if len(mismatches):
         badcases_path = run_dir / "badcases.xlsx"
         mismatches[["id", "source_path", col_a, col_b]].to_excel(badcases_path, index=False)
         console.print(f"Badcases exported: [cyan]{badcases_path}[/cyan]")
 
-    console.print(f"[green]OK[/green] Compare finished: {summary['match']}/{summary['total']} match")
+    console.print(
+        f"[green]OK[/green] Compare finished: {summary['match']}/{summary['total']} match"
+    )
     console.print(f"  Run dir: [cyan]{run_dir}[/cyan]")
 
 
@@ -875,9 +1387,7 @@ def reconcile_transcript_files(
         raise typer.BadParameter(str(exc)) from exc
 
     summary_path = output.with_suffix(".summary.json")
-    summary_path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     console.print(f"[green]OK[/green] 转写清洗和比对完成: [cyan]{output}[/cyan]")
     console.print(
         f"  一致: {summary['consistent']}/{summary['total']} "
@@ -896,7 +1406,9 @@ def list_operators() -> None:
 @app.command("export")
 def export_dataset(
     dataset: str = typer.Argument(..., help="Dataset name"),
-    format: str = typer.Option("jsonl", "--format", "-f", help="Export format: jsonl, parquet, scp"),
+    format: str = typer.Option(
+        "jsonl", "--format", "-f", help="Export format: jsonl, parquet, scp"
+    ),
     output: Optional[Path] = typer.Option(None, "--output", "-o"),
     filter_expr: Optional[str] = typer.Option(None, "--filter"),
 ) -> None:

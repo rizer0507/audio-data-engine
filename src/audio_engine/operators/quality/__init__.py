@@ -7,6 +7,9 @@ from audio_engine.operators.quality.select import SelectOperator
 from audio_engine.operators.quality.snr import SnrOperator
 from audio_engine.operators.quality.aggregate_manifests import AggregateManifestsOperator
 from audio_engine.operators.quality.text_metrics import TextMetricOperator
+from audio_engine.operators.quality.classify import ClassifyOperator
+from audio_engine.operators.quality.split_dataset import SplitDatasetOperator
+from audio_engine.operators.quality.evaluation_report import EvaluationReportOperator
 
 __all__ = [
     "AsrEditDistanceOperator",
@@ -19,4 +22,7 @@ __all__ = [
     "TranscriptDiffOperator",
     "AggregateManifestsOperator",
     "TextMetricOperator",
+    "ClassifyOperator",
+    "SplitDatasetOperator",
+    "EvaluationReportOperator",
 ]

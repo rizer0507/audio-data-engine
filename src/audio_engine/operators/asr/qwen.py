@@ -27,10 +27,24 @@ def _load_asr_config(config_path: str | None) -> dict[str, Any]:
 
 
 def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
-    settings = _load_asr_config(
-        config.params.get("config_path", "configs/asr/qwen_asr.yaml")
-    )
+    settings = _load_asr_config(config.params.get("config_path", "configs/asr/qwen_asr.yaml"))
     settings.update({key: value for key, value in config.params.items() if key != "config_path"})
+    registered_model = os.path.expandvars(str(config.params.get("registered_model") or ""))
+    if registered_model:
+        from audio_engine.core.catalog import ArtifactCatalog
+
+        model = ArtifactCatalog(config.params.get("catalog_dir", "data/catalog")).get_model(
+            str(registered_model)
+        )
+        if model.status != "ready":
+            raise ValueError(f"registered model is not ready: {model.model_id} ({model.status})")
+        settings.update(
+            {
+                "model_path": model.checkpoint_uri,
+                "model": model.model_id,
+                "model_version": model.model_id,
+            }
+        )
     settings["model_path"] = (
         config.params.get("model_path")
         or os.environ.get("QWEN_ASR_MODEL_PATH")
@@ -195,6 +209,12 @@ class QwenBatchASROperator(BatchOperator):
     version = "1.0.0"
     category = "asr"
 
+    def should_skip(self, sample: Sample, config: OperatorConfig) -> bool:
+        transcript_key = config.params.get("transcript_key")
+        if transcript_key:
+            return not config.force and str(transcript_key) in sample.transcripts
+        return super().should_skip(sample, config)
+
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         settings = _resolve_settings(config)
         result = _transcribe_many(
@@ -208,9 +228,7 @@ class QwenBatchASROperator(BatchOperator):
         settings = _resolve_settings(config)
         return super().compute_cache_key(sample, _cache_config(config, settings))
 
-    def process_batch(
-        self, samples: list[Sample], config: OperatorConfig
-    ) -> list[OperatorResult]:
+    def process_batch(self, samples: list[Sample], config: OperatorConfig) -> list[OperatorResult]:
         settings = _resolve_settings(config)
         cache_config = _cache_config(config, settings)
         results: list[OperatorResult | None] = [None] * len(samples)
@@ -270,12 +288,10 @@ class QwenBatchASROperator(BatchOperator):
             # A corrupt file must not fail the rest of a large GPU batch.
             for index, sample, cache_key in chunk:
                 try:
-                    transcript = _transcribe_many(
-                        model, [sample.audio_path(input_key)], settings
-                    )[0]
-                    results[index] = self._finalize(
-                        sample, transcript, cache_key, config, settings
-                    )
+                    transcript = _transcribe_many(model, [sample.audio_path(input_key)], settings)[
+                        0
+                    ]
+                    results[index] = self._finalize(sample, transcript, cache_key, config, settings)
                 except Exception as exc:  # noqa: BLE001 - isolate corrupt audio
                     results[index] = self._failed(sample, exc)
             return
@@ -296,8 +312,9 @@ class QwenBatchASROperator(BatchOperator):
             "extra": {"language": result.get("language")} if result.get("language") else {},
         }
         input_key = config.params.get("input_audio_key", "raw")
+        transcript_key = str(config.params.get("transcript_key", "qwen"))
         return {
-            "transcripts": {"qwen": transcript},
+            "transcripts": {transcript_key: transcript},
             "lineage_entry": {
                 "operator": self.full_name,
                 "version": self.version,
