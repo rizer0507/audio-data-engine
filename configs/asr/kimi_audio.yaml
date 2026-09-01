@@ -1,0 +1,17 @@
+model: kimi-audio-7b-instruct
+model_path: moonshotai/Kimi-Audio-7B-Instruct
+model_version: unknown
+device: cuda
+
+# Native batch-capable wrappers receive this many files per call.  The official
+# generate-only wrapper falls back to one generation at a time for GPU safety.
+batch_size: 8
+inference_threads: 1
+
+prompt: Please transcribe the audio accurately. Output only the transcription.
+model_kwargs: {}
+generation_kwargs:
+  audio_temperature: 0.0
+  audio_top_k: 5
+  text_temperature: 0.0
+  text_top_k: 5
