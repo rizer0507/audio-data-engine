@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from concurrent.futures import (
     FIRST_COMPLETED,
@@ -124,17 +125,14 @@ class ShardingConfig:
             raise ValueError(f"sharding.shards must be >= 1, got {self.shards}")
         if self.strategy not in SHARD_STRATEGIES:
             raise ValueError(
-                f"Unknown sharding.strategy '{self.strategy}'. "
-                f"Use one of {SHARD_STRATEGIES}."
+                f"Unknown sharding.strategy '{self.strategy}'. Use one of {SHARD_STRATEGIES}."
             )
         if self.instances_per_gpu < 1:
             raise ValueError(
                 f"sharding.instances_per_gpu must be >= 1, got {self.instances_per_gpu}"
             )
         if self.parallel_shards is not None and self.parallel_shards < 1:
-            raise ValueError(
-                f"sharding.parallel_shards must be >= 1, got {self.parallel_shards}"
-            )
+            raise ValueError(f"sharding.parallel_shards must be >= 1, got {self.parallel_shards}")
         if self.executor is not None and self.executor not in EXECUTORS:
             raise ValueError(
                 f"Unsupported sharding.executor '{self.executor}'. Use one of {EXECUTORS}."
@@ -194,6 +192,7 @@ class PipelineConfig:
     output_dir: Path = Path("data/derived")
     cache_dir: Path = Path("data/cache")
     runs_dir: Path = Path("runs")
+    catalog_dir: Path = Path("data/catalog")
     force: bool = False
     mock: bool = False
     filter_expr: str | None = None
@@ -210,6 +209,26 @@ class PipelineConfig:
 
     def step_execution(self, step: PipelineStep) -> ExecutionConfig:
         return self.execution.merged(step.execution).merged(self.execution_override)
+
+    def digest(self) -> str:
+        """Fingerprint the executable pipeline, including operator implementations."""
+        return digest_payload(
+            {
+                "name": self.name,
+                "mock": self.mock,
+                "steps": [
+                    {
+                        "name": step.name,
+                        "operator": step.operator,
+                        "version": getattr(OperatorRegistry.get(step.operator), "version", ""),
+                        "params": step.params,
+                        "input_audio_key": step.input_audio_key,
+                        "output_audio_key": step.output_audio_key,
+                    }
+                    for step in self.steps
+                ],
+            }
+        )
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PipelineConfig:
@@ -230,7 +249,7 @@ class PipelineConfig:
         ]
         input_cfg = data.get("input", {}) or {}
         output_cfg = data.get("output", {}) or {}
-        manifest = input_cfg.get("manifest", "") or ""
+        manifest = os.path.expandvars(str(input_cfg.get("manifest", "") or ""))
         source_dir = input_cfg.get("source_dir")
         source_id = input_cfg.get("source")
 
@@ -244,12 +263,13 @@ class PipelineConfig:
                 f"Pipeline '{path}' needs input.manifest, input.source_dir, or input.source"
             )
 
-        output_manifest = output_cfg.get("manifest") or data.get("output_manifest")
+        raw_output_manifest = output_cfg.get("manifest") or data.get("output_manifest")
+        output_manifest = (
+            os.path.expandvars(str(raw_output_manifest)) if raw_output_manifest else None
+        )
         sharding = ShardingConfig.from_mapping(data.get("sharding"))
         if sharding is not None and not output_manifest:
-            raise ValueError(
-                f"Pipeline '{path}' enables sharding but has no output.manifest"
-            )
+            raise ValueError(f"Pipeline '{path}' enables sharding but has no output.manifest")
         return cls(
             name=data.get("name", path.stem),
             input_manifest=manifest,
@@ -260,6 +280,7 @@ class PipelineConfig:
             output_dir=Path(data.get("output_dir", "data/derived")),
             cache_dir=Path(data.get("cache_dir", "data/cache")),
             runs_dir=Path(data.get("runs_dir", "runs")),
+            catalog_dir=Path(data.get("catalog_dir", "data/catalog")),
             force=data.get("force", False),
             mock=data.get("mock", False),
             filter_expr=data.get("filter"),
@@ -281,7 +302,15 @@ class RunMetrics:
     def record_counts(self, step_name: str, counts: dict[str, int]) -> None:
         self.record(step_name, **{key: int(counts.get(key, 0)) for key in COUNT_KEYS})
 
-    def record(self, step_name: str, *, processed: int = 0, skipped: int = 0, cache_hits: int = 0, failed: int = 0) -> None:
+    def record(
+        self,
+        step_name: str,
+        *,
+        processed: int = 0,
+        skipped: int = 0,
+        cache_hits: int = 0,
+        failed: int = 0,
+    ) -> None:
         if step_name not in self.by_step:
             self.by_step[step_name] = {"processed": 0, "skipped": 0, "cache_hits": 0, "failed": 0}
         self.by_step[step_name]["processed"] += processed
@@ -318,9 +347,7 @@ class PipelineRunner:
             if not candidate.exists():
                 candidate = self.config.runs_dir / self.config.resume
             if not candidate.is_dir():
-                raise FileNotFoundError(
-                    f"Cannot resume: run dir not found ({self.config.resume})"
-                )
+                raise FileNotFoundError(f"Cannot resume: run dir not found ({self.config.resume})")
             return candidate
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -330,23 +357,7 @@ class PipelineRunner:
 
     def _config_digest(self) -> str:
         """Any change to the step list, params or operator versions invalidates checkpoints."""
-        return digest_payload(
-            {
-                "name": self.config.name,
-                "mock": self.config.mock,
-                "steps": [
-                    {
-                        "name": step.name,
-                        "operator": step.operator,
-                        "version": getattr(OperatorRegistry.get(step.operator), "version", ""),
-                        "params": step.params,
-                        "input_audio_key": step.input_audio_key,
-                        "output_audio_key": step.output_audio_key,
-                    }
-                    for step in self.config.steps
-                ],
-            }
-        )
+        return self.config.digest()
 
     def _open_checkpoint(
         self,
@@ -381,7 +392,16 @@ class PipelineRunner:
     def run(self) -> Manifest:
         self._setup_logging()
         if self.config.input_manifest:
-            manifest_path = Path(self.config.input_manifest)
+            if self.config.input_manifest.startswith("manifest_"):
+                from audio_engine.core.catalog import ArtifactCatalog
+
+                manifest_path = Path(
+                    ArtifactCatalog(self.config.catalog_dir)
+                    .get(self.config.input_manifest, verify=True)
+                    .uri
+                )
+            else:
+                manifest_path = Path(self.config.input_manifest)
             if not manifest_path.is_absolute() and not manifest_path.exists():
                 manifest_path = Manifest.resolve_path(self.config.input_manifest)
             manifest = Manifest.load(manifest_path)
@@ -447,9 +467,7 @@ class PipelineRunner:
         logger.info("Pipeline finished. Run dir: {}", self.run_dir)
         return result
 
-    def _run_step(
-        self, step: PipelineStep, samples: list[Sample], order: int = 0
-    ) -> list[Sample]:
+    def _run_step(self, step: PipelineStep, samples: list[Sample], order: int = 0) -> list[Sample]:
         operator = OperatorRegistry.get(step.operator)
 
         op_config = OperatorConfig(

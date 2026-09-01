@@ -1,0 +1,15 @@
+# 工序③：在多 ASR 指标 Manifest 上执行有版本的有序分类规则。
+# 阈值必须先在人审校准集上验证，不能将模型一致率直接视为真实准确率。
+name: classify_dataset
+input:
+  manifest: datasets/manifests/multi_asr_metrics_source_A.parquet
+output:
+  manifest: datasets/manifests/classified_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+pipeline:
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_v1.yaml
