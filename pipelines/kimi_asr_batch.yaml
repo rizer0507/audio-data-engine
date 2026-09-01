@@ -1,7 +1,20 @@
-# 工序②-c：独立执行全量 Kimi-Audio。
-# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
-# → cleaned_mt3000 → kimi_asr_mt3000.parquet
-# 每个 shard 是独立进程/模型实例；显存不足时把 instances_per_gpu 降为 1。
+# 工序②-c：全量 Kimi-Audio ASR（vLLM 服务；与其他模型独立）
+#
+#   audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
+#   → cleaned_mt3000 → kimi_asr_mt3000.parquet
+#
+# 前置：
+#   1. input 须含 resampled_16k
+#   2. 先启动 vLLM（见 docs/流水线改进/构造kimi-audio识别流水线.md）
+#
+# 环境变量：
+#   KIMI_ASR_API_BASE   默认 http://127.0.0.1:5554
+#   KIMI_ASR_MODEL        默认 kimi-audio（与 --served-model-name 一致）
+#
+# 并行：
+#   - sharding 将数据切成多片，每片一个子进程
+#   - 子进程内 thread workers 并发调用 vLLM API
+#   - 无需客户端 GPU；请按 vLLM --max-num-seqs 调整 shards × workers
 
 name: kimi_asr_batch
 
@@ -12,23 +25,21 @@ output:
   manifest: datasets/manifests/kimi_asr_source_A.parquet
 
 execution:
-  executor: sequential
-  workers: 1
+  executor: thread
+  workers: 4
   fail_fast: false
   checkpoint_every: 500
 
 sharding:
-  shards: 4
+  shards: 8
   strategy: duration-balanced
-  parallel_shards: 4
-  gpus: [0, 1, 2, 3]
-  instances_per_gpu: 1
-  workers: 1
-  executor: sequential
+  parallel_shards: 8
+  workers: 4
+  executor: thread
 
 pipeline:
   - name: kimi_asr
     operator: asr.kimi_batch
     params:
       input_audio_key: resampled_16k
-      config_path: configs/asr/kimi_audio.yaml
+      config_path: configs/asr/kimi.yaml

@@ -1,0 +1,12 @@
+model: kimi-audio
+model_version: "Kimi-Audio-7B-Instruct"
+api_base: http://127.0.0.1:5554
+api_key: dummy
+timeout: 120
+language: zh
+prompt: "请撰写这段语音："
+temperature: 0
+max_completion_tokens: 256
+# 单 shard 内并发 HTTP 请求数（对接 vLLM /v1/audio/transcriptions）
+concurrency: 4
+batch_size: 4

@@ -303,3 +303,22 @@ python scripts/calc_xlsx_char_acc.py \
   --char-acc --edit-distance \
   --group-by type \
   -o "C:/Users/rizer/Desktop/0827-test/总表.xlsx-字准率.xlsx"
+
+
+
+0828:
+python scripts/export_multi_asr_xlsx.py \
+    --manifest "C:/Users/rizer/Desktop/0828-test/qwen_asr_0827-test-qwen1.parquet" \
+    --manifest "C:/Users/rizer/Desktop/0828-test/qwen_asr_0827-test-qwen2.parquet" \
+    --manifest "C:/Users/rizer/Desktop/0828-test/sensevoice_asr_0827-test-sensevoice1.parquet" \
+    --manifest "C:/Users/rizer/Desktop/0828-test/sensevoice_asr_0827-test-sensevoice2.parquet" \
+    --models qwen1,qwen2,sensevoice1,sensevoice2 \
+    -o "C:/Users/rizer/Desktop/0828-test/0828-test-all.xlsx"
+
+python scripts/calc_xlsx_char_acc.py \
+    --base C:/Users/rizer/Desktop/0828-test/0828-test-all.xlsx::qwen1_text \
+    --hyp  C:/Users/rizer/Desktop/0828-test/0828-test-all.xlsx::qwen2_text \
+    --hyp  C:/Users/rizer/Desktop/0828-test/0828-test-all.xlsx::sensevoice1_text \
+    --hyp  C:/Users/rizer/Desktop/0828-test/0828-test-all.xlsx::sensevoice2_text \
+    --char-acc  \
+    --output "C:/Users/rizer/Desktop/0828-test/0828-test-all-字准.xlsx"
