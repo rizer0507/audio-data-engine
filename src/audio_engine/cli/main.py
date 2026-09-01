@@ -94,6 +94,8 @@ def _resolve_operator(name: str) -> str:
         "scan": "ingest.scan",
         "qwen_asr": "asr.qwen",
         "qwen": "asr.qwen",
+        "kimi_asr": "asr.kimi_batch",
+        "kimi": "asr.kimi_batch",
         "sensevoice": "asr.sensevoice",
         "pcm_to_wav": "audio.pcm_to_wav",
         "resample": "audio.resample",

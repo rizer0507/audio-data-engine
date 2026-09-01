@@ -32,6 +32,13 @@ class ReleaseAsrModelsOperator(ManifestOperator):
         except Exception as exc:  # noqa: BLE001 - best-effort cleanup
             logger.warning("release qwen cache failed: {}", exc)
             released["qwen"] = -1
+        try:
+            from audio_engine.operators.asr import kimi as kimi_mod
+
+            released["kimi"] = int(kimi_mod.release_cached_models())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("release kimi cache failed: {}", exc)
+            released["kimi"] = -1
 
         try:
             from audio_engine.operators.asr import sensevoice as sv_mod
