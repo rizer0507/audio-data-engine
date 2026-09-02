@@ -42,6 +42,9 @@ audio-data = "audio_engine.cli.main:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build]
 dev-mode-dirs = ["src"]
 

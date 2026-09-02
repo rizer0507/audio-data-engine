@@ -68,6 +68,7 @@ def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
     extra_model_kwargs = settings.get("model_kwargs") or {}
     if isinstance(extra_model_kwargs, dict):
         model_kwargs.update(extra_model_kwargs)
+    device = str(settings.get("device", "cuda"))
     cache_key = json.dumps({"model_kwargs": model_kwargs, "device": device}, sort_keys=True)
 
     with _MODEL_LOCK:
