@@ -20,6 +20,8 @@ pipeline:
       transcript_key: old_model
       input_audio_key: resampled_16k
       config_path: configs/asr/qwen_asr.yaml
+      api_base_env: BASELINE_ASR_API_BASE
+      api_key_env: BASELINE_ASR_API_KEY
 
   - name: release_baseline
     operator: runtime.release_asr_models
@@ -31,6 +33,8 @@ pipeline:
       transcript_key: new_model
       input_audio_key: resampled_16k
       config_path: configs/asr/qwen_asr.yaml
+      api_base_env: CANDIDATE_ASR_API_BASE
+      api_key_env: CANDIDATE_ASR_API_KEY
 
   - name: evaluation_metrics
     operator: quality.text_metrics

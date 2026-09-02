@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from loguru import logger
 
 from audio_engine.core.operator import BatchOperator, OperatorConfig, OperatorResult
 from audio_engine.core.registry import register_operator
@@ -231,7 +232,7 @@ class QwenASROperator(BaseASROperator):
 
 @register_operator
 class QwenBatchASROperator(BatchOperator):
-    """Batch Qwen3-ASR inference with per-sample cache and failure isolation."""
+    """vLLM-only Qwen3-ASR batch inference with cache and failure isolation."""
 
     name = "qwen_batch"
     version = "1.0.0"
@@ -254,11 +255,18 @@ class QwenBatchASROperator(BatchOperator):
         return self._updates(result, config, settings)
 
     def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
-        settings = _resolve_settings(config)
+        settings = _resolve_batch_settings(config)
         return super().compute_cache_key(sample, _cache_config(config, settings))
 
     def process_batch(self, samples: list[Sample], config: OperatorConfig) -> list[OperatorResult]:
-        settings = _resolve_settings(config)
+        settings = _resolve_batch_settings(config)
+        logger.info(
+            "Qwen batch backend=vllm api_base={} model={} force={} samples={}",
+            settings.get("api_base"),
+            settings.get("model", "qwen3-asr"),
+            config.force,
+            len(samples),
+        )
         cache_config = _cache_config(config, settings)
         results: list[OperatorResult | None] = [None] * len(samples)
         pending: list[tuple[int, Sample, str]] = []
@@ -277,6 +285,15 @@ class QwenBatchASROperator(BatchOperator):
                     )
                     continue
             pending.append((index, sample, cache_key))
+
+        skipped = sum(result is not None and result.skipped for result in results)
+        cache_hits = sum(result is not None and result.cache_hit for result in results)
+        logger.info(
+            "Qwen batch decision: pending={} skipped={} cache_hits={}",
+            len(pending),
+            skipped,
+            cache_hits,
+        )
 
         if pending and (config.mock or config.params.get("mock")):
             for index, sample, cache_key in pending:
@@ -304,32 +321,31 @@ class QwenBatchASROperator(BatchOperator):
             raise RuntimeError("Qwen batch operator produced an incomplete result set")
         return [result for result in results if result is not None]
 
-    def _process_inference_chunk(
+    def _process_vllm_chunk(
         self,
         chunk: list[tuple[int, Sample, str]],
-        model: Any,
         config: OperatorConfig,
         settings: dict[str, Any],
         results: list[OperatorResult | None],
     ) -> None:
         input_key = config.params.get("input_audio_key", "raw")
-        try:
-            paths = [sample.audio_path(input_key) for _, sample, _ in chunk]
-            transcripts = _transcribe_many(model, paths, settings)
-        except Exception:  # noqa: BLE001 - retry a failed batch one sample at a time
-            # A corrupt file must not fail the rest of a large GPU batch.
-            for index, sample, cache_key in chunk:
-                try:
-                    transcript = _transcribe_many(model, [sample.audio_path(input_key)], settings)[
-                        0
-                    ]
-                    results[index] = self._finalize(sample, transcript, cache_key, config, settings)
-                except Exception as exc:  # noqa: BLE001 - isolate corrupt audio
-                    results[index] = self._failed(sample, exc)
-            return
+        concurrency = min(max(1, int(settings.get("concurrency", 4))), len(chunk))
 
-        for (index, sample, cache_key), transcript in zip(chunk, transcripts):
-            results[index] = self._finalize(sample, transcript, cache_key, config, settings)
+        def transcribe(item: tuple[int, Sample, str]) -> tuple[int, dict[str, Any]]:
+            index, sample, _ = item
+            return index, call_vllm_transcription(sample.audio_path(input_key), settings)
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {pool.submit(transcribe, item): item for item in chunk}
+            for future in as_completed(futures):
+                index, sample, cache_key = futures[future]
+                try:
+                    _, transcript = future.result()
+                    results[index] = self._finalize(
+                        sample, transcript, cache_key, config, settings
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolate request failures
+                    results[index] = self._failed(sample, exc)
 
     def _process_vllm_chunk(
         self,

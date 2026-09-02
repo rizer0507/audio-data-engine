@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+
+import pytest
 
 import audio_engine.operators  # noqa: F401
 import audio_engine.operators.asr.qwen as qwen_module
@@ -24,27 +25,13 @@ def _samples(count: int) -> list[Sample]:
     ]
 
 
-class FakeQwenModel:
-    def __init__(self, broken_path: str | None = None):
-        self.calls: list[list[str]] = []
-        self.broken_path = broken_path
-
-    def transcribe(self, **kwargs):
-        paths = list(kwargs["audio"])
-        self.calls.append(paths)
-        if self.broken_path in paths:
-            raise ValueError(f"broken audio: {self.broken_path}")
-        return [
-            SimpleNamespace(text=f"text:{Path(path).stem}", language="Chinese") for path in paths
-        ]
-
-
 def _config(tmp_path: Path, **params) -> OperatorConfig:
     return OperatorConfig(
         params={
             "input_audio_key": "resampled_16k",
             "model_path": "/models/qwen",
             "model_version": "test",
+            "api_base": "http://127.0.0.1:5553",
             "batch_size": 2,
             **params,
         },
@@ -53,17 +40,45 @@ def _config(tmp_path: Path, **params) -> OperatorConfig:
     )
 
 
+def test_qwen_batch_refuses_to_load_a_local_model(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("QWEN_ASR_API_BASE", raising=False)
+    operator = OperatorRegistry.get("asr.qwen_batch")
+    with pytest.raises(ValueError, match="only supports vLLM"):
+        operator.process_batch(_samples(1), _config(tmp_path, api_base=None))
+
+
+def test_qwen_batch_reads_vllm_environment(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("QWEN_ASR_API_BASE", "http://127.0.0.1:5553")
+    settings = qwen_module._resolve_batch_settings(_config(tmp_path, api_base=None))
+    assert settings["api_base"] == "http://127.0.0.1:5553"
+
+
+def test_qwen_batch_reads_step_specific_vllm_environment(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("QWEN_ASR_API_BASE", raising=False)
+    monkeypatch.setenv("CANDIDATE_ASR_API_BASE", "http://127.0.0.1:5562")
+    settings = qwen_module._resolve_batch_settings(
+        _config(
+            tmp_path,
+            api_base=None,
+            api_base_env="CANDIDATE_ASR_API_BASE",
+        )
+    )
+    assert settings["api_base"] == "http://127.0.0.1:5562"
+
+
 def test_qwen_batch_transcribes_and_reuses_cache(tmp_path: Path, monkeypatch):
-    model = FakeQwenModel()
-    monkeypatch.setattr(qwen_module, "_load_qwen_model", lambda settings: model)
+    calls: list[str] = []
+
+    def fake_transcribe(path: str, settings: dict) -> dict:
+        calls.append(path)
+        return {"text": f"text:{Path(path).stem}", "language": "Chinese"}
+
+    monkeypatch.setattr(qwen_module, "call_vllm_transcription", fake_transcribe)
     operator = OperatorRegistry.get("asr.qwen_batch")
     config = _config(tmp_path)
 
     first = operator.process_batch(_samples(3), config)
-    assert model.calls == [
-        ["/audio/s0.wav", "/audio/s1.wav"],
-        ["/audio/s2.wav"],
-    ]
+    assert sorted(calls) == ["/audio/s0.wav", "/audio/s1.wav", "/audio/s2.wav"]
     assert [result.sample.get_transcript_text("qwen") for result in first] == [
         "text:s0",
         "text:s1",
@@ -74,12 +89,16 @@ def test_qwen_batch_transcribes_and_reuses_cache(tmp_path: Path, monkeypatch):
 
     second = operator.process_batch(_samples(3), config)
     assert all(result.cache_hit for result in second)
-    assert len(model.calls) == 2
+    assert len(calls) == 3
 
 
 def test_qwen_batch_isolates_corrupt_audio(tmp_path: Path, monkeypatch):
-    model = FakeQwenModel(broken_path="/audio/s1.wav")
-    monkeypatch.setattr(qwen_module, "_load_qwen_model", lambda settings: model)
+    def fake_transcribe(path: str, settings: dict) -> dict:
+        if path == "/audio/s1.wav":
+            raise ValueError(f"broken audio: {path}")
+        return {"text": f"text:{Path(path).stem}", "language": "Chinese"}
+
+    monkeypatch.setattr(qwen_module, "call_vllm_transcription", fake_transcribe)
     operator = OperatorRegistry.get("asr.qwen_batch")
 
     results = operator.process_batch(_samples(3), _config(tmp_path, batch_size=3))
