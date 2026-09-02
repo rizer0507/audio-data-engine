@@ -41,6 +41,11 @@ audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
 
 默认 8 片 × 4 线程 = 最多 32 路并发请求。请根据 vLLM 的 `--max-num-seqs` 和服务器负载调整 `sharding` 与 `concurrency`。
 
+`KIMI_ASR_API_BASE` 可填写服务根地址（如 `http://127.0.0.1:5554`）或
+OpenAI 基地址（如 `http://127.0.0.1:5554/v1`），客户端会避免重复拼接 `/v1`。
+请求仅发送 vLLM transcription 接口支持的字段，不会把
+`max_completion_tokens` 等 Chat Completions 参数混入 multipart 请求。
+
 ## 聚合到其他模型结果
 
 ```bash

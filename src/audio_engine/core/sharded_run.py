@@ -515,6 +515,26 @@ def run_sharded_pipeline(
     if not cfg.output_manifest:
         raise ValueError("Sharded run requires output.manifest")
 
+    for step in cfg.steps:
+        if step.operator != "asr.qwen_batch":
+            continue
+        named_env = str(step.params.get("api_base_env") or "")
+        api_base = (
+            step.params.get("api_base")
+            or os.environ.get(named_env)
+            or os.environ.get("QWEN_ASR_API_BASE")
+        )
+        backend = "vllm" if api_base else "local"
+        emit(
+            f"Qwen preflight: backend={backend} "
+            f"api_base={api_base or '<none>'} batch_mode=vllm-only"
+        )
+        if not api_base and not cfg.mock:
+            raise ValueError(
+                "Qwen batch inference only supports vLLM, but "
+                "QWEN_ASR_API_BASE/api_base is empty in the parent process"
+            )
+
     root = resolve_run_root(cfg, run_root)
     emit(f"Sharded run root: {root}")
 
