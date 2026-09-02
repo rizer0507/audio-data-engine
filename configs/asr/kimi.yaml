@@ -6,7 +6,7 @@ timeout: 120
 language: zh
 prompt: "请撰写这段语音："
 temperature: 0
-max_completion_tokens: 256
+response_format: json
 # 单 shard 内并发 HTTP 请求数（对接 vLLM /v1/audio/transcriptions）
 concurrency: 4
 batch_size: 4
