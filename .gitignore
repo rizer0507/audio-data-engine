@@ -41,6 +41,10 @@ data/raw/*
 data/exports/*
 !data/exports/.gitkeep
 
+# 本地产物目录：记录可由产物本身和 run 元数据重建
+data/catalog/*
+!data/catalog/.gitkeep
+
 # 每次 pipeline/run 的运行目录
 runs/*
 !runs/.gitkeep

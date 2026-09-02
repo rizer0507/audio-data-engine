@@ -35,8 +35,7 @@ class FakeQwenModel:
         if self.broken_path in paths:
             raise ValueError(f"broken audio: {self.broken_path}")
         return [
-            SimpleNamespace(text=f"text:{Path(path).stem}", language="Chinese")
-            for path in paths
+            SimpleNamespace(text=f"text:{Path(path).stem}", language="Chinese") for path in paths
         ]
 
 
@@ -183,3 +182,20 @@ def test_run_shards_gpu_slot_math_rejects_overflow(tmp_path: Path):
     assert result.exit_code != 0
     assert "cannot exceed GPUs" in result.output
     assert "instances-per-gpu" in result.output
+
+
+def test_qwen_batch_supports_evaluation_transcript_key(tmp_path: Path):
+    operator = OperatorRegistry.get("asr.qwen_batch")
+    results = operator.process_batch(
+        _samples(1),
+        _config(tmp_path, mock=True, transcript_key="new_model"),
+    )
+    assert results[0].sample.get_transcript_text("new_model") == "[mock:qwen:s0]"
+    assert "qwen" not in results[0].sample.transcripts
+
+    candidate = operator.process_batch(
+        [results[0].sample],
+        _config(tmp_path, mock=True, transcript_key="old_model"),
+    )
+    assert candidate[0].skipped is False
+    assert set(candidate[0].sample.transcripts) == {"new_model", "old_model"}

@@ -1,0 +1,15 @@
+policy_version: selection_zh_asr_v1
+default_bucket: review_queue
+gold_source_model: qwen
+defaults:
+  label_broken: false
+rules:
+  - bucket: noise
+    reason: broken_or_invalid_audio
+    expr: "label_broken == True or duration <= 0"
+  - bucket: auto_gold
+    reason: multi_asr_high_agreement
+    expr: "quality_sensevoice_vs_qwen_agreement_cer <= 0.10"
+  - bucket: hardcase
+    reason: multi_asr_large_disagreement
+    expr: "quality_sensevoice_vs_qwen_agreement_cer >= 0.50"

@@ -12,3 +12,16 @@ pipeline:
     params:
       config_path: configs/metrics/model_eval.yaml
       normalization_path: configs/normalization/zh_asr_v1.yaml
+  - name: evaluation_report
+    operator: quality.evaluation_report
+    params:
+      baseline_prefix: old_model
+      candidate_prefix: new_model
+      bucket_key: classification_bucket
+      fail_on_regression: true
+      gates:
+        - name: overall_cer_no_regression
+          max_cer_regression: 0.0
+        - name: hardcase_cer_no_regression
+          bucket: hardcase
+          max_cer_regression: 0.0
