@@ -55,6 +55,7 @@ def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorC
 
 def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
     model_path = str(settings["model_path"])
+    device = str(settings.get("device", "cuda"))
     path = Path(model_path).expanduser()
     if path.is_absolute() and not path.is_dir():
         raise FileNotFoundError(
