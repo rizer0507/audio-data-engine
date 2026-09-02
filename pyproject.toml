@@ -32,7 +32,7 @@ dev = [
 ]
 
 [project.scripts]
-audio-data = "audio_engine.cli.main:app"
+audio-data = "audio_engine.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -3,7 +3,7 @@
 用途：维护生产入口命令；分片/并行/合并由 YAML sharding 自动完成。
 改批次：用 --source-name（+ 清洗时的 --source-dir），一般不用改 YAML 路径。
 改并行度 / 卡号：改对应 pipelines/*.yaml 的 sharding。
-执行顺序：1 清洗 → 2a/2b 各模型独立识别 → 2c 聚合 → 2d 字准率 → 导出 xlsx（可选）。
+执行顺序：1 清洗 → 2a/2b/2c 各模型独立识别 → 2d 聚合 → 2e 字准率 → 导出 xlsx（可选）。
 
 
 -------------------------------------------------------
@@ -54,13 +54,47 @@ export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 
 audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name test_local
 
-# 后续新模型同理（pipeline 命名 {model}_asr_batch）：
-# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
-# → kimi_asr_mt3000.parquet
+
+-------------------------------------------------------
+2c. Kimi-Audio 全量识别（独立，vLLM HTTP；不依赖 Qwen/SenseVoice）
+-------------------------------------------------------
+# 前置：先启动 vLLM 服务（另开终端，常驻）
+# YAML: pipelines/kimi_asr_batch.yaml
+# 产物: cleaned_<name> → kimi_asr_<name>.parquet
+# 并行：改 pipelines/kimi_asr_batch.yaml 的 sharding；
+#       改 configs/asr/kimi.yaml 的 concurrency（对接 vLLM --max-num-seqs）
+
+CUDA_VISIBLE_DEVICES=0 \
+vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
+  --host 0.0.0.0 \
+  --port 5554 \
+  --served-model-name kimi-audio \
+  --tensor-parallel-size 1 \
+  --trust-remote-code \
+  --dtype bfloat16 \
+  --max-model-len 4096 \
+  --max-num-seqs 2 \
+  --limit-mm-per-prompt '{"audio":1}'
+
+# 批跑（vLLM 就绪后）
+export KIMI_ASR_API_BASE=http://127.0.0.1:5554
+export KIMI_ASR_MODEL=kimi-audio
+
+audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name test_local
+
+# 续跑:
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml \
+#   --source-name test_local --resume runs/<上次_shards目录>
+
+# 总进度（父进程控制台 + runs/<run>_shards/PROGRESS.log）：
+#   [PROGRESS] done=1234/8000 (15.4%) rate=42.30 samples/s ...
+# 另开终端查看：
+#   tail -f runs/<上次_shards目录>/PROGRESS.log
+#   audio-data pipeline progress runs/<上次_shards目录> -f
 
 
 -------------------------------------------------------
-2c. 按 id 聚合多模型结果（不推理、不算指标）
+2d. 按 id 聚合多模型结果（不推理、不算指标）
 -------------------------------------------------------
 # base: qwen_asr_<name>；join: YAML 中 model 对应 {model}_asr_<name>
 # 产物: multi_asr_aggregate_<name>.parquet
@@ -73,7 +107,7 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_lo
 
 
 -------------------------------------------------------
-2d. 字准率 / agreement CER（独立 Metric 流水线）
+2e. 字准率 / agreement CER（独立 Metric 流水线）
 -------------------------------------------------------
 # → multi_asr_aggregate_<name> → multi_asr_metrics_<name>.parquet
 # 配置: configs/metrics/gold_agreement.yaml
@@ -82,13 +116,13 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name test_lo
 
 
 -------------------------------------------------------
-2e. 导出 xlsx（parquet/jsonl 全量保留后按需转换）
+2f. 导出 xlsx（parquet/jsonl 全量保留后按需转换）
 -------------------------------------------------------
 python scripts/export_multi_asr_xlsx.py \
   --manifest datasets/manifests/multi_asr_aggregate_test_local.parquet \
   --output datasets/exports/multi_asr_aggregate_test_local.xlsx \
   --baseline qwen \
-  --models qwen,sensevoice
+  --models qwen,sensevoice,kimi
 
 
 -------------------------------------------------------
@@ -98,13 +132,14 @@ python scripts/export_multi_asr_xlsx.py \
   → cleaned_mt3000.parquet|.jsonl
   → qwen_asr_mt3000.parquet              # 2a 独立产物
   → sensevoice_asr_mt3000.parquet        # 2b 独立产物
-  → multi_asr_aggregate_mt3000.parquet   # 2c 仅 join
-  → multi_asr_metrics_mt3000.parquet     # 2d agreement CER
+  → kimi_asr_mt3000.parquet              # 2c 独立产物
+  → multi_asr_aggregate_mt3000.parquet   # 2d 仅 join
+  → multi_asr_metrics_mt3000.parquet     # 2e agreement CER
   → (可选) datasets/exports/multi_asr_aggregate_mt3000.xlsx
 
 
 -------------------------------------------------------
-2f. 外源标注 baseline 字准率（脚本，非流水线）
+2g. 外源标注 baseline 字准率（脚本，非流水线）
 -------------------------------------------------------
 # 以外部标注文件 A 为 reference，对齐模型 parquet/jsonl 后算 evaluation CER
 # 详见 docs/需求/字准率计算-外源.md
@@ -122,8 +157,9 @@ python scripts/export_multi_asr_xlsx.py \
 -------------------------------------------------------
 [ ] 命令中的 --source-name / --source-dir
 [ ] （可选）pipelines/qwen_asr_batch.yaml、sensevoice_asr_batch.yaml 的 gpus/shards
+[ ] （可选）pipelines/kimi_asr_batch.yaml 的 sharding；configs/asr/kimi.yaml 的 concurrency
 [ ] （可选）multi_asr_aggregate.yaml 的 manifests / --join-manifest
-[ ] 本文件中的模型环境变量
+[ ] 本文件中的模型环境变量（含 KIMI_ASR_API_BASE / KIMI_ASR_MODEL）
 # 一般不再改 resources/manifest.yaml 与 YAML 内 input/output 路径
 
 
