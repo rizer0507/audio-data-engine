@@ -1,0 +1,390 @@
+全自动训练评测闭环执行手册（当前最新项目）
+================================================================================
+适用范围：
+  A. 构建训练集并执行外部训练
+  B. 构建/使用冻结评测集，对 baseline 与 candidate 自动评测并执行回归门禁
+
+本手册是“单条流水线执行命令.txt”的闭环版。旧文档仍可用于单独排查清洗或 ASR；
+日常生产以本手册为准。
+
+核心原则：
+  1. Parquet Manifest 是唯一真相源，XLSX 只用于人工审核。
+  2. 每个流水线输出都会注册 Artifact ID；不要再人工寻找、复制、合并多个 XLSX。
+  3. Dataset Release 一旦创建不可修改；标注或规则变化必须创建新 release_id。
+  4. baseline/candidate 都使用 Model Registry ID，不在评测命令里直接填写 checkpoint。
+  5. review 是明确的人工审批边界；未审核 hardcase/review_queue 不允许进入 Release。
+
+
+================================================================================
+0. 首次部署与每次开终端准备
+================================================================================
+
+cd /workspace/audio-data-engine
+source .venv/bin/activate
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+# 首次部署：
+# pip install -e .
+# pip install -e ".[asr]"          # Qwen
+# pip install -e ".[sensevoice]"   # SenseVoice
+
+# 本次批次名。只使用字母、数字、下划线和短横线。
+export BATCH=mt3000
+
+# 原始 wav/pcm 目录：
+export SOURCE_DIR=/path/to/wav_or_pcm
+
+# 基础模型目录：
+export QWEN_ASR_MODEL_PATH=/models/qwen_base
+export SENSEVOICE_MODEL_PATH=/models/SenseVoiceSmall
+
+# 建议先检查：
+test -d "$SOURCE_DIR" || { echo "SOURCE_DIR 不存在"; exit 1; }
+test -e "$QWEN_ASR_MODEL_PATH" || { echo "Qwen 模型不存在"; exit 1; }
+test -e "$SENSEVOICE_MODEL_PATH" || { echo "SenseVoice 模型不存在"; exit 1; }
+
+
+================================================================================
+一、从原始音频生成多模型指标 Manifest（工序①～②）
+================================================================================
+
+-------------------------------------------------------
+1. 清洗、落库
+-------------------------------------------------------
+# 输出：datasets/manifests/cleaned_${BATCH}.parquet|jsonl
+
+audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
+  --source-name "$BATCH" \
+  --source-dir "$SOURCE_DIR"
+
+# 中断后续跑（使用控制台打印的 run root）：
+# audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
+#   --source-name "$BATCH" --source-dir "$SOURCE_DIR" \
+#   --resume runs/<上次_run_root>
+
+
+-------------------------------------------------------
+2. Qwen 全量识别
+-------------------------------------------------------
+# 输出：datasets/manifests/qwen_asr_${BATCH}.parquet
+
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
+
+
+-------------------------------------------------------
+3. SenseVoice 全量识别
+-------------------------------------------------------
+# SenseVoice 与 Qwen 独立运行，不依赖 Qwen 的 Manifest。
+# 输出：datasets/manifests/sensevoice_asr_${BATCH}.parquet
+
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATCH"
+
+# 可选 Kimi：
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH"
+
+
+-------------------------------------------------------
+4. 严格聚合并计算 agreement CER
+-------------------------------------------------------
+# 聚合会同时校验 id 和音频 sha256；错配会立即失败并在 run/reports 写 alignment report。
+
+audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+  --source-name "$BATCH" \
+  --join-manifest sensevoice
+
+# 若还要聚合 Kimi：
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+#   --source-name "$BATCH" \
+#   --join-manifest sensevoice --join-manifest kimi
+
+audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH"
+
+# 输出：datasets/manifests/multi_asr_metrics_${BATCH}.parquet
+
+
+================================================================================
+二、自动分拣、人工审核与冻结 Dataset Release（工序③）
+================================================================================
+
+-------------------------------------------------------
+5. 使用版本化策略自动分拣
+-------------------------------------------------------
+# 默认规则：configs/selection/zh_asr_v1.yaml
+# 结果桶：auto_gold / hardcase / noise / review_queue
+# auto_gold 会自动记录 gold_text、gold_source、annotation_revision。
+
+audio-data pipeline run pipelines/classify_dataset.yaml \
+  --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
+  --output-manifest "datasets/manifests/classified_${BATCH}.parquet"
+
+# 注意：agreement CER 只是模型间一致程度，不是真实准确率。
+# 修改阈值前必须在人审校准集上验证，并同步升级 policy_version。
+
+
+-------------------------------------------------------
+6. 一次导出所有需要人审的样本
+-------------------------------------------------------
+export REVIEW_REV=review_${BATCH}_v1
+export REVIEW_XLSX="data/exports/review_${BATCH}_${REVIEW_REV}.xlsx"
+
+audio-data review export "datasets/manifests/classified_${BATCH}.parquet" \
+  --output "$REVIEW_XLSX" \
+  --revision "$REVIEW_REV" \
+  --bucket review_queue \
+  --bucket hardcase
+
+人工只编辑以下三列：
+  decision：accepted 或 rejected
+  gold_text：accepted 时必填；rejected 时可以为空
+  reason：审核原因，可选
+
+禁止修改：sample_id、sha256、queue_id、review_revision、source_path 和模型文本列。
+导入时会校验这些字段，旧 revision、串批次、重复 ID、音频变化都会被拒绝。
+
+
+-------------------------------------------------------
+7. 导入审核结果
+-------------------------------------------------------
+audio-data review import "datasets/manifests/classified_${BATCH}.parquet" \
+  --input "$REVIEW_XLSX" \
+  --output "datasets/manifests/reviewed_${BATCH}.parquet" \
+  --revision "$REVIEW_REV" \
+  --bucket review_queue \
+  --bucket hardcase
+
+# 导入成功会打印 reviewed Manifest 的 Artifact ID。
+
+
+-------------------------------------------------------
+8. 分组、分层拆分并冻结 Release
+-------------------------------------------------------
+export RELEASE_ID=ds_${BATCH}_v1
+
+# group-key 必须按真实数据选择：优先 conversation_id，其次 speaker_id。
+# 同一 group 永远不会跨 train/dev/test；classification_bucket 用于分层。
+# noise/rejected 自动排除；未审核的 review_queue/hardcase 会阻止 Release 创建。
+
+audio-data release build "datasets/manifests/reviewed_${BATCH}.parquet" \
+  --id "$RELEASE_ID" \
+  --policy-version selection_zh_asr_v1 \
+  --normalization-version zh_asr_v1 \
+  --gold-revision "$REVIEW_REV" \
+  --group-key conversation_id \
+  --stratify-key classification_bucket \
+  --split-seed 42 \
+  --train-ratio 0.8 \
+  --dev-ratio 0.1 \
+  --test-ratio 0.1
+
+# 如果当前 Manifest 没有 conversation_id，但有 speaker_id：
+# 将 --group-key conversation_id 改成 --group-key speaker_id。
+# 两者都没有时必须先补充真实分组字段；不要用 sample_id 冒充，否则会发生数据泄漏。
+
+# 查看被冻结的 Release：
+audio-data release show "$RELEASE_ID"
+
+# 直接取得各 split 的校验后物理路径：
+audio-data release path "$RELEASE_ID" --split train
+audio-data release path "$RELEASE_ID" --split dev
+audio-data release path "$RELEASE_ID" --split test
+
+
+================================================================================
+三、执行外部训练并注册 Candidate Model（工序④）
+================================================================================
+
+外部训练框架保持独立。数据引擎通过以下环境变量提供输入：
+  AUDIO_DATA_RELEASE_ID
+  AUDIO_DATA_TRAIN_MANIFEST
+  AUDIO_DATA_DEV_MANIFEST
+  AUDIO_DATA_RECIPE
+  AUDIO_DATA_CHECKPOINT
+
+-------------------------------------------------------
+9. 准备训练 recipe 并执行训练
+-------------------------------------------------------
+export TRAIN_RECIPE=/trainer/recipes/qwen_sft_v3.yaml
+export TRAIN_COMMAND="python /trainer/train.py"
+export CANDIDATE_MODEL_ID=qwen_sft_${BATCH}_v1
+export CANDIDATE_CHECKPOINT=/models/${CANDIDATE_MODEL_ID}
+
+test -f "$TRAIN_RECIPE" || { echo "训练 recipe 不存在"; exit 1; }
+
+audio-data training run \
+  --release "$RELEASE_ID" \
+  --recipe "$TRAIN_RECIPE" \
+  --command "$TRAIN_COMMAND" \
+  --checkpoint "$CANDIDATE_CHECKPOINT" \
+  --model-id "$CANDIDATE_MODEL_ID" \
+  --base-model qwen_asr
+
+# 成功条件同时满足：
+#   1. 外部训练命令退出码为 0；
+#   2. --checkpoint 路径真实存在。
+# 满足后模型才会以 ready 状态注册。相同输入重复执行会复用同一个 Training Job。
+
+audio-data model show "$CANDIDATE_MODEL_ID"
+
+
+-------------------------------------------------------
+10. 首次使用旧 baseline 时注册它
+-------------------------------------------------------
+# Model Registry 要求每个模型都有数据来源 Release。
+# 如果 baseline 是历史模型，请先为其真实训练数据建立/迁移 Release，不能伪造来源。
+
+export BASELINE_MODEL_ID=qwen_base_v1
+export BASELINE_CHECKPOINT=/models/qwen_base_v1
+export BASELINE_RELEASE_ID=ds_baseline_training_v1
+
+# 只需注册一次：
+# audio-data model register \
+#   --id "$BASELINE_MODEL_ID" \
+#   --base-model qwen_asr \
+#   --release "$BASELINE_RELEASE_ID" \
+#   --recipe /trainer/recipes/baseline_original.yaml \
+#   --checkpoint "$BASELINE_CHECKPOINT" \
+#   --status ready
+
+audio-data model show "$BASELINE_MODEL_ID"
+
+
+================================================================================
+四、使用冻结测试集自动评测新旧模型（工序⑤）
+================================================================================
+
+-------------------------------------------------------
+11. 选择评测集并执行 baseline/candidate 评测
+-------------------------------------------------------
+# 默认示例使用同一 Release 的 test split。更严格的做法是长期维护独立 holdout Release。
+
+export EVAL_MANIFEST="$(audio-data release path "$RELEASE_ID" --split test)"
+export EVAL_OUTPUT="data/evaluations/${RELEASE_ID}_${CANDIDATE_MODEL_ID}.parquet"
+
+audio-data pipeline run pipelines/evaluate_registered_models.yaml
+
+流水线自动完成：
+  baseline 推理（transcript key=old_model）
+  → 释放 baseline 模型和 GPU 缓存
+  → candidate 推理（transcript key=new_model）
+  → 与 gold_text 计算统一 CER
+  → corpus CER + classification bucket 分桶
+  → paired bootstrap 95% CI
+  → overall/hardcase regression gate
+
+输出：
+  $EVAL_OUTPUT                         样本级结果 Manifest
+  runs/<本次评测_run>/reports/evaluation.json
+
+若门禁失败：
+  流水线返回失败，但 evaluation.json 会保留；先检查 delta_cer、各 bucket 和 badcase，
+  不要用 --force 或修改阈值绕过发布判断。
+
+
+================================================================================
+五、把训练与评测作为一个可恢复 Task DAG 执行
+================================================================================
+
+人工审核与 Release 冻结完成后，可以复制任务模板：
+
+cp tasks/train_and_evaluate.example.yaml tasks/train_and_evaluate_${BATCH}.yaml
+
+必须修改模板中的：
+  release ID
+  recipe
+  外部训练命令
+  candidate checkpoint / model ID
+  baseline model ID
+  EVAL_MANIFEST
+  EVAL_OUTPUT
+
+执行：
+audio-data task run "tasks/train_and_evaluate_${BATCH}.yaml"
+
+查看状态：
+audio-data task status "runs/tasks/<控制台打印的_task_id>"
+
+Task 语义：
+  - 节点按 depends_on 执行；检测重复 ID、未知依赖和依赖环；
+  - 每节点日志在 runs/tasks/<task_id>/nodes/<node>/stdout.log|stderr.log；
+  - 成功节点且声明输出仍存在时，重复执行会自动跳过；
+  - 失败节点修复外部问题后，重新执行相同 YAML 即可续跑；
+  - 修改 YAML 会得到新的 task_id，不会误用旧状态。
+
+
+================================================================================
+六、Artifact / Release / Model 日常查询
+================================================================================
+
+audio-data artifact list --kind manifest
+audio-data artifact show <artifact_id> --verify
+audio-data artifact path <artifact_id>
+
+audio-data release show <release_id>
+audio-data release path <release_id> --split train
+audio-data release path <release_id> --split dev
+audio-data release path <release_id> --split test
+
+audio-data model show <model_id>
+
+# --verify 会重新计算 SHA-256。文件丢失或注册后被修改都会失败。
+# 不要直接编辑 data/catalog/artifacts、releases、models 中的 JSON。
+
+
+================================================================================
+七、每个新批次只需要修改的变量
+================================================================================
+
+[ ] BATCH
+[ ] SOURCE_DIR
+[ ] QWEN_ASR_MODEL_PATH / SENSEVOICE_MODEL_PATH
+[ ] REVIEW_REV
+[ ] RELEASE_ID
+[ ] group-key（conversation_id 或 speaker_id）
+[ ] TRAIN_RECIPE / TRAIN_COMMAND
+[ ] CANDIDATE_MODEL_ID / CANDIDATE_CHECKPOINT
+[ ] BASELINE_MODEL_ID
+[ ] EVAL_OUTPUT
+
+通常不需要修改：
+  datasets/manifests 内的中间文件路径
+  Artifact Catalog JSON
+  CER 实现
+  train/dev/test 随机拆分逻辑
+  baseline/candidate 文本聚合脚本
+
+
+================================================================================
+八、生产前验收清单
+================================================================================
+
+[ ] 清洗、Qwen、SenseVoice、聚合、Metric 每步控制台均打印 Artifact ID
+[ ] aggregate alignment report 中 aligned=true，sha256_mismatches=0
+[ ] selection policy_version 已在人审校准集上验证
+[ ] review XLSX 所有行 decision 均为 accepted/rejected
+[ ] Release 创建成功，train/dev/test 总量与 accepted Gold 总量一致
+[ ] train/dev/test 不存在 conversation_id/speaker_id 交集
+[ ] Training Job 状态 succeeded，Model 状态 ready，checkpoint 存在
+[ ] baseline 与 candidate 都能通过 model show 查询
+[ ] evaluation.json 同时包含 overall、buckets、paired_bootstrap、gates
+[ ] 门禁 passed=true 后才允许进入后续发布流程
+
+
+================================================================================
+完整数据链
+================================================================================
+
+wav/pcm
+  → cleaned_${BATCH}
+  → qwen_asr_${BATCH} + sensevoice_asr_${BATCH} (+ kimi)
+  → multi_asr_aggregate_${BATCH}
+  → multi_asr_metrics_${BATCH}
+  → classified_${BATCH}
+  → review.xlsx（仅人工视图）
+  → reviewed_${BATCH}
+  → Dataset Release: train/dev/test Artifact IDs
+  → Training Job
+  → Candidate Model Registry ID
+  → baseline/candidate inference
+  → evaluation.json + regression gate
