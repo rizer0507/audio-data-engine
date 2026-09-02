@@ -15,13 +15,23 @@
   5. review 是明确的人工审批边界；未审核 hardcase/review_queue 不允许进入 Release。
   6. Qwen 生产识别默认通过独立 vLLM 服务调用；流水线进程不加载 Qwen GPU 模型。
      只有明确取消 QWEN_ASR_API_BASE 时，才回退到 qwen-asr 本地推理。
+  7. SenseVoice 与 Kimi-Audio 本地模式均在 shard 进程内加载 GPU 模型（与 SenseVoice 相同
+     并发模型）；Kimi 也可选 vLLM HTTP 模式，二者产物文件名不同，聚合时用对应 join 名。
 
 
 ================================================================================
 0. 首次部署与每次开终端准备
 ================================================================================
 
-cd /workspace/audio-data-engine
+# 服务器参数速查（A800 集群当前生产布局）
+#   工程目录：  /data2/data-cp/lizi/audio-data-engine
+#   Qwen vLLM： GPU 1，port 5559，/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
+#   SenseVoice：GPU 4、5（每卡 4 shard），/data2/data-cp/xijujun/models/SenseVoiceSmall
+#   Kimi：      GPU 6，/data2/data-cp/models/kimi-audio（本地或 vLLM port 5554）
+
+cd /data2/data-cp/lizi/audio-data-engine
+# 若使用 conda 环境（与 vLLM 同机时常用）：
+# source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
 source .venv/bin/activate
 
 export OMP_NUM_THREADS=1
@@ -30,7 +40,8 @@ export MKL_NUM_THREADS=1
 # 首次部署：
 # pip install -e .
 # pip install -e ".[asr]"         # 仅 Qwen 本地推理需要；vLLM 客户端无需安装 qwen-asr
-# pip install -e ".[sensevoice]"   # SenseVoice
+# pip install -e ".[sensevoice]"   # SenseVoice 本地加载
+# pip install -e ".[kimi-audio]"   # Kimi-Audio 本地加载（kimia_infer）
 # vLLM 安装在 GPU 服务环境中，并在投产前记录实际版本：
 # pip install vllm
 # vllm --version
@@ -38,26 +49,35 @@ export MKL_NUM_THREADS=1
 # 本次批次名。只使用字母、数字、下划线和短横线。
 export BATCH=mt3000
 
-# 原始 wav/pcm 目录：
-export SOURCE_DIR=/path/to/wav_or_pcm
+# 原始 wav/pcm 目录（按批次替换子目录名）：
+export SOURCE_DIR=/data2/data-cp/lizi/wav/${BATCH}
 
-# Qwen vLLM 服务。可填写服务根地址、/v1 基地址或完整 transcription URL。
-# 三种写法都会规范化为 /v1/audio/transcriptions，推荐填写服务根地址。
-export QWEN_ASR_API_BASE=http://127.0.0.1:5553
+# Qwen vLLM 服务（GPU 1，端口 5559）。可填写服务根地址、/v1 基地址或完整 transcription URL。
+export QWEN_ASR_API_BASE=http://127.0.0.1:5559
 export QWEN_ASR_API_KEY=dummy
 
-# vLLM 的 --served-model-name 必须与 configs/asr/qwen_asr.yaml 中 model 一致；
-# 默认二者都是 qwen3-asr。QWEN_ASR_SERVED_MODEL 不是程序读取的环境变量。
+# vLLM 的 --served-model-name 必须与 configs/asr/qwen_asr.yaml 中 model 一致（qwen3-asr）。
 
-# 仅本地推理回退模式使用：
+# 仅 Qwen 本地推理回退模式使用（取消 vLLM 环境变量后生效）：
 # unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
-# export QWEN_ASR_MODEL_PATH=/models/qwen_base
+# export QWEN_ASR_MODEL_PATH=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 
-export SENSEVOICE_MODEL_PATH=/models/SenseVoiceSmall
+export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+
+# Kimi-Audio 本地加载（kimi_audio_asr_batch；GPU 6）：
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+
+# Kimi-Audio vLLM HTTP（kimi_asr_batch；GPU 6，端口 5554；与本地模式二选一或按需并行）：
+# export KIMI_ASR_API_BASE=http://127.0.0.1:5554
+# export KIMI_ASR_MODEL=kimi-audio
+
+# 探针用短音频（任选一条真实 wav）：
+export PROBE_WAV=/data2/data-cp/lizi/audio-data-engine/test_wav/sample.wav
 
 # 建议先检查：
 test -d "$SOURCE_DIR" || { echo "SOURCE_DIR 不存在"; exit 1; }
 test -e "$SENSEVOICE_MODEL_PATH" || { echo "SenseVoice 模型不存在"; exit 1; }
+# test -e "$KIMI_AUDIO_MODEL_PATH" || { echo "Kimi-Audio 本地模型不存在"; exit 1; }
 
 # vLLM 模式检查。必须看到 served model；仅端口可连接还不算就绪。
 curl -fsS "${QWEN_ASR_API_BASE%/}/v1/models" | python -m json.tool
@@ -90,40 +110,42 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 -------------------------------------------------------
 # 输出：datasets/manifests/qwen_asr_${BATCH}.parquet
 #
-# 2.1 先在独立终端启动 vLLM（服务常驻，不要在流水线命令后加 &）：
-# 请把模型目录和 GPU 改成实际值。
+# 2.1 先在独立终端启动 vLLM（GPU 1，服务常驻，不要在流水线命令后加 &）：
 
-CUDA_VISIBLE_DEVICES=0 \
-vllm serve /models/Qwen3-ASR-1.7B \
-  --host 0.0.0.0 \
-  --port 5553 \
+CUDA_VISIBLE_DEVICES=1 \
+vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
+  --gpu-memory-utilization 0.5 \
+  --host 127.0.0.1 \
+  --port 5559 \
   --served-model-name qwen3-asr \
   --tensor-parallel-size 1 \
   --trust-remote-code \
+  --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja \
   --dtype bfloat16 \
   --max-model-len 4096 \
   --max-num-seqs 8 \
   --limit-mm-per-prompt '{"audio":1}'
 
 # 2.2 在流水线终端确认环境变量与接口：
-export QWEN_ASR_API_BASE=http://127.0.0.1:5553
+export QWEN_ASR_API_BASE=http://127.0.0.1:5559
 export QWEN_ASR_API_KEY=dummy
 
-curl -fsS http://127.0.0.1:5553/v1/models | python -m json.tool
+curl -fsS http://127.0.0.1:5559/v1/models | python -m json.tool
 
 # 可选：先用真实短音频做端到端探针。返回 JSON 中必须含非空 text。
-curl -fsS http://127.0.0.1:5553/v1/audio/transcriptions \
+curl -fsS http://127.0.0.1:5559/v1/audio/transcriptions \
   -H "Authorization: Bearer ${QWEN_ASR_API_KEY}" \
   -F model=qwen3-asr \
   -F language=Chinese \
   -F response_format=json \
-  -F file=@/path/to/short_test.wav | python -m json.tool
+  -F file=@${PROBE_WAV} | python -m json.tool
 
 # 2.3 批量执行。设置 QWEN_ASR_API_BASE 后，客户端不会加载本地 Qwen 模型。
-# configs/asr/qwen_asr.yaml 中：
-#   model 必须等于 --served-model-name；
-#   concurrency 控制每个 shard 同时发出的 HTTP 请求；
-#   batch_size 控制每个 shard 每轮处理的样本数。
+# configs/asr/qwen_asr.yaml 当前值：
+#   model_path: /data2/data-cp/zcl/models/Qwen3-ASR-1___7B
+#   model: qwen3-asr（须等于 --served-model-name）
+#   concurrency: 4；batch_size: 32
+# pipelines/qwen_asr_batch.yaml sharding：gpus [4,5] × instances_per_gpu 4（vLLM 模式下仅占 CPU/网络）
 
 audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
 
@@ -133,7 +155,7 @@ audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
 
 # 只有明确需要单进程本地推理时才使用以下回退方式：
 # unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
-# export QWEN_ASR_MODEL_PATH=/models/Qwen3-ASR-1.7B
+# export QWEN_ASR_MODEL_PATH=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 # test -e "$QWEN_ASR_MODEL_PATH" || exit 1
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
 
@@ -143,18 +165,62 @@ audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
 -------------------------------------------------------
 # SenseVoice 与 Qwen 独立运行，不依赖 Qwen 的 Manifest。
 # 输出：datasets/manifests/sensevoice_asr_${BATCH}.parquet
+# 当前 sharding：GPU 4、5，每卡 4 实例，共 8 并行 shard（见 pipelines/sensevoice_asr_batch.yaml）
 
 audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATCH"
 
-# 可选 Kimi（使用独立的 vLLM 端口，不能与 Qwen 共用 served model）：
+# 中断后续跑：
+# audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
+#   --source-name "$BATCH" --resume runs/<上次_run_root>
+
+
+-------------------------------------------------------
+4. Kimi-Audio 全量识别（可选）
+-------------------------------------------------------
+# Kimi 与 Qwen/SenseVoice 独立运行。vLLM 版与本地加载版产物不同，聚合时 join 名也不同：
+#   vLLM：kimi_asr_${BATCH}.parquet          → --join-manifest kimi
+#   本地：kimi_audio_asr_${BATCH}.parquet    → --join-manifest kimi_audio
+# 转写均写入 transcripts.kimi.text。
+
+# ── 4.1 vLLM HTTP 模式（GPU 6，端口 5554；客户端不加载 GPU 模型）────────────
+# 并行：pipelines/kimi_asr_batch.yaml 默认 8 shard × 4 thread；
+#       configs/asr/kimi.yaml concurrency=4（对接 vLLM --max-num-seqs）。
+
+# CUDA_VISIBLE_DEVICES=6 \
+# vllm serve /data2/data-cp/models/kimi-audio \
+#   --gpu-memory-utilization 0.5 \
+#   --host 127.0.0.1 \
+#   --port 5554 \
+#   --served-model-name kimi-audio \
+#   --tensor-parallel-size 1 \
+#   --trust-remote-code \
+#   --dtype bfloat16 \
+#   --max-model-len 8192 \
+#   --max-num-seqs 4 \
+#   --limit-mm-per-prompt '{"audio":1}'
+
 # export KIMI_ASR_API_BASE=http://127.0.0.1:5554
 # export KIMI_ASR_MODEL=kimi-audio
 # curl -fsS http://127.0.0.1:5554/v1/models | python -m json.tool
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH"
 
+# ── 4.2 本地 kimia_infer 模式（GPU 6；与 SenseVoice 相同并发模型）──────────
+# 前置：pip install -e ".[kimi-audio]"
+# 当前 sharding：GPU 6，instances_per_gpu=1，parallel_shards=8
+# configs/asr/kimi_audio.yaml：batch_size=4，load_detokenizer=false
+
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+test -e "$KIMI_AUDIO_MODEL_PATH" || exit 1
+
+audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATCH"
+
+# 中断后续跑：
+# audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml \
+#   --source-name "$BATCH" --resume runs/<上次_run_root>
+
 
 -------------------------------------------------------
-4. 严格聚合并计算 agreement CER
+5. 严格聚合并计算 agreement CER
 -------------------------------------------------------
 # 聚合会同时校验 id 和音频 sha256；错配会立即失败并在 run/reports 写 alignment report。
 
@@ -162,10 +228,15 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
   --source-name "$BATCH" \
   --join-manifest sensevoice
 
-# 若还要聚合 Kimi：
+# 若还要聚合 Kimi（按实际使用的流水线选择 join 名）：
+# vLLM 版：
 # audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
 #   --source-name "$BATCH" \
 #   --join-manifest sensevoice --join-manifest kimi
+# 本地加载版：
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+#   --source-name "$BATCH" \
+#   --join-manifest sensevoice --join-manifest kimi_audio
 
 audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH"
 
@@ -273,10 +344,10 @@ audio-data release path "$RELEASE_ID" --split test
 -------------------------------------------------------
 9. 准备训练 recipe 并执行训练
 -------------------------------------------------------
-export TRAIN_RECIPE=/trainer/recipes/qwen_sft_v3.yaml
-export TRAIN_COMMAND="python /trainer/train.py"
+export TRAIN_RECIPE=/data2/data-cp/lizi/trainer/recipes/qwen_sft_v3.yaml
+export TRAIN_COMMAND="python /data2/data-cp/lizi/trainer/train.py"
 export CANDIDATE_MODEL_ID=qwen_sft_${BATCH}_v1
-export CANDIDATE_CHECKPOINT=/models/${CANDIDATE_MODEL_ID}
+export CANDIDATE_CHECKPOINT=/data2/data-cp/zcl/models/${CANDIDATE_MODEL_ID}
 
 test -f "$TRAIN_RECIPE" || { echo "训练 recipe 不存在"; exit 1; }
 
@@ -303,7 +374,7 @@ audio-data model show "$CANDIDATE_MODEL_ID"
 # 如果 baseline 是历史模型，请先为其真实训练数据建立/迁移 Release，不能伪造来源。
 
 export BASELINE_MODEL_ID=qwen_base_v1
-export BASELINE_CHECKPOINT=/models/qwen_base_v1
+export BASELINE_CHECKPOINT=/data2/data-cp/zcl/models/qwen_base_v1
 export BASELINE_RELEASE_ID=ds_baseline_training_v1
 
 # 只需注册一次：
@@ -311,7 +382,7 @@ export BASELINE_RELEASE_ID=ds_baseline_training_v1
 #   --id "$BASELINE_MODEL_ID" \
 #   --base-model qwen_asr \
 #   --release "$BASELINE_RELEASE_ID" \
-#   --recipe /trainer/recipes/baseline_original.yaml \
+#   --recipe /data2/data-cp/lizi/trainer/recipes/baseline_original.yaml \
 #   --checkpoint "$BASELINE_CHECKPOINT" \
 #   --status ready
 
@@ -425,8 +496,10 @@ audio-data model show <model_id>
 
 
 ================================================================================
-七、Qwen/Kimi vLLM 运维与故障排查
+七、Qwen/Kimi vLLM 与 Kimi 本地加载运维
 ================================================================================
+
+── Qwen / Kimi vLLM ─────────────────────────────────────────────────────────
 
 1. 地址规范
   推荐：QWEN_ASR_API_BASE=http://host:port
@@ -440,11 +513,13 @@ audio-data model show <model_id>
   Kimi：KIMI_ASR_MODEL 必须匹配 Kimi vLLM 的 --served-model-name。
   注册模型评测：served model 必须匹配对应 BASELINE_MODEL_ID/CANDIDATE_MODEL_ID。
 
-3. 并发预算
-  实际请求上限约为：parallel_shards × configs/asr/qwen_asr.yaml:concurrency。
-  pipelines/qwen_asr_batch.yaml 默认 parallel_shards=8、concurrency=4，即最多约 32 路。
-  这必须与 vLLM 的 --max-num-seqs、GPU 显存和音频长度共同调优。
-  出现 OOM、超时或服务排队时，先降低 concurrency 或 parallel_shards；不要盲目加大 timeout。
+3. 并发预算（当前生产默认值）
+  Qwen vLLM：parallel_shards(8) × concurrency(4) ≈ 32 路 HTTP；vLLM 在 GPU 1、port 5559，
+             --max-num-seqs 建议 ≥ 8。
+  Kimi vLLM：parallel_shards(8) × concurrency(4) ≈ 32 路；vLLM 在 GPU 6、port 5554。
+  SenseVoice 本地：GPU 4、5 × instances_per_gpu(4) = 8 shard，batch_size=32。
+  Kimi 本地：GPU 6 × instances_per_gpu(1) = 8 shard（单卡多 shard 串行加载），batch_size=4。
+  出现 OOM、超时或服务排队时，先降低 concurrency / parallel_shards / batch_size。
 
 4. 常见错误
   HTTP 404：检查 API_BASE 是否错误重复包含 /v1，以及 vLLM 是否提供 transcription 路由。
@@ -464,19 +539,51 @@ audio-data model show <model_id>
   等流水线退出并写完 Manifest/checkpoint 后再停止 vLLM。
   中途停服的样本会标记 failed；恢复服务后使用 --resume 续跑，不要删除已完成的 run root。
 
+── Kimi-Audio 本地加载（kimi_audio_asr_batch）────────────────────────────────
+
+1. 依赖与模型路径
+  pip install -e ".[kimi-audio]"  # 含 kimia_infer（GitHub 源）
+  KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio（覆盖 configs/asr/kimi_audio.yaml）
+  ASR 场景 load_detokenizer: false（默认已关闭），可显著节省显存。
+
+2. 并发预算
+  与 SenseVoice 相同：parallel_shards <= len(gpus) * instances_per_gpu。
+  每个 shard 进程加载一次 Kimi-Audio；batch_size 控制进程内每轮处理的文件数。
+  inference_threads 在共享 CUDA 模型时应保持 1；不要用 execution.workers 做 GPU 并发。
+
+3. 常见错误
+  ImportError kimia_infer：未安装 [kimi-audio] extra。
+  FileNotFoundError 本地模型目录：检查 KIMI_AUDIO_MODEL_PATH。
+  CUDA OOM：降低 parallel_shards、instances_per_gpu 或 batch_size；7B 通常先从每卡 1 实例开始。
+  空 text：先用单条脚本探针（见 docs/流水线改进/构造kimi本地模型加载的流水线.md）。
+
+4. 缓存与重跑
+  model_path、prompt、generation_kwargs 会参与 cache 键；改配置后需 --force 或清 cache。
+  shard 结束后 release_asr_models 会释放进程内模型缓存；同一机器串行跑多模型时无需手工 kill GPU 进程。
+
+5. vLLM 版 vs 本地版
+  二者 operator、配置、产物文件名均不同，不可混用 join 名：
+    kimi_asr_batch       → kimi_asr_<BATCH>       → --join-manifest kimi
+    kimi_audio_asr_batch → kimi_audio_asr_<BATCH> → --join-manifest kimi_audio
+
 
 ================================================================================
 八、每个新批次只需要修改的变量
 ================================================================================
 
 [ ] BATCH
-[ ] SOURCE_DIR
-[ ] QWEN_ASR_API_BASE / QWEN_ASR_API_KEY
-[ ] Qwen --served-model-name 与 configs/asr/qwen_asr.yaml:model
-[ ] Qwen vLLM 模型目录、GPU、端口、max-num-seqs
-[ ] Qwen parallel_shards × concurrency 并发预算
-[ ] SENSEVOICE_MODEL_PATH
-[ ] （仅本地回退）QWEN_ASR_MODEL_PATH
+[ ] SOURCE_DIR（默认 /data2/data-cp/lizi/wav/${BATCH}）
+[ ] QWEN_ASR_API_BASE=http://127.0.0.1:5559 / QWEN_ASR_API_KEY
+[ ] Qwen vLLM：GPU 1，模型 /data2/data-cp/zcl/models/Qwen3-ASR-1___7B，--served-model-name qwen3-asr
+[ ] Qwen parallel_shards(8) × concurrency(4)
+[ ] SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+[ ] SenseVoice sharding：gpus [4,5] × instances_per_gpu 4
+[ ] （可选 Kimi vLLM）GPU 6，/data2/data-cp/models/kimi-audio，port 5554，KIMI_ASR_MODEL=kimi-audio
+[ ] （可选 Kimi vLLM）kimi_asr_batch sharding；configs/asr/kimi.yaml concurrency=4
+[ ] （可选 Kimi 本地）KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+[ ] （可选 Kimi 本地）kimi_audio_asr_batch gpus [6] instances_per_gpu 1；kimi_audio.yaml batch_size=4
+[ ] multi_asr_aggregate 的 --join-manifest（kimi 或 kimi_audio）
+[ ] （仅 Qwen 本地回退）QWEN_ASR_MODEL_PATH=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 [ ] REVIEW_REV
 [ ] RELEASE_ID
 [ ] group-key（conversation_id 或 speaker_id）
@@ -497,10 +604,13 @@ audio-data model show <model_id>
 九、生产前验收清单
 ================================================================================
 
-[ ] 清洗、Qwen、SenseVoice、聚合、Metric 每步控制台均打印 Artifact ID
+[ ] 清洗、Qwen、SenseVoice、（可选 Kimi）、聚合、Metric 每步控制台均打印 Artifact ID
 [ ] Qwen /v1/models 返回的 served model 与配置完全一致
 [ ] Qwen transcription curl 探针返回非空 text
 [ ] Qwen 实际并发不超过 vLLM/GPU 的稳定承载能力
+[ ] （若跑 Kimi vLLM）Kimi /v1/models 与 KIMI_ASR_MODEL 一致，transcription 探针非空
+[ ] （若跑 Kimi 本地）KIMI_AUDIO_MODEL_PATH 存在，小 manifest 冒烟后 transcripts.kimi.text 非空
+[ ] （若跑 Kimi 本地）parallel_shards 不超过可用 GPU slot 数
 [ ] aggregate alignment report 中 aligned=true，sha256_mismatches=0
 [ ] selection policy_version 已在人审校准集上验证
 [ ] review XLSX 所有行 decision 均为 accepted/rejected
@@ -520,7 +630,8 @@ audio-data model show <model_id>
 
 wav/pcm
   → cleaned_${BATCH}
-  → qwen_asr_${BATCH} + sensevoice_asr_${BATCH} (+ kimi)
+  → qwen_asr_${BATCH} + sensevoice_asr_${BATCH}
+    (+ 可选 kimi_asr_${BATCH} 或 kimi_audio_asr_${BATCH})
   → multi_asr_aggregate_${BATCH}
   → multi_asr_metrics_${BATCH}
   → classified_${BATCH}

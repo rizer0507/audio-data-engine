@@ -26,6 +26,10 @@ sensevoice = [
     "funasr",
     "modelscope",
 ]
+kimi-audio = [
+    "torch",
+    "kimia-audio @ git+https://github.com/MoonshotAI/Kimi-Audio.git",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",

@@ -1,11 +1,14 @@
 model: kimi-audio-7b-instruct
-model_path: moonshotai/Kimi-Audio-7B-Instruct
-model_version: unknown
+model_path: /data2/data-cp/models/kimi-audio
+model_version: "Kimi-Audio-7B-Instruct"
 device: cuda
+
+# ASR 仅需文本输出；关闭 detokenizer 可显著节省显存。
+load_detokenizer: false
 
 # Native batch-capable wrappers receive this many files per call.  The official
 # generate-only wrapper falls back to one generation at a time for GPU safety.
-batch_size: 8
+batch_size: 4
 inference_threads: 1
 
 prompt: Please transcribe the audio accurately. Output only the transcription.

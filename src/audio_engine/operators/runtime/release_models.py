@@ -35,10 +35,17 @@ class ReleaseAsrModelsOperator(ManifestOperator):
         try:
             from audio_engine.operators.asr import kimi as kimi_mod
 
-            released["kimi"] = int(kimi_mod.release_cached_models())
+            released["kimi"] = int(getattr(kimi_mod, "release_cached_models", lambda: 0)())
         except Exception as exc:  # noqa: BLE001
             logger.warning("release kimi cache failed: {}", exc)
             released["kimi"] = -1
+        try:
+            from audio_engine.operators.asr import kimi_audio as kimi_audio_mod
+
+            released["kimi_audio"] = int(kimi_audio_mod.release_cached_models())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("release kimi_audio cache failed: {}", exc)
+            released["kimi_audio"] = -1
 
         try:
             from audio_engine.operators.asr import sensevoice as sv_mod

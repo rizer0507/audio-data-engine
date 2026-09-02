@@ -125,6 +125,13 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
     )
     assert kimi["output_manifest"].endswith("kimi_asr_mt3000.parquet")
 
+    kimi_local = apply_source_name_to_single_pipeline(
+        pipeline_name="kimi_audio_asr_batch",
+        steps=[_Step("asr.kimi_audio_batch")],
+        source_name="mt3000",
+    )
+    assert kimi_local["output_manifest"].endswith("kimi_audio_asr_mt3000.parquet")
+
     aggregate = apply_source_name_to_single_pipeline(
         pipeline_name="multi_asr_aggregate",
         steps=[

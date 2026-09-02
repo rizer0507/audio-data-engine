@@ -71,3 +71,6 @@ resources/source/*
 
 #error记录
 error.log
+
+#tmp
+tmp/*
