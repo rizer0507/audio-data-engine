@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import json
-import mimetypes
 import os
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import yaml
 
@@ -16,6 +11,7 @@ from audio_engine.core.operator import BatchOperator, OperatorConfig, OperatorRe
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
 from audio_engine.operators.asr.base import BaseASROperator
+from audio_engine.operators.asr.vllm import call_vllm_transcription
 
 
 def _load_asr_config(config_path: str | None) -> dict[str, Any]:
@@ -57,73 +53,8 @@ def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorC
     return config.model_copy(update={"params": params})
 
 
-def _encode_multipart(
-    fields: dict[str, str],
-    files: dict[str, tuple[str, bytes, str]],
-) -> tuple[bytes, str]:
-    boundary = f"----AudioEngineBoundary{uuid4().hex}"
-    parts: list[bytes] = []
-    for name, value in fields.items():
-        parts.append(f"--{boundary}\r\n".encode())
-        parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
-        parts.append(f"{value}\r\n".encode())
-    for name, (filename, data, content_type) in files.items():
-        parts.append(f"--{boundary}\r\n".encode())
-        parts.append(
-            f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode()
-        )
-        parts.append(f"Content-Type: {content_type}\r\n\r\n".encode())
-        parts.append(data)
-        parts.append(b"\r\n")
-    parts.append(f"--{boundary}--\r\n".encode())
-    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
-
-
 def _call_vllm_transcription(audio_path: str, settings: dict[str, Any]) -> dict[str, Any]:
-    path = Path(audio_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"音频文件不存在: {audio_path}")
-
-    audio_bytes = path.read_bytes()
-    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    fields: dict[str, str] = {
-        "model": str(settings["model"]),
-        "language": str(settings.get("language", "zh")),
-        "temperature": str(settings.get("temperature", 0)),
-        "max_completion_tokens": str(settings.get("max_completion_tokens", 256)),
-    }
-    prompt = settings.get("prompt")
-    if prompt:
-        fields["prompt"] = str(prompt)
-
-    body, content_type = _encode_multipart(
-        fields,
-        {"file": (path.name, audio_bytes, mime_type)},
-    )
-    api_base = str(settings["api_base"]).rstrip("/")
-    url = f"{api_base}/v1/audio/transcriptions"
-    headers = {"Content-Type": content_type}
-    api_key = settings.get("api_key")
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    timeout = float(settings.get("timeout", 120))
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Kimi ASR HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Kimi ASR 请求失败: {exc.reason}") from exc
-
-    text = str(payload.get("text", ""))
-    return {
-        "text": text,
-        "language": settings.get("language"),
-        "extra": {"raw_response": payload},
-    }
+    return call_vllm_transcription(audio_path, settings)
 
 
 def _transcribe_many(audio_paths: list[str], settings: dict[str, Any]) -> list[dict[str, Any]]:

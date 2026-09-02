@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from audio_engine.core.operator import BatchOperator, OperatorConfig, OperatorRe
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
 from audio_engine.operators.asr.base import BaseASROperator
+from audio_engine.operators.asr.vllm import call_vllm_transcription
 
 _MODEL_CACHE: dict[str, Any] = {}
 _MODEL_LOCK = threading.Lock()
@@ -51,12 +53,31 @@ def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
         or settings.get("model_path")
         or settings.get("model", "Qwen/Qwen3-ASR-1.7B")
     )
+    settings["api_base"] = (
+        config.params.get("api_base")
+        or os.environ.get("QWEN_ASR_API_BASE")
+        or settings.get("api_base")
+    )
+    settings["api_key"] = (
+        config.params.get("api_key")
+        or os.environ.get("QWEN_ASR_API_KEY")
+        or settings.get("api_key")
+    )
     return settings
 
 
 def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorConfig:
     params = dict(config.params)
-    for key in ("model", "model_version", "model_path", "dtype", "device_map"):
+    for key in (
+        "model",
+        "model_version",
+        "model_path",
+        "dtype",
+        "device_map",
+        "api_base",
+        "language",
+        "prompt",
+    ):
         if key in settings:
             params[f"resolved_{key}"] = settings[key]
     return config.model_copy(update={"params": params})
@@ -150,10 +171,17 @@ class QwenASROperator(BaseASROperator):
         model_name = settings.get("model", "qwen3-asr")
         model_version = settings.get("model_version", settings.get("version", "unknown"))
         api_url = settings.get("api_url")
+        api_base = settings.get("api_base")
 
         if config.mock or config.params.get("mock"):
             text = self._mock_transcript(sample, config)
             language = settings.get("language")
+        elif api_base:
+            result = call_vllm_transcription(
+                sample.audio_path(config.params.get("input_audio_key", "raw")), settings
+            )
+            text = result["text"]
+            language = result.get("language")
         elif api_url:
             text = self._call_remote_api(sample, config, api_url, settings)
             language = settings.get("language")
@@ -217,11 +245,12 @@ class QwenBatchASROperator(BatchOperator):
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         settings = _resolve_settings(config)
-        result = _transcribe_many(
-            _load_qwen_model(settings),
-            [sample.audio_path(config.params.get("input_audio_key", "raw"))],
-            settings,
-        )[0]
+        path = sample.audio_path(config.params.get("input_audio_key", "raw"))
+        result = (
+            call_vllm_transcription(path, settings)
+            if settings.get("api_base")
+            else _transcribe_many(_load_qwen_model(settings), [path], settings)[0]
+        )
         return self._updates(result, config, settings)
 
     def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
@@ -258,7 +287,7 @@ class QwenBatchASROperator(BatchOperator):
                 results[index] = self._finalize(sample, result, cache_key, config, settings)
         elif pending:
             try:
-                model = _load_qwen_model(settings)
+                model = None if settings.get("api_base") else _load_qwen_model(settings)
             except Exception as exc:  # noqa: BLE001 - report model startup per sample
                 for index, sample, _ in pending:
                     results[index] = self._failed(sample, exc)
@@ -266,7 +295,10 @@ class QwenBatchASROperator(BatchOperator):
                 inference_batch_size = max(1, int(settings.get("batch_size", 8)))
                 for start in range(0, len(pending), inference_batch_size):
                     chunk = pending[start : start + inference_batch_size]
-                    self._process_inference_chunk(chunk, model, config, settings, results)
+                    if settings.get("api_base"):
+                        self._process_vllm_chunk(chunk, config, settings, results)
+                    else:
+                        self._process_inference_chunk(chunk, model, config, settings, results)
 
         if any(result is None for result in results):
             raise RuntimeError("Qwen batch operator produced an incomplete result set")
@@ -298,6 +330,32 @@ class QwenBatchASROperator(BatchOperator):
 
         for (index, sample, cache_key), transcript in zip(chunk, transcripts):
             results[index] = self._finalize(sample, transcript, cache_key, config, settings)
+
+    def _process_vllm_chunk(
+        self,
+        chunk: list[tuple[int, Sample, str]],
+        config: OperatorConfig,
+        settings: dict[str, Any],
+        results: list[OperatorResult | None],
+    ) -> None:
+        input_key = config.params.get("input_audio_key", "raw")
+        concurrency = min(max(1, int(settings.get("concurrency", 4))), len(chunk))
+
+        def transcribe(item: tuple[int, Sample, str]) -> tuple[int, dict[str, Any]]:
+            index, sample, _ = item
+            return index, call_vllm_transcription(sample.audio_path(input_key), settings)
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {pool.submit(transcribe, item): item for item in chunk}
+            for future in as_completed(futures):
+                index, sample, cache_key = futures[future]
+                try:
+                    _, transcript = future.result()
+                    results[index] = self._finalize(
+                        sample, transcript, cache_key, config, settings
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolate request failures
+                    results[index] = self._failed(sample, exc)
 
     def _updates(
         self,
