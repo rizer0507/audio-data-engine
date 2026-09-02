@@ -79,17 +79,40 @@ def test_review_import_and_release_build_end_to_end(tmp_path, monkeypatch):
                 id=f"s{i}",
                 source_path=f"{i}.wav",
                 sha256=f"{i:064x}",
-                labels={"classification_bucket": "review_queue", "speaker_id": f"p{i}"},
+                labels={
+                    "classification_bucket": "review_queue" if i % 2 else "hardcase",
+                    "speaker_id": f"p{i}",
+                },
                 transcripts={"qwen": {"text": f"文本{i}"}},
             )
             for i in range(10)
+        ]
+        + [
+            Sample(
+                id="noise",
+                source_path="noise.wav",
+                sha256="f" * 64,
+                labels={"classification_bucket": "noise", "speaker_id": "noise"},
+            )
         ]
     ).save(source)
     runner = CliRunner()
     review = tmp_path / "review.xlsx"
     exported = runner.invoke(
         app,
-        ["review", "export", str(source), "--output", str(review), "--revision", "r1"],
+        [
+            "review",
+            "export",
+            str(source),
+            "--output",
+            str(review),
+            "--revision",
+            "r1",
+            "--bucket",
+            "review_queue",
+            "--bucket",
+            "hardcase",
+        ],
     )
     assert exported.exit_code == 0, exported.output
     frame = pd.read_excel(review, dtype=str).fillna("")
@@ -109,10 +132,18 @@ def test_review_import_and_release_build_end_to_end(tmp_path, monkeypatch):
             str(reviewed),
             "--revision",
             "r1",
+            "--bucket",
+            "review_queue",
+            "--bucket",
+            "hardcase",
         ],
     )
     assert imported.exit_code == 0, imported.output
-    assert all(s.labels["annotation_state"] == "human_accepted" for s in Manifest.load(reviewed))
+    reviewed_samples = Manifest.load(reviewed).samples
+    assert sum(s.labels.get("annotation_state") == "human_accepted" for s in reviewed_samples) == 10
+    assert (
+        next(s for s in reviewed_samples if s.id == "noise").labels.get("annotation_state") is None
+    )
 
     built = runner.invoke(
         app,
@@ -141,3 +172,6 @@ def test_review_import_and_release_build_end_to_end(tmp_path, monkeypatch):
         )
         == 10
     )
+    resolved = runner.invoke(app, ["release", "path", "ds_v1", "--split", "test"])
+    assert resolved.exit_code == 0, resolved.output
+    assert resolved.output.strip().replace("\\", "/").endswith("data/releases/ds_v1/test.parquet")

@@ -56,27 +56,14 @@ def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
     )
     settings["api_base"] = (
         config.params.get("api_base")
-        or os.environ.get(str(config.params.get("api_base_env") or ""))
         or os.environ.get("QWEN_ASR_API_BASE")
         or settings.get("api_base")
     )
     settings["api_key"] = (
         config.params.get("api_key")
-        or os.environ.get(str(config.params.get("api_key_env") or ""))
         or os.environ.get("QWEN_ASR_API_KEY")
         or settings.get("api_key")
     )
-    return settings
-
-
-def _resolve_batch_settings(config: OperatorConfig) -> dict[str, Any]:
-    """Resolve Qwen batch settings; batch inference is vLLM-only."""
-    settings = _resolve_settings(config)
-    if not settings.get("api_base") and not (config.mock or config.params.get("mock")):
-        raise ValueError(
-            "Qwen batch inference only supports vLLM. Export QWEN_ASR_API_BASE "
-            "or set params.api_base."
-        )
     return settings
 
 
@@ -258,9 +245,13 @@ class QwenBatchASROperator(BatchOperator):
         return super().should_skip(sample, config)
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
-        settings = _resolve_batch_settings(config)
+        settings = _resolve_settings(config)
         path = sample.audio_path(config.params.get("input_audio_key", "raw"))
-        result = call_vllm_transcription(path, settings)
+        result = (
+            call_vllm_transcription(path, settings)
+            if settings.get("api_base")
+            else _transcribe_many(_load_qwen_model(settings), [path], settings)[0]
+        )
         return self._updates(result, config, settings)
 
     def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
@@ -312,14 +303,49 @@ class QwenBatchASROperator(BatchOperator):
                 }
                 results[index] = self._finalize(sample, result, cache_key, config, settings)
         elif pending:
-            inference_batch_size = max(1, int(settings.get("batch_size", 8)))
-            for start in range(0, len(pending), inference_batch_size):
-                chunk = pending[start : start + inference_batch_size]
-                self._process_vllm_chunk(chunk, config, settings, results)
+            try:
+                model = None if settings.get("api_base") else _load_qwen_model(settings)
+            except Exception as exc:  # noqa: BLE001 - report model startup per sample
+                for index, sample, _ in pending:
+                    results[index] = self._failed(sample, exc)
+            else:
+                inference_batch_size = max(1, int(settings.get("batch_size", 8)))
+                for start in range(0, len(pending), inference_batch_size):
+                    chunk = pending[start : start + inference_batch_size]
+                    if settings.get("api_base"):
+                        self._process_vllm_chunk(chunk, config, settings, results)
+                    else:
+                        self._process_inference_chunk(chunk, model, config, settings, results)
 
         if any(result is None for result in results):
             raise RuntimeError("Qwen batch operator produced an incomplete result set")
         return [result for result in results if result is not None]
+
+    def _process_vllm_chunk(
+        self,
+        chunk: list[tuple[int, Sample, str]],
+        config: OperatorConfig,
+        settings: dict[str, Any],
+        results: list[OperatorResult | None],
+    ) -> None:
+        input_key = config.params.get("input_audio_key", "raw")
+        concurrency = min(max(1, int(settings.get("concurrency", 4))), len(chunk))
+
+        def transcribe(item: tuple[int, Sample, str]) -> tuple[int, dict[str, Any]]:
+            index, sample, _ = item
+            return index, call_vllm_transcription(sample.audio_path(input_key), settings)
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {pool.submit(transcribe, item): item for item in chunk}
+            for future in as_completed(futures):
+                index, sample, cache_key = futures[future]
+                try:
+                    _, transcript = future.result()
+                    results[index] = self._finalize(
+                        sample, transcript, cache_key, config, settings
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolate request failures
+                    results[index] = self._failed(sample, exc)
 
     def _process_vllm_chunk(
         self,

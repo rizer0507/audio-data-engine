@@ -13,8 +13,8 @@
   3. Dataset Release 一旦创建不可修改；标注或规则变化必须创建新 release_id。
   4. baseline/candidate 都使用 Model Registry ID，不在评测命令里直接填写 checkpoint。
   5. review 是明确的人工审批边界；未审核 hardcase/review_queue 不允许进入 Release。
-  6. Qwen 批量识别只允许通过独立 vLLM 服务调用；流水线进程不会加载 Qwen GPU 模型。
-     未配置 vLLM 地址时直接失败，不提供本地批处理回退。
+  6. Qwen 生产识别默认通过独立 vLLM 服务调用；流水线进程不加载 Qwen GPU 模型。
+     只有明确取消 QWEN_ASR_API_BASE 时，才回退到 qwen-asr 本地推理。
 
 
 ================================================================================
@@ -29,7 +29,7 @@ export MKL_NUM_THREADS=1
 
 # 首次部署：
 # pip install -e .
-# Qwen 批处理客户端无需安装 qwen-asr；模型依赖只安装在 vLLM 服务环境。
+# pip install -e ".[asr]"         # 仅 Qwen 本地推理需要；vLLM 客户端无需安装 qwen-asr
 # pip install -e ".[sensevoice]"   # SenseVoice
 # vLLM 安装在 GPU 服务环境中，并在投产前记录实际版本：
 # pip install vllm
@@ -48,6 +48,10 @@ export QWEN_ASR_API_KEY=dummy
 
 # vLLM 的 --served-model-name 必须与 configs/asr/qwen_asr.yaml 中 model 一致；
 # 默认二者都是 qwen3-asr。QWEN_ASR_SERVED_MODEL 不是程序读取的环境变量。
+
+# 仅本地推理回退模式使用：
+# unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
+# export QWEN_ASR_MODEL_PATH=/models/qwen_base
 
 export SENSEVOICE_MODEL_PATH=/models/SenseVoiceSmall
 
@@ -123,16 +127,16 @@ curl -fsS http://127.0.0.1:5553/v1/audio/transcriptions \
 
 audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
 
-# 每个 shard 日志开头必须出现：
-#   Qwen batch backend=vllm api_base=http://... model=qwen3-asr ...
-#   Qwen batch decision: pending=N skipped=N cache_hits=N
-# 如果缺少 API 地址，批处理会直接报错，不会静默加载本地模型。
-# 父进程控制台还会在分片前打印 `Qwen preflight: backend=vllm ...`；因此即使某个
-# shard 直接恢复完整 checkpoint、没有进入 operator，也能确认父进程看到的后端配置。
-
 # 中断后续跑（使用控制台打印的 run root）：
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml \
 #   --source-name "$BATCH" --resume runs/<上次_run_root>
+
+# 只有明确需要单进程本地推理时才使用以下回退方式：
+# unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
+# export QWEN_ASR_MODEL_PATH=/models/Qwen3-ASR-1.7B
+# test -e "$QWEN_ASR_MODEL_PATH" || exit 1
+# audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
+
 
 -------------------------------------------------------
 3. SenseVoice 全量识别
@@ -323,14 +327,14 @@ audio-data model show "$BASELINE_MODEL_ID"
 -------------------------------------------------------
 # 默认示例使用同一 Release 的 test split。更严格的做法是长期维护独立 holdout Release。
 #
-# Qwen batch 已完全禁用本地模型加载。评测前必须分别启动 baseline/candidate vLLM，
-# 两个服务加载各自 checkpoint，并使用不同端口。served-model-name 必须分别等于
-# BASELINE_MODEL_ID 和 CANDIDATE_MODEL_ID。
-
-export BASELINE_ASR_API_BASE=http://127.0.0.1:5561
-export BASELINE_ASR_API_KEY=dummy
-export CANDIDATE_ASR_API_BASE=http://127.0.0.1:5562
-export CANDIDATE_ASR_API_KEY=dummy
+# 重要：默认评测流水线会根据 Model Registry 中的 checkpoint 依次加载 baseline/candidate，
+# 因此执行前必须取消批量建集阶段使用的 Qwen vLLM 环境变量：
+#
+#   unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
+#
+# 否则两个 inference step 都会被路由到同一个 vLLM 地址，而单模型 vLLM 服务不会按
+# Registry checkpoint 自动换权重，可能导致新旧模型实际使用相同权重、评测结果无效。
+# 本地评测还需要安装 `pip install -e ".[asr]"`，并确保两份 checkpoint 均可访问。
 
 export EVAL_MANIFEST="$(audio-data release path "$RELEASE_ID" --split test)"
 export EVAL_OUTPUT="data/evaluations/${RELEASE_ID}_${CANDIDATE_MODEL_ID}.parquet"
@@ -354,12 +358,17 @@ audio-data pipeline run pipelines/evaluate_registered_models.yaml
   流水线返回失败，但 evaluation.json 会保留；先检查 delta_cer、各 bucket 和 badcase，
   不要用 --force 或修改阈值绕过发布判断。
 
-评测 vLLM 要求：
+如评测数据规模必须使用 vLLM：
   1. 分别在不同端口启动 baseline 和 candidate vLLM，加载各自 checkpoint；
   2. --served-model-name 分别设置为 BASELINE_MODEL_ID 和 CANDIDATE_MODEL_ID；
-  3. 流水线分别读取 BASELINE_ASR_API_BASE 和 CANDIDATE_ASR_API_BASE；
-  4. 评测时不要只设置一个全局 QWEN_ASR_API_BASE；
+  3. 复制 pipelines/evaluate_registered_models.yaml，为 baseline_inference 和
+     candidate_inference 分别显式填写不同的 api_base；
+  4. 不要只设置一个全局 QWEN_ASR_API_BASE；
   5. 分别用 /v1/models 和一条真实音频探针确认两个端口，再开始全量评测。
+
+示例（复制后的 YAML 片段）：
+  baseline_inference.params.api_base: http://127.0.0.1:5561
+  candidate_inference.params.api_base: http://127.0.0.1:5562
 
 由于 registered_model 会把请求中的 model 设置为 Registry ID，两个 vLLM 服务的
 --served-model-name 必须与对应 Registry ID 完全一致，否则会收到 HTTP 404/400。
@@ -451,30 +460,6 @@ audio-data model show <model_id>
   服务端更换权重但仍沿用同一 served-model-name 时，客户端无法感知权重变化；此时必须
   同时升级 model/model_version 或用 --force 重跑，禁止复用旧缓存冒充新模型结果。
 
-  如果 vLLM 完全没有请求记录，但进度从 0 瞬间跳到一个大数（例如 6087），这不是
-  vLLM 瞬间处理完成，而是进度聚合器发现了已有 shard 输出或 checkpoint。另一个可能是
-  输入 Manifest 已将 asr.qwen_batch 标记 completed，或者命中了 data/cache；这些样本会
-  skipped/cache_hit，不会发送 HTTP 请求。
-
-  按以下顺序确认实际原因：
-    env | rg '^QWEN_ASR_(API_BASE|API_KEY)='
-    rg 'Qwen batch backend|Qwen batch decision' runs/<run_root>/shard-*.log
-    find runs/<run_root> -maxdepth 3 -type f \
-      \( -name '_state.json' -o -name 'shard-*.parquet' \) -print
-
-  日志解释：
-    backend=vllm：环境变量已进入 shard 子进程；随后应查看 pending。
-    pending=0 skipped>0：输入样本已经带 completed 状态。
-    pending=0 cache_hits>0：命中了 data/cache 中的旧识别结果。
-    尚未打印 backend：该 shard 恢复了完整 checkpoint，operator 根本没有重新进入。
-
-  要验证 vLLM 的真实调用，使用一个新的 run（不要带 --resume）并加 --force：
-    audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-      --source-name "$BATCH" --force
-
-  --force 会忽略 operator cache、样本 completed 状态和旧 checkpoint。不要同时把旧 run root
-  传给 --resume；排障成功后再决定是否保留或清理旧 run/cache。
-
 6. 安全停服
   等流水线退出并写完 Manifest/checkpoint 后再停止 vLLM。
   中途停服的样本会标记 failed；恢复服务后使用 --resume 续跑，不要删除已完成的 run root。
@@ -491,6 +476,7 @@ audio-data model show <model_id>
 [ ] Qwen vLLM 模型目录、GPU、端口、max-num-seqs
 [ ] Qwen parallel_shards × concurrency 并发预算
 [ ] SENSEVOICE_MODEL_PATH
+[ ] （仅本地回退）QWEN_ASR_MODEL_PATH
 [ ] REVIEW_REV
 [ ] RELEASE_ID
 [ ] group-key（conversation_id 或 speaker_id）
@@ -522,8 +508,8 @@ audio-data model show <model_id>
 [ ] train/dev/test 不存在 conversation_id/speaker_id 交集
 [ ] Training Job 状态 succeeded，Model 状态 ready，checkpoint 存在
 [ ] baseline 与 candidate 都能通过 model show 查询
-[ ] 注册模型评测已配置 BASELINE_ASR_API_BASE 和 CANDIDATE_ASR_API_BASE 两个独立端口
-[ ] 两个评测端口加载的 checkpoint 和 served-model-name 均已分别核验
+[ ] 注册模型评测前已 unset 全局 QWEN_ASR_API_BASE，或已配置两个独立 vLLM 端口
+[ ] 若使用双 vLLM 评测，两个端口加载的 checkpoint 和 served-model-name 均已分别核验
 [ ] evaluation.json 同时包含 overall、buckets、paired_bootstrap、gates
 [ ] 门禁 passed=true 后才允许进入后续发布流程
 

@@ -81,8 +81,9 @@ def _register_output(
     return record.artifact_id
 
 
-def _review_queue_id(dataset_path: Path, bucket: str, revision: str) -> str:
-    raw = f"{dataset_path.resolve()}\0{bucket}\0{revision}"
+def _review_queue_id(dataset_path: Path, buckets: list[str], revision: str) -> str:
+    canonical_buckets = ",".join(sorted(set(buckets)))
+    raw = f"{dataset_path.resolve()}\0{canonical_buckets}\0{revision}"
     return f"review_{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
 
 
@@ -626,7 +627,7 @@ def artifact_path(
         record = ArtifactCatalog(catalog_dir).get(artifact_id, verify=True)
     except (KeyError, FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(record.uri)
+    typer.echo(record.uri)
 
 
 release_app = typer.Typer(help="Immutable dataset release commands")
@@ -686,6 +687,24 @@ def release_show(
     console.print_json(data=release.model_dump(mode="json"))
 
 
+@release_app.command("path")
+def release_path(
+    release_id: str,
+    split: str = typer.Option("test", "--split", help="train/dev/test/holdout"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Resolve one frozen release split to its verified Manifest path."""
+    try:
+        catalog = ArtifactCatalog(catalog_dir)
+        release = catalog.get_release(release_id)
+        if split not in release.outputs:
+            raise ValueError(f"release {release_id} has no split: {split}")
+        record = catalog.get(release.outputs[split], verify=True)
+    except (KeyError, FileNotFoundError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(record.uri)
+
+
 @release_app.command("build")
 def release_build(
     dataset: str = typer.Argument(..., help="Reviewed manifest path/name/artifact id"),
@@ -712,20 +731,36 @@ def release_build(
         source_path = Path(source_record.uri)
     else:
         source_path = _resolve_dataset(dataset)
-    manifest = Manifest.load(source_path)
+    full_manifest = Manifest.load(source_path)
+    unresolved = [
+        sample.id
+        for sample in full_manifest
+        if sample.labels.get("classification_bucket") in {"review_queue", "hardcase"}
+        and sample.labels.get("annotation_state")
+        not in {"human_accepted", "auto_accepted", "rejected"}
+    ]
+    if unresolved:
+        raise typer.BadParameter(
+            f"release contains {len(unresolved)} unresolved review samples: {unresolved[:10]}"
+        )
+    eligible = [
+        sample
+        for sample in full_manifest
+        if sample.labels.get("annotation_state") in {"human_accepted", "auto_accepted"}
+    ]
+    invalid_gold = [
+        sample.id for sample in eligible if not str(sample.labels.get("gold_text") or "").strip()
+    ]
+    if invalid_gold:
+        raise typer.BadParameter(
+            f"release contains {len(invalid_gold)} accepted samples without Gold: {invalid_gold[:10]}"
+        )
+    if not eligible:
+        raise typer.BadParameter("release has no accepted Gold samples")
+    manifest = Manifest(eligible)
     if not dataset.startswith("manifest_"):
         source_record = catalog.register_file(
-            source_path, kind="manifest", metadata={"sample_count": len(manifest)}
-        )
-    invalid = [
-        sample.id
-        for sample in manifest
-        if sample.labels.get("annotation_state") not in {"human_accepted", "auto_accepted"}
-        or not str(sample.labels.get("gold_text") or "").strip()
-    ]
-    if invalid:
-        raise typer.BadParameter(
-            f"release contains {len(invalid)} samples without accepted Gold: {invalid[:10]}"
+            source_path, kind="manifest", metadata={"sample_count": len(full_manifest)}
         )
     ratios = {"train": train_ratio, "dev": dev_ratio, "test": test_ratio}
     try:
@@ -865,15 +900,18 @@ app.add_typer(review_app, name="review")
 def review_export(
     dataset: str = typer.Argument(...),
     output: Path = typer.Option(..., "--output", "-o"),
-    bucket: str = typer.Option("review_queue", "--bucket"),
+    bucket: Optional[list[str]] = typer.Option(
+        None, "--bucket", help="Bucket to review; repeatable (default: review_queue)"
+    ),
     revision: str = typer.Option(..., "--revision"),
 ) -> None:
     dataset_path = _resolve_dataset(dataset)
     manifest = Manifest.load(dataset_path)
-    queue_id = _review_queue_id(dataset_path, bucket, revision)
+    buckets = bucket or ["review_queue"]
+    queue_id = _review_queue_id(dataset_path, buckets, revision)
     rows = []
     for sample in manifest:
-        if sample.labels.get("classification_bucket") != bucket:
+        if sample.labels.get("classification_bucket") not in buckets:
             continue
         row = {
             "sample_id": sample.id,
@@ -900,7 +938,9 @@ def review_import(
     review_file: Path = typer.Option(..., "--input"),
     output: Path = typer.Option(..., "--output", "-o"),
     expected_revision: str = typer.Option(..., "--revision"),
-    bucket: str = typer.Option("review_queue", "--bucket"),
+    bucket: Optional[list[str]] = typer.Option(
+        None, "--bucket", help="Bucket included by export; repeatable"
+    ),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
     import pandas as pd
@@ -922,7 +962,8 @@ def review_import(
         raise typer.BadParameter(f"review file missing columns: {sorted(missing)}")
     if frame["sample_id"].duplicated().any():
         raise typer.BadParameter("review file contains duplicate sample_id")
-    expected_queue_id = _review_queue_id(dataset_path, bucket, expected_revision)
+    buckets = bucket or ["review_queue"]
+    expected_queue_id = _review_queue_id(dataset_path, buckets, expected_revision)
     if set(frame["queue_id"]) != {expected_queue_id}:
         raise typer.BadParameter(f"review queue identity mismatch: expected {expected_queue_id}")
     indexed = {sample.id: sample.model_copy(deep=True) for sample in manifest}
