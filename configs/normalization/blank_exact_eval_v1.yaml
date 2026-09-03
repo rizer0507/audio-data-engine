@@ -1,0 +1,6 @@
+# qwen / 评测模型整句精确清空（CER 之前，与 zh_asr_v1 去标点同一阶段）。
+# models: ["*"] 对 normalize 选中的全部 transcript key 生效（含任意 --asr-run 别名）。
+blank_exact_hotwords:
+  models: ["*"]
+  hotwords:
+    - 没有暂时不用不需要谢谢不可以啊不用我不需要不要不用不需要

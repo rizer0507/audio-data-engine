@@ -11,20 +11,30 @@ from audio_engine.core.sample import Sample
 
 @register_operator
 class AggregateManifestsOperator(ManifestOperator):
-    """Join independently produced ASR manifests by exact sample id."""
+    """Join independently produced ASR manifests by sample id.
+
+    ``id_policy``:
+      - ``exact`` (default): join id set must equal the base id set.
+      - ``left``: extra ids on the join side are ignored; missing base ids still fail.
+        Use this when attaching a larger ASR dump onto a smaller eval set.
+    """
 
     name = "aggregate_manifests"
-    version = "2.0.0"
+    version = "2.1.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
         base = {sample.id: sample.model_copy(deep=True) for sample in samples}
         if len(base) != len(samples):
             raise ValueError("aggregate input contains duplicate ids")
+        id_policy = str(config.params.get("id_policy", "exact")).strip().lower()
+        if id_policy not in {"exact", "left"}:
+            raise ValueError("aggregate_manifests id_policy must be 'exact' or 'left'")
         expected = set(base)
         alignment_report: dict = {
             "base_count": len(samples),
             "join_key": "id",
+            "id_policy": id_policy,
             "sha256_policy": "must_match_when_present_on_both_sides",
             "manifests": [],
         }
@@ -69,7 +79,7 @@ class AggregateManifestsOperator(ManifestOperator):
                 "sha256_mismatch_examples": sha_mismatches[:20],
             }
             alignment_report["manifests"].append(report_item)
-            if missing or extra:
+            if missing or (extra and id_policy == "exact"):
                 write_report(aligned=False)
                 raise ValueError(
                     f"manifest {path} ids are not aligned: missing={len(missing)}, extra={len(extra)}"

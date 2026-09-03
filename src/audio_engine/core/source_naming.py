@@ -2,11 +2,17 @@
 
 Convention (source_name=mt3000):
   datasets/manifests/cleaned_mt3000.parquet
-  datasets/manifests/qwen_asr_mt3000.parquet
+  datasets/manifests/qwen_asr_mt3000.parquet          # default ASR stem
+  datasets/manifests/qwen1_asr_mt3000.parquet         # --asr-run qwen1
   datasets/manifests/sensevoice_asr_mt3000.parquet
-  datasets/manifests/kimi_asr_mt3000.parquet   # future models: {model}_asr_{name}
   datasets/manifests/multi_asr_aggregate_mt3000.parquet
   datasets/manifests/multi_asr_metrics_mt3000.parquet
+
+Eval convention (--eval-name eval_mt3000):
+  datasets/manifests/eval_mt3000.parquet              # registered eval set
+  datasets/manifests/{alias}_asr_eval_mt3000.parquet  # --asr-run on eval set
+  datasets/manifests/eval_aggregate_eval_mt3000.parquet
+  datasets/manifests/eval_metrics_eval_mt3000.parquet
 """
 
 from __future__ import annotations
@@ -35,6 +41,23 @@ def validate_source_name(source_name: str) -> str:
         raise ValueError(
             f"Invalid --source-name '{source_name}': use letters/digits/_/- "
             "(e.g. mt3000, mt-3000)"
+        )
+    return name
+
+
+def validate_asr_run(asr_run: str) -> str:
+    """Validate a result alias used as transcript key / manifest stem prefix.
+
+    Same character rules as ``--source-name``. Example aliases: ``qwen1``,
+    ``sensevoice2``, ``doubao_a``.
+    """
+    name = (asr_run or "").strip()
+    if not name:
+        raise ValueError("--asr-run must be a non-empty string")
+    if not _SOURCE_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"Invalid --asr-run '{asr_run}': use letters/digits/_/- "
+            "(e.g. qwen1, sensevoice2)"
         )
     return name
 
@@ -295,21 +318,34 @@ def apply_source_name_to_single_pipeline(
     source_name: str,
     source_dir: str | Path | None = None,
     join_manifests: list[dict[str, Any]] | None = None,
+    asr_run: str | None = None,
+    aggregate_base: str | None = None,
 ) -> dict[str, Any]:
     """Derive input/output (and aggregate join) overrides for a non-staged pipeline.
 
     - Cleaning (ingest steps or ``--source-dir``): write ``cleaned_<name>``.
     - ``qwen_asr*`` / ``sensevoice_asr*`` / ``{model}_asr*``:
-      ``cleaned_<name>`` → ``{model}_asr_<name>``.
-    - ``multi_asr_aggregate*``: ``qwen_asr_<name>`` → ``multi_asr_aggregate_<name>``,
-      and rewrite join manifests to ``{model}_asr_<name>``.
+      ``cleaned_<name>`` → ``{model}_asr_<name>`` (or ``{asr_run}_asr_<name>``).
+    - ``multi_asr_aggregate*``: ``{aggregate_base|qwen}_asr_<name>`` →
+      ``multi_asr_aggregate_<name>``, and rewrite join manifests to
+      ``{model}_asr_<name>``.
     - ``asr_metric*``: ``multi_asr_aggregate_<name>`` → ``multi_asr_metrics_<name>``.
     """
     name = validate_source_name(source_name)
+    run_alias = validate_asr_run(asr_run) if asr_run is not None else None
+    base_alias = (
+        validate_asr_run(aggregate_base) if aggregate_base is not None else None
+    )
     has_ingest = any(
         getattr(step, "operator", "").startswith("ingest.") for step in steps
     )
     if has_ingest or source_dir is not None:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
         if source_dir is None:
             raise ValueError(
                 "cleaning pipeline with --source-name also requires --source-dir"
@@ -323,12 +359,17 @@ def apply_source_name_to_single_pipeline(
             "source_id": None,
             "output_manifest": overrides["output_manifest"],
             "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
         }
 
     key = pipeline_name.lower()
 
     if "multi_asr" in key or ("aggregate" in key and "asr" in key):
-        resolved = resolve_existing_manifest(manifest_stem("qwen_asr", name))
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        base_model = base_alias or "qwen"
+        resolved = resolve_existing_manifest(manifest_stem(model_asr_kind(base_model), name))
         if join_manifests is not None:
             # CLI --join-manifest: keep explicit paths; only require files exist.
             joins = [
@@ -354,9 +395,18 @@ def apply_source_name_to_single_pipeline(
             "source_id": None,
             "output_manifest": _posix(manifest_path("multi_asr_aggregate", name)),
             "aggregate_manifests": joins,
+            "asr_run": None,
+            "aggregate_base": base_model,
         }
 
     if "asr_metric" in key or key in {"metric_pipeline", "text_metrics"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines; "
+                "use --agreement-base for asr_metric_pipeline"
+            )
         resolved = resolve_existing_manifest(manifest_stem("multi_asr_aggregate", name))
         return {
             "source_dir": None,
@@ -364,17 +414,26 @@ def apply_source_name_to_single_pipeline(
             "source_id": None,
             "output_manifest": _posix(manifest_path("multi_asr_metrics", name)),
             "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
         }
 
     asr_kind = _asr_output_kind(pipeline_name)
     if asr_kind is not None:
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
         resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
+        out_kind = model_asr_kind(run_alias) if run_alias is not None else asr_kind
         return {
             "source_dir": None,
             "input_manifest": str(resolved),
             "source_id": None,
-            "output_manifest": _posix(manifest_path(asr_kind, name)),
+            "output_manifest": _posix(manifest_path(out_kind, name)),
             "aggregate_manifests": None,
+            "asr_run": run_alias,
+            "aggregate_base": None,
         }
 
     # Fallback: any pipeline whose steps are pure ASR inference.
@@ -389,4 +448,85 @@ def apply_source_name_to_single_pipeline(
         f"--source-name on pipeline '{pipeline_name}' is unsupported without "
         "--source-dir; use qwen/sensevoice/aggregate/metric pipelines or pass "
         "--input-manifest / --output-manifest"
+    )
+
+
+def apply_eval_name_to_single_pipeline(
+    *,
+    pipeline_name: str,
+    steps: list[Any],
+    eval_name: str,
+    join_manifests: list[dict[str, Any]] | None = None,
+    asr_run: str | None = None,
+) -> dict[str, Any]:
+    """Derive input/output for evaluation pipelines (decoupled from training).
+
+    - ASR ``qwen_asr*`` / ``{model}_asr*``: registered eval set →
+      ``{alias}_asr_{eval_name}``.
+    - ``eval_aggregate*``: eval set as left table + ``--join-manifest`` aliases
+      (``{alias}_asr_{eval_name}``) → ``eval_aggregate_{eval_name}``.
+    - ``eval_metric*`` / ``asr_eval``: ``eval_aggregate_{eval_name}`` →
+      ``eval_metrics_{eval_name}``.
+    """
+    name = validate_source_name(eval_name)
+    run_alias = validate_asr_run(asr_run) if asr_run is not None else None
+    eval_path = str(resolve_existing_manifest(name))
+    key = pipeline_name.lower()
+
+    if "eval_aggregate" in key or (key.startswith("eval") and "aggregate" in key):
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if not join_manifests:
+            raise ValueError(
+                "eval_aggregate requires --join-manifest "
+                "(result aliases whose ids match the eval set)"
+            )
+        joins = [
+            {
+                "model": str(item["model"]).strip(),
+                "path": str(resolve_existing_manifest(str(item["path"]))),
+            }
+            for item in join_manifests
+        ]
+        return {
+            "source_dir": None,
+            "input_manifest": eval_path,
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("eval_aggregate", name)),
+            "aggregate_manifests": joins,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
+    if "eval_metric" in key or key in {"asr_eval", "eval_metrics"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        resolved = resolve_existing_manifest(manifest_stem("eval_aggregate", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("eval_metrics", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
+    asr_kind = _asr_output_kind(pipeline_name)
+    if asr_kind is not None:
+        out_kind = model_asr_kind(run_alias) if run_alias is not None else asr_kind
+        return {
+            "source_dir": None,
+            "input_manifest": eval_path,
+            "source_id": None,
+            "output_manifest": _posix(manifest_path(out_kind, name)),
+            "aggregate_manifests": None,
+            "asr_run": run_alias,
+            "aggregate_base": None,
+        }
+
+    raise ValueError(
+        f"--eval-name on pipeline '{pipeline_name}' is unsupported; "
+        "use qwen_asr_batch / eval_aggregate / eval_metric_pipeline "
+        "(or pass --input-manifest / --output-manifest)"
     )

@@ -125,6 +125,12 @@ class KimiBatchASROperator(BatchOperator):
     version = "3.0.0"
     category = "asr"
 
+    def should_skip(self, sample: Sample, config: OperatorConfig) -> bool:
+        transcript_key = config.params.get("transcript_key")
+        if transcript_key:
+            return not config.force and str(transcript_key) in sample.transcripts
+        return super().should_skip(sample, config)
+
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         settings = _resolve_settings(config)
         input_key = config.params.get("input_audio_key", "raw")
@@ -210,8 +216,9 @@ class KimiBatchASROperator(BatchOperator):
             "extra": {"language": result.get("language")} if result.get("language") else {},
         }
         input_key = config.params.get("input_audio_key", "raw")
+        transcript_key = str(config.params.get("transcript_key", "kimi"))
         return {
-            "transcripts": {"kimi": transcript},
+            "transcripts": {transcript_key: transcript},
             "lineage_entry": {
                 "operator": self.full_name,
                 "version": self.version,

@@ -10,6 +10,7 @@ import yaml
 from audio_engine.core.manifest import Manifest
 from audio_engine.core.sample import Sample
 from audio_engine.core.source_naming import (
+    apply_eval_name_to_single_pipeline,
     apply_source_name_to_single_pipeline,
     cleaned_output_path,
     expand_layout_templates,
@@ -19,6 +20,7 @@ from audio_engine.core.source_naming import (
     pipeline_run_name,
     resolve_existing_manifest,
     rewrite_join_manifests_for_source,
+    validate_asr_run,
     validate_source_name,
 )
 
@@ -70,6 +72,88 @@ def test_expand_layout_templates():
         ("cleaned_mt3000", "datasets/manifests/qwen_asr_mt3000.parquet"),
         ("cleaned_mt3000", "datasets/manifests/sensevoice_asr_mt3000.parquet"),
     ]
+
+
+def test_validate_asr_run():
+    assert validate_asr_run("qwen1") == "qwen1"
+    assert validate_asr_run("sensevoice2") == "sensevoice2"
+    with pytest.raises(ValueError):
+        validate_asr_run("../x")
+    with pytest.raises(ValueError):
+        validate_asr_run("")
+
+
+def test_apply_asr_run_and_aggregate_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    manifests = tmp_path / "datasets" / "manifests"
+    manifests.mkdir(parents=True)
+    for stem in (
+        "cleaned_mt3000",
+        "qwen1_asr_mt3000",
+        "qwen2_asr_mt3000",
+        "sensevoice1_asr_mt3000",
+        "qwen_asr_mt3000",
+        "sensevoice_asr_mt3000",
+        "multi_asr_aggregate_mt3000",
+    ):
+        Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
+            manifests / f"{stem}.parquet"
+        )
+
+    class _Step:
+        def __init__(self, operator: str, params: dict | None = None):
+            self.operator = operator
+            self.params = params or {}
+
+    qwen1 = apply_source_name_to_single_pipeline(
+        pipeline_name="qwen_asr_batch",
+        steps=[_Step("asr.qwen_batch")],
+        source_name="mt3000",
+        asr_run="qwen1",
+    )
+    assert qwen1["input_manifest"].endswith("cleaned_mt3000.parquet")
+    assert qwen1["output_manifest"].endswith("qwen1_asr_mt3000.parquet")
+    assert qwen1["asr_run"] == "qwen1"
+
+    aggregate = apply_source_name_to_single_pipeline(
+        pipeline_name="multi_asr_aggregate",
+        steps=[_Step("quality.aggregate_manifests", {"manifests": []})],
+        source_name="mt3000",
+        aggregate_base="qwen1",
+        join_manifests=[
+            {"model": "qwen2", "path": "datasets/manifests/qwen2_asr_mt3000.parquet"},
+            {
+                "model": "sensevoice1",
+                "path": "datasets/manifests/sensevoice1_asr_mt3000.parquet",
+            },
+        ],
+    )
+    assert aggregate["input_manifest"].endswith("qwen1_asr_mt3000.parquet")
+    assert aggregate["aggregate_base"] == "qwen1"
+    assert [item["model"] for item in aggregate["aggregate_manifests"]] == [
+        "qwen2",
+        "sensevoice1",
+    ]
+
+    legacy = apply_source_name_to_single_pipeline(
+        pipeline_name="multi_asr_aggregate",
+        steps=[
+            _Step(
+                "quality.aggregate_manifests",
+                {
+                    "manifests": [
+                        {
+                            "model": "sensevoice",
+                            "path": "datasets/manifests/sensevoice_asr_source_A.parquet",
+                        }
+                    ]
+                },
+            )
+        ],
+        source_name="mt3000",
+    )
+    assert legacy["input_manifest"].endswith("qwen_asr_mt3000.parquet")
+    assert legacy["aggregate_base"] == "qwen"
 
 
 def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -189,6 +273,31 @@ def test_parse_and_rewrite_join_manifest(tmp_path: Path, monkeypatch: pytest.Mon
         f"kimi={manifests / 'kimi_asr_mt3000.parquet'}", None
     )
     assert explicit["model"] == "kimi"
+
+
+def test_apply_eval_name_rejects_asr_run_on_metric(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    manifests = tmp_path / "datasets" / "manifests"
+    manifests.mkdir(parents=True)
+    Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
+        manifests / "eval_mt3000.parquet"
+    )
+    Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
+        manifests / "eval_aggregate_eval_mt3000.parquet"
+    )
+
+    class _Step:
+        def __init__(self, operator: str, params: dict | None = None):
+            self.operator = operator
+            self.params = params or {}
+
+    with pytest.raises(ValueError, match="--asr-run is only valid"):
+        apply_eval_name_to_single_pipeline(
+            pipeline_name="eval_metric_pipeline",
+            steps=[_Step("quality.text_metrics")],
+            eval_name="eval_mt3000",
+            asr_run="qwen",
+        )
 
 
 def test_run_staged_with_source_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

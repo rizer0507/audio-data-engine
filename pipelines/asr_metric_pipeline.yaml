@@ -1,10 +1,11 @@
 # 工序② 之后：先按 zh_asr_v1 口径改写文本（去标点 + qwen 精确短语清空），再算 agreement CER。
 #
-#   audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name mt3000
+#   audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
+#     --source-name mt3000 --agreement-base qwen1
 #   → multi_asr_aggregate_mt3000 → multi_asr_metrics_mt3000.parquet
 #
 # 配置：configs/normalization/blank_exact_qwen_v1.yaml
-#       + configs/metrics/gold_agreement.yaml + configs/normalization/zh_asr_v1.yaml
+#       + configs/metrics/gold_agreement.yaml（vs_base）+ configs/normalization/zh_asr_v1.yaml
 # 兼容：不传 --source-name 时使用下方写死路径。
 
 name: asr_metric_pipeline
@@ -23,3 +24,4 @@ pipeline:
     params:
       config_path: configs/metrics/gold_agreement.yaml
       normalization_path: configs/normalization/zh_asr_v1.yaml
+      # agreement_base: qwen1  # 也可用 CLI --agreement-base 覆盖

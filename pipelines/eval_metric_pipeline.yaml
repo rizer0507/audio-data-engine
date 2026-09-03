@@ -1,17 +1,17 @@
-# 工序⑤（兼容）：已有评测文本时只做清洗 + 对金标算字准 + 导出。
-# 推荐新入口：pipelines/eval_metric_pipeline.yaml + --eval-name / --eval-model
+# 工序⑤：已按 id 聚拢的评测 Manifest 上，相对 gold_text 算多模型字准并导出。
 #
-#   audio-data pipeline run pipelines/asr_eval.yaml \
+#   audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 #     --eval-name eval_local_test \
-#     --eval-model qwen --eval-model qwen-sft-epoch10
+#     --eval-model qwen --eval-model qwen-sft-epoch10 --eval-model qwen-sft-epoch100
 #
-# 不传 --eval-name 时使用下方写死路径。
+# 不传 --eval-model 时，对样本上全部 transcript key（除 gold）算字准。
+# 与训练 / Model Registry 无依赖。
 
-name: asr_eval
+name: eval_metric_pipeline
 input:
-  manifest: datasets/manifests/asr_eval_source_A.parquet
+  manifest: datasets/manifests/eval_aggregate_source_A.parquet
 output:
-  manifest: datasets/manifests/asr_eval_metrics_source_A.parquet
+  manifest: datasets/manifests/eval_metrics_source_A.parquet
 pipeline:
   - name: normalize_transcripts
     operator: quality.normalize_transcripts

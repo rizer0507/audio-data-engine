@@ -38,11 +38,14 @@ from audio_engine.core.sharded_run import (
     run_staged_pipelines,
 )
 from audio_engine.core.source_naming import (
+    apply_eval_name_to_single_pipeline,
     apply_source_name_to_single_pipeline,
     parse_join_manifest_arg,
     pipeline_run_name,
+    validate_asr_run,
     validate_source_name,
 )
+from audio_engine.core.eval_ready import inspect_eval_manifest
 from audio_engine.core.transcript_reconcile import reconcile_transcripts
 from audio_engine.core.training import run_training_job
 from audio_engine.core.task import TaskRunner, load_task
@@ -100,6 +103,66 @@ def _apply_aggregate_manifests(cfg: PipelineConfig, manifests: list[dict]) -> No
         raise typer.BadParameter(
             "--join-manifest / aggregate source-name rewrite requires a "
             "quality.aggregate_manifests step"
+        )
+
+
+def _apply_asr_run_transcript_key(cfg: PipelineConfig, asr_run: str) -> None:
+    """Inject ``transcript_key`` into ASR steps for a result alias."""
+    alias = validate_asr_run(asr_run)
+    patched = False
+    for step in cfg.steps:
+        if str(step.operator).startswith("asr."):
+            step.params = {**step.params, "transcript_key": alias}
+            patched = True
+    if not patched:
+        raise typer.BadParameter(
+            "--asr-run / --transcript-key requires an ASR inference pipeline "
+            "with an asr.* step"
+        )
+
+
+def _first_asr_transcript_key(cfg: PipelineConfig) -> str | None:
+    for step in cfg.steps:
+        if str(step.operator).startswith("asr."):
+            key = step.params.get("transcript_key")
+            if key:
+                return str(key)
+    return None
+
+
+def _apply_agreement_base(cfg: PipelineConfig, agreement_base: str) -> None:
+    """Patch ``quality.text_metrics`` to use ``vs_base.base`` / agreement_base."""
+    alias = validate_asr_run(agreement_base)
+    patched = False
+    for step in cfg.steps:
+        if step.operator == "quality.text_metrics":
+            step.params = {**step.params, "agreement_base": alias}
+            patched = True
+    if not patched:
+        raise typer.BadParameter(
+            "--agreement-base requires a quality.text_metrics step "
+            "(e.g. asr_metric_pipeline)"
+        )
+
+
+def _apply_eval_models(cfg: PipelineConfig, models: list[str]) -> None:
+    """Restrict eval hypotheses / report columns to the given transcript keys."""
+    aliases = [validate_asr_run(item) for item in models]
+    if not aliases:
+        raise typer.BadParameter("--eval-model requires at least one non-empty alias")
+    patched_metrics = False
+    patched_report = False
+    for step in cfg.steps:
+        if step.operator == "quality.text_metrics":
+            step.params = {**step.params, "eval_hypotheses": list(aliases)}
+            patched_metrics = True
+        if step.operator == "quality.evaluation_report":
+            step.params = {**step.params, "model_prefixes": list(aliases)}
+            patched_report = True
+    if not patched_metrics and not patched_report:
+        raise typer.BadParameter(
+            "--eval-model requires quality.text_metrics and/or "
+            "quality.evaluation_report (e.g. eval_metric_pipeline)"
         )
 
 
@@ -361,9 +424,61 @@ def pipeline_run(
         None,
         "--join-manifest",
         help=(
-            "For multi_asr_aggregate: model to join, e.g. sensevoice or "
-            "kimi=/path/to.parquet (repeatable). With --source-name, bare "
-            "model names resolve to {model}_asr_<name>.parquet"
+            "For multi_asr_aggregate / eval_aggregate: result alias to join, e.g. "
+            "sensevoice1 or kimi=/path/to.parquet (repeatable). With "
+            "--source-name / --eval-name, bare names resolve to "
+            "{alias}_asr_<name>.parquet"
+        ),
+    ),
+    asr_run: Optional[str] = typer.Option(
+        None,
+        "--asr-run",
+        help=(
+            "Result alias for ASR inference under --source-name or --eval-name: "
+            "writes {alias}_asr_<name>.parquet and sets transcript_key=<alias> "
+            "(e.g. qwen1, qwen-sft-epoch10)"
+        ),
+    ),
+    transcript_key: Optional[str] = typer.Option(
+        None,
+        "--transcript-key",
+        help=(
+            "Inject transcript_key into asr.* steps without renaming manifests "
+            "(used by shard workers; prefer --asr-run with --source-name)"
+        ),
+    ),
+    aggregate_base: Optional[str] = typer.Option(
+        None,
+        "--aggregate-base",
+        help=(
+            "For multi_asr_aggregate: base result alias whose manifest is the "
+            "join left table (default: qwen). Example: qwen1"
+        ),
+    ),
+    agreement_base: Optional[str] = typer.Option(
+        None,
+        "--agreement-base",
+        help=(
+            "For asr_metric_pipeline: pseudo-reference transcript key for "
+            "vs_base agreement CER (e.g. qwen1)"
+        ),
+    ),
+    eval_name: Optional[str] = typer.Option(
+        None,
+        "--eval-name",
+        help=(
+            "Registered evaluation-set stem under datasets/manifests/ "
+            "(e.g. eval_local_test). Decouples eval from training: ASR reads "
+            "the eval set, eval_aggregate joins by id, eval_metric scores vs gold."
+        ),
+    ),
+    eval_model: Optional[list[str]] = typer.Option(
+        None,
+        "--eval-model",
+        help=(
+            "For eval_metric_pipeline / asr_eval: transcript key to score vs "
+            "gold_text (repeatable). Example: --eval-model qwen "
+            "--eval-model qwen-sft-epoch10"
         ),
     ),
 ) -> None:
@@ -377,10 +492,27 @@ def pipeline_run(
 
     ``--source-name`` sets unified dataset names under datasets/manifests/.
     Cleaning also needs ``--source-dir``. ASR / aggregate / metric only need
-    the name (each model writes ``{model}_asr_<name>.parquet``).
+    the name (each result alias writes ``{alias}_asr_<name>.parquet``).
+
+    ``--eval-name`` is the evaluation-set counterpart (no training dependency):
+    ASR reads the registered eval Manifest; aggregate joins by id; metric
+    scores vs ``gold_text``.
     """
     if source_dir is not None and source_name is None:
         raise typer.BadParameter("--source-dir requires --source-name")
+    if source_name is not None and eval_name is not None:
+        raise typer.BadParameter("--source-name and --eval-name are mutually exclusive")
+    if asr_run is not None and source_name is None and eval_name is None:
+        raise typer.BadParameter("--asr-run requires --source-name or --eval-name")
+    if aggregate_base is not None and source_name is None:
+        raise typer.BadParameter("--aggregate-base requires --source-name")
+    if aggregate_base is not None and eval_name is not None:
+        raise typer.BadParameter(
+            "--aggregate-base is for multi_asr_aggregate; "
+            "eval_aggregate always uses the eval set as the left table"
+        )
+    if asr_run is not None and transcript_key is not None and asr_run != transcript_key:
+        raise typer.BadParameter("--asr-run and --transcript-key must match when both set")
 
     stage_paths = load_stage_paths(config_path.resolve())
     if stage_paths is not None:
@@ -398,6 +530,12 @@ def pipeline_run(
             raise typer.BadParameter(
                 "staged pipelines do not support --join-manifest; "
                 "run multi_asr_aggregate.yaml as a single pipeline instead"
+            )
+        if asr_run or aggregate_base or agreement_base or transcript_key or eval_name or eval_model:
+            raise typer.BadParameter(
+                "staged pipelines do not support --asr-run / --transcript-key / "
+                "--aggregate-base / --agreement-base / --eval-name / --eval-model; "
+                "run each YAML as a single pipeline instead"
             )
         root_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         stage_name = str(root_data.get("name") or config_path.stem)
@@ -449,22 +587,24 @@ def pipeline_run(
         try:
             from audio_engine.core.source_naming import resolve_existing_manifest
 
+            name_for_join = source_name or eval_name
             cli_joins = []
             for item in join_manifest:
-                parsed = parse_join_manifest_arg(item, source_name)
+                parsed = parse_join_manifest_arg(item, name_for_join)
                 parsed["path"] = str(resolve_existing_manifest(parsed["path"]))
                 cli_joins.append(parsed)
         except (ValueError, FileNotFoundError) as exc:
             raise typer.BadParameter(str(exc)) from exc
 
-    if source_name is not None:
+    if eval_name is not None:
         try:
-            overrides = apply_source_name_to_single_pipeline(
+            validate_source_name(eval_name)
+            overrides = apply_eval_name_to_single_pipeline(
                 pipeline_name=cfg.name,
                 steps=cfg.steps,
-                source_name=source_name,
-                source_dir=source_dir,
+                eval_name=eval_name,
                 join_manifests=cli_joins,
+                asr_run=asr_run,
             )
         except (ValueError, FileNotFoundError) as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -474,8 +614,54 @@ def pipeline_run(
         cfg.output_manifest = overrides["output_manifest"]
         if overrides.get("aggregate_manifests") is not None:
             _apply_aggregate_manifests(cfg, overrides["aggregate_manifests"])
-        cfg.name = pipeline_run_name(cfg.name, source_name)
+        if overrides.get("asr_run"):
+            _apply_asr_run_transcript_key(cfg, str(overrides["asr_run"]))
+            cfg.name = pipeline_run_name(
+                f"{cfg.name}_{overrides['asr_run']}", eval_name
+            )
+        else:
+            cfg.name = pipeline_run_name(cfg.name, eval_name)
+        console.print(f"  Eval name:   [cyan]{eval_name}[/cyan]")
+        if overrides.get("asr_run"):
+            console.print(f"  ASR run:     [cyan]{overrides['asr_run']}[/cyan]")
+        if cfg.input_manifest:
+            console.print(f"  Input:       [cyan]{cfg.input_manifest}[/cyan]")
+        console.print(f"  Output:      [cyan]{cfg.output_manifest}[/cyan]")
+        console.print(f"  Run name:    [cyan]{cfg.name}[/cyan]")
+        if overrides.get("aggregate_manifests"):
+            for item in overrides["aggregate_manifests"]:
+                console.print(f"  Join:        [cyan]{item['model']}[/cyan] ← {item['path']}")
+    elif source_name is not None:
+        try:
+            overrides = apply_source_name_to_single_pipeline(
+                pipeline_name=cfg.name,
+                steps=cfg.steps,
+                source_name=source_name,
+                source_dir=source_dir,
+                join_manifests=cli_joins,
+                asr_run=asr_run,
+                aggregate_base=aggregate_base,
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        cfg.source_dir = overrides["source_dir"]
+        cfg.input_manifest = overrides["input_manifest"]
+        cfg.source_id = overrides["source_id"]
+        cfg.output_manifest = overrides["output_manifest"]
+        if overrides.get("aggregate_manifests") is not None:
+            _apply_aggregate_manifests(cfg, overrides["aggregate_manifests"])
+        if overrides.get("asr_run"):
+            _apply_asr_run_transcript_key(cfg, str(overrides["asr_run"]))
+            cfg.name = pipeline_run_name(
+                f"{cfg.name}_{overrides['asr_run']}", source_name
+            )
+        else:
+            cfg.name = pipeline_run_name(cfg.name, source_name)
         console.print(f"  Source name: [cyan]{source_name}[/cyan]")
+        if overrides.get("asr_run"):
+            console.print(f"  ASR run:     [cyan]{overrides['asr_run']}[/cyan]")
+        if overrides.get("aggregate_base"):
+            console.print(f"  Agg base:    [cyan]{overrides['aggregate_base']}[/cyan]")
         if cfg.source_dir:
             console.print(f"  Source dir:  [cyan]{cfg.source_dir}[/cyan]")
         if cfg.input_manifest:
@@ -489,6 +675,40 @@ def pipeline_run(
         _apply_aggregate_manifests(cfg, cli_joins)
         for item in cli_joins:
             console.print(f"  Join:        [cyan]{item['model']}[/cyan] ← {item['path']}")
+        if asr_run is not None:
+            raise typer.BadParameter("--asr-run requires --source-name or --eval-name")
+        if aggregate_base is not None:
+            raise typer.BadParameter("--aggregate-base requires --source-name")
+    elif asr_run is not None or aggregate_base is not None:
+        raise typer.BadParameter(
+            "--asr-run / --aggregate-base require --source-name or --eval-name"
+        )
+
+    if agreement_base is not None:
+        try:
+            _apply_agreement_base(cfg, agreement_base)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"  Agree base:  [cyan]{validate_asr_run(agreement_base)}[/cyan]")
+
+    if eval_model:
+        try:
+            _apply_eval_models(cfg, list(eval_model))
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(
+            "  Eval models: [cyan]"
+            + ", ".join(validate_asr_run(item) for item in eval_model)
+            + "[/cyan]"
+        )
+
+    # Shard workers pass --transcript-key without --asr-run/--source-name.
+    if transcript_key is not None and asr_run is None:
+        try:
+            _apply_asr_run_transcript_key(cfg, transcript_key)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"  Transcript:  [cyan]{validate_asr_run(transcript_key)}[/cyan]")
 
     if input_manifest is not None:
         cfg.input_manifest = str(input_manifest)
@@ -513,6 +733,7 @@ def pipeline_run(
                 config_path=config_path.resolve(),
                 run_root=Path(cfg.resume) if cfg.resume else None,
                 log=lambda msg: console.print(msg),
+                transcript_key=_first_asr_transcript_key(cfg),
             )
         except ShardedRunError as exc:
             console.print(f"[red]{exc}[/red]")
@@ -724,6 +945,11 @@ def release_build(
     dev_ratio: float = typer.Option(0.1, "--dev-ratio"),
     test_ratio: float = typer.Option(0.1, "--test-ratio"),
     stratify_key: Optional[str] = typer.Option("classification_bucket", "--stratify-key"),
+    allow_unresolved_review: bool = typer.Option(
+        False,
+        "--allow-unresolved-review",
+        help="Skip pending review_queue/hardcase; freeze only auto_accepted/human_accepted gold",
+    ),
     output_dir: Path = typer.Option(Path("data/releases"), "--output-dir"),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
@@ -745,9 +971,14 @@ def release_build(
         and sample.labels.get("annotation_state")
         not in {"human_accepted", "auto_accepted", "rejected"}
     ]
-    if unresolved:
+    if unresolved and not allow_unresolved_review:
         raise typer.BadParameter(
             f"release contains {len(unresolved)} unresolved review samples: {unresolved[:10]}"
+        )
+    if unresolved and allow_unresolved_review:
+        console.print(
+            f"[yellow]WARN[/yellow] skipping {len(unresolved)} unresolved review samples "
+            "(--allow-unresolved-review)"
         )
     eligible = [
         sample
@@ -938,6 +1169,96 @@ def review_export(
     console.print(f"[green]OK[/green] exported {len(rows)} review rows to [cyan]{output}[/cyan]")
 
 
+@review_app.command("export-gold")
+def review_export_gold(
+    dataset: str = typer.Argument(..., help="Classified manifest path/name/artifact id"),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="XLSX path; includes a filled label column (= gold_text)",
+    ),
+    output_manifest: Optional[Path] = typer.Option(
+        None,
+        "--output-manifest",
+        help="Optional gold-only parquet/jsonl for evaluation / release input",
+    ),
+    bucket: Optional[list[str]] = typer.Option(
+        None,
+        "--bucket",
+        help="Bucket to collect; repeatable (default: auto_gold)",
+    ),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Export multi-ASR agreement gold (auto_gold) with label column and optional Manifest."""
+    dataset_path = _resolve_dataset(dataset)
+    manifest = Manifest.load(dataset_path)
+    buckets = bucket or ["auto_gold"]
+    gold_samples = []
+    rows = []
+    missing_gold: list[str] = []
+    for sample in manifest:
+        if sample.labels.get("classification_bucket") not in buckets:
+            continue
+        gold_text = str(sample.labels.get("gold_text") or sample.labels.get("label") or "").strip()
+        if not gold_text:
+            missing_gold.append(sample.id)
+            continue
+        copied = sample.model_copy(deep=True)
+        copied.labels["gold_text"] = gold_text
+        copied.labels["label"] = gold_text
+        if not copied.labels.get("annotation_state"):
+            copied.labels["annotation_state"] = "auto_accepted"
+        gold_samples.append(copied)
+        row = {
+            "sample_id": sample.id,
+            "sha256": sample.sha256,
+            "source_path": sample.source_path,
+            "classification_bucket": sample.labels.get("classification_bucket", ""),
+            "classification_reason": ",".join(
+                str(code) for code in (sample.labels.get("classification_reason_codes") or [])
+            ),
+            "label": gold_text,
+            "gold_text": gold_text,
+            "gold_source": sample.labels.get("gold_source", ""),
+            "annotation_state": copied.labels.get("annotation_state", ""),
+            "selection_policy_version": sample.labels.get("selection_policy_version", ""),
+        }
+        row.update({f"{key}_text": sample.get_transcript_text(key) for key in sample.transcripts})
+        rows.append(row)
+    if missing_gold:
+        raise typer.BadParameter(
+            f"{len(missing_gold)} samples in {buckets} missing gold/label: {missing_gold[:10]}"
+        )
+    if not rows:
+        raise typer.BadParameter(f"no samples found in buckets {buckets}")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    import pandas as pd
+
+    pd.DataFrame(rows).to_excel(output, index=False)
+    console.print(f"[green]OK[/green] exported {len(rows)} gold rows to [cyan]{output}[/cyan]")
+
+    if output_manifest is not None:
+        gold_manifest = Manifest(gold_samples)
+        output_manifest.parent.mkdir(parents=True, exist_ok=True)
+        gold_manifest.save(output_manifest)
+        gold_manifest.save(output_manifest.with_suffix(".jsonl"))
+        run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_export_gold"
+        record = register_manifest_output(
+            output_manifest,
+            catalog_dir=catalog_dir,
+            pipeline="review.export_gold",
+            run_dir=run_dir,
+            sample_count=len(gold_manifest),
+        )
+        console.print(
+            f"[green]OK[/green] wrote gold Manifest [cyan]{output_manifest}[/cyan] "
+            f"({len(gold_manifest)} samples)"
+        )
+        console.print(f"  Artifact: [cyan]{record.artifact_id}[/cyan]")
+
+
 @review_app.command("import")
 def review_import(
     dataset: str = typer.Argument(...),
@@ -997,14 +1318,15 @@ def review_import(
         gold_text = str(row["gold_text"]).strip()
         if decision == "accepted" and not gold_text:
             raise typer.BadParameter(f"accepted sample requires gold_text: {sample_id}")
-        sample.labels.update(
-            {
-                "annotation_state": "human_accepted" if decision == "accepted" else "rejected",
-                "gold_text": gold_text,
-                "annotation_revision": expected_revision,
-                "annotation_reason": str(row["reason"]).strip(),
-            }
-        )
+        updates = {
+            "annotation_state": "human_accepted" if decision == "accepted" else "rejected",
+            "gold_text": gold_text,
+            "annotation_revision": expected_revision,
+            "annotation_reason": str(row["reason"]).strip(),
+        }
+        if decision == "accepted":
+            updates["label"] = gold_text
+        sample.labels.update(updates)
     result = Manifest([indexed[sample.id] for sample in manifest])
     result.save(output)
     result.save(output.with_suffix(".jsonl"))
@@ -1018,6 +1340,283 @@ def review_import(
     )
     console.print(f"[green]OK[/green] imported review decisions to [cyan]{output}[/cyan]")
     console.print(f"  Artifact: [cyan]{record.artifact_id}[/cyan]")
+
+
+def _write_xlsx_parts(
+    rows: list[dict],
+    output: Path,
+    *,
+    max_rows: int,
+) -> list[Path]:
+    """Write one xlsx, or stem-part-001.xlsx … when rows exceed max_rows."""
+    import pandas as pd
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    limit = max(1, int(max_rows))
+    if len(rows) <= limit:
+        pd.DataFrame(rows).to_excel(output, index=False)
+        return [output]
+    stem = output.with_suffix("")
+    written: list[Path] = []
+    part = 0
+    for start in range(0, len(rows), limit):
+        part += 1
+        path = Path(f"{stem}-part-{part:03d}.xlsx")
+        pd.DataFrame(rows[start : start + limit]).to_excel(path, index=False)
+        written.append(path)
+    return written
+
+
+@review_app.command("export-summary")
+def review_export_summary(
+    dataset: str = typer.Argument(
+        ...,
+        help="Reviewed or classified Manifest（path / name / artifact id）",
+    ),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="汇总 xlsx；超过 --max-rows 时写成 stem-part-001.xlsx …",
+    ),
+    output_manifest: Optional[Path] = typer.Option(
+        None,
+        "--output-manifest",
+        help="可选：写出带 labels.type 的全量 Manifest",
+    ),
+    max_rows: int = typer.Option(
+        20000,
+        "--max-rows",
+        help="单个 xlsx 最大行数（默认 20000）",
+    ),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Export full-batch summary xlsx with type=classification_bucket.
+
+    工序金标汇总总表：type ∈ {auto_gold, hardcase, noise, review_queue}。
+    输入一般为 review import 后的 reviewed_*.parquet；人审搁置时也可用 classified_*.
+    """
+    dataset_path = _resolve_dataset(dataset)
+    manifest = Manifest.load(dataset_path)
+    rows: list[dict] = []
+    typed_samples: list = []
+    missing_type: list[str] = []
+    for sample in manifest:
+        bucket = str(sample.labels.get("classification_bucket") or "").strip()
+        if not bucket:
+            missing_type.append(sample.id)
+            continue
+        copied = sample.model_copy(deep=True)
+        copied.labels["type"] = bucket
+        copied.labels["classification_bucket"] = bucket
+        typed_samples.append(copied)
+        row = {
+            "sample_id": sample.id,
+            "sha256": sample.sha256,
+            "source_path": sample.source_path,
+            "type": bucket,
+            "classification_bucket": bucket,
+            "classification_reason": ",".join(
+                str(code) for code in (sample.labels.get("classification_reason_codes") or [])
+            ),
+            "label": str(sample.labels.get("label") or sample.labels.get("gold_text") or ""),
+            "gold_text": str(sample.labels.get("gold_text") or ""),
+            "gold_source": sample.labels.get("gold_source", ""),
+            "annotation_state": sample.labels.get("annotation_state", ""),
+            "annotation_reason": sample.labels.get("annotation_reason", ""),
+            "selection_policy_version": sample.labels.get("selection_policy_version", ""),
+        }
+        row.update({f"{key}_text": sample.get_transcript_text(key) for key in sample.transcripts})
+        rows.append(row)
+
+    if missing_type:
+        raise typer.BadParameter(
+            f"{len(missing_type)} samples missing classification_bucket/type: "
+            f"{missing_type[:10]}"
+        )
+    if not rows:
+        raise typer.BadParameter("manifest is empty; nothing to export")
+
+    written = _write_xlsx_parts(rows, output, max_rows=max_rows)
+    if len(written) == 1:
+        console.print(
+            f"[green]OK[/green] exported {len(rows)} summary rows to [cyan]{written[0]}[/cyan]"
+        )
+    else:
+        console.print(
+            f"[green]OK[/green] exported {len(rows)} summary rows in {len(written)} files "
+            f"(max_rows={max_rows})"
+        )
+        for path in written:
+            console.print(f"  [cyan]{path}[/cyan]")
+
+    from collections import Counter
+
+    counts = Counter(row["type"] for row in rows)
+    console.print(f"  type counts: {dict(sorted(counts.items()))}")
+
+    if output_manifest is not None:
+        typed = Manifest(typed_samples)
+        output_manifest.parent.mkdir(parents=True, exist_ok=True)
+        typed.save(output_manifest)
+        typed.save(output_manifest.with_suffix(".jsonl"))
+        run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_export_summary"
+        record = register_manifest_output(
+            output_manifest,
+            catalog_dir=catalog_dir,
+            pipeline="review.export_summary",
+            run_dir=run_dir,
+            sample_count=len(typed),
+        )
+        console.print(
+            f"[green]OK[/green] wrote typed Manifest [cyan]{output_manifest}[/cyan] "
+            f"({len(typed)} samples)"
+        )
+        console.print(f"  Artifact: [cyan]{record.artifact_id}[/cyan]")
+
+
+eval_app = typer.Typer(help="Evaluation readiness check and helpers")
+app.add_typer(eval_app, name="eval")
+
+
+@eval_app.command("check")
+def eval_check(
+    dataset: str = typer.Argument(..., help="评测输入 Manifest（path / name / artifact id）"),
+    gold_field: str = typer.Option("gold_text", "--gold-field"),
+    type_field: str = typer.Option("type", "--type-field"),
+    min_gold_ratio: float = typer.Option(
+        0.0,
+        "--min-gold-ratio",
+        help="有金标样本占比下限；低于该值时退出码非 0（默认 0 只报告）",
+    ),
+    require_audio_key: str = typer.Option(
+        "resampled_16k",
+        "--require-audio-key",
+        help="评测推理所需音频键；空字符串表示不检查",
+    ),
+) -> None:
+    """检查 Manifest 是否满足进入评测流水线的条件（金标覆盖、id 唯一、音频键）。"""
+    path = _resolve_dataset(dataset)
+    report = inspect_eval_manifest(
+        path,
+        gold_field=gold_field,
+        type_field=type_field,
+        min_gold_ratio=min_gold_ratio,
+        require_audio_key=require_audio_key,
+    )
+    if report.total == 0:
+        raise typer.BadParameter(f"manifest is empty: {path}")
+
+    console.print(f"Manifest: [cyan]{path}[/cyan]")
+    console.print(f"  total:          {report.total}")
+    console.print(f"  with_gold:      {len(report.with_gold)} ({report.gold_ratio:.2%})")
+    console.print(f"  without_gold:   {len(report.without_gold)}")
+    if report.without_gold:
+        preview = ", ".join(report.without_gold[:10])
+        more = "" if len(report.without_gold) <= 10 else f" ... (+{len(report.without_gold) - 10})"
+        console.print(f"  without_gold_ids: {preview}{more}")
+    console.print(f"  unique_ids:     {report.unique_ids}")
+    console.print(f"  duplicate_ids:  {len(report.duplicates)}")
+    if report.duplicates:
+        console.print(f"  duplicate_preview: {report.duplicates[:10]}")
+    console.print(f"  empty_ids:      {report.empty_ids}")
+    if require_audio_key:
+        console.print(f"  missing_audio[{require_audio_key}]: {len(report.missing_audio)}")
+        if report.missing_audio:
+            console.print(f"  missing_audio_preview: {report.missing_audio[:10]}")
+    console.print("  type / bucket counts:")
+    for name in sorted(report.type_counts.keys(), key=lambda x: (x == "(空)", x)):
+        console.print(f"    {name}: {report.type_counts[name]}")
+
+    if report.errors:
+        for item in report.errors:
+            console.print(f"[red]FAIL[/red] {item}")
+        raise typer.Exit(code=1)
+    console.print(
+        "[green]OK[/green] eval readiness passed "
+        f"(missing gold allowed; scored subset will be {len(report.with_gold)}/{report.total})"
+    )
+
+
+@eval_app.command("register")
+def eval_register(
+    dataset: str = typer.Argument(
+        ...,
+        help="评测源 Manifest（通常为 summary_ / gold_ / reviewed_，path / name / artifact id）",
+    ),
+    name: str = typer.Option(
+        ...,
+        "--name",
+        help="评测集 stem，写入 datasets/manifests/<name>.parquet（如 eval_local_test）",
+    ),
+    force: bool = typer.Option(False, "--force", help="覆盖已存在的同名评测集"),
+    min_gold_ratio: float = typer.Option(
+        0.0,
+        "--min-gold-ratio",
+        help="有金标样本占比下限（默认 0 只报告）",
+    ),
+    require_audio_key: str = typer.Option(
+        "resampled_16k",
+        "--require-audio-key",
+        help="评测推理所需音频键；空字符串表示不检查",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        help="覆盖默认输出路径 datasets/manifests/<name>.parquet",
+    ),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """把 summary/gold Manifest 注册为评测集快照，供 --eval-name 使用。
+
+    与训练 / Model Registry 无依赖；后续只要推理结果 id 与评测集对齐即可算字准。
+    """
+    try:
+        eval_stem = validate_source_name(name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    source_path = _resolve_dataset(dataset)
+    dest = Path(output) if output is not None else MANIFESTS_DIR / f"{eval_stem}.parquet"
+    if dest.exists() and not force:
+        raise typer.BadParameter(
+            f"eval set already exists: {dest} (pass --force to overwrite)"
+        )
+
+    report = inspect_eval_manifest(
+        source_path,
+        min_gold_ratio=min_gold_ratio,
+        require_audio_key=require_audio_key,
+    )
+    if report.total == 0:
+        raise typer.BadParameter(f"manifest is empty: {source_path}")
+    if report.errors:
+        for item in report.errors:
+            console.print(f"[red]FAIL[/red] {item}")
+        raise typer.Exit(code=1)
+
+    manifest = Manifest.load(source_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.save(dest)
+    manifest.save(dest.with_suffix(".jsonl"))
+    run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_eval_register"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    artifact_id = _register_output(
+        dest,
+        pipeline="eval.register",
+        run_dir=run_dir,
+        catalog_dir=catalog_dir,
+        sample_count=len(manifest),
+    )
+    console.print(f"[green]OK[/green] registered eval set [cyan]{eval_stem}[/cyan]")
+    console.print(f"  Source:   [cyan]{source_path}[/cyan]")
+    console.print(f"  Output:   [cyan]{dest}[/cyan]")
+    console.print(f"  Samples:  {len(manifest)} (gold={len(report.with_gold)})")
+    console.print(f"  Artifact: [cyan]{artifact_id}[/cyan]")
+    console.print(
+        f"  Next: audio-data pipeline run pipelines/qwen_asr_batch.yaml "
+        f"--eval-name {eval_stem} --asr-run <alias>"
+    )
 
 
 task_app = typer.Typer(help="Resumable task DAG orchestration")

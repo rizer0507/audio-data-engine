@@ -1,0 +1,27 @@
+# 工序⑤：以金标/汇总评测集为底表，按 id 左连接各模型独立推理结果。
+#
+#   audio-data pipeline run pipelines/eval_aggregate.yaml \
+#     --eval-name eval_local_test \
+#     --join-manifest qwen \
+#     --join-manifest qwen-sft-epoch10 \
+#     --join-manifest qwen-sft-epoch100
+#
+# id_policy=left：推理结果可多于评测集（忽略 extra）；评测集缺 id 仍失败。
+# 若评测集已含某模型文本（如 summary 里的原 qwen），不要再 join 同名别名。
+
+name: eval_aggregate
+input:
+  manifest: datasets/manifests/eval_source_A.parquet
+output:
+  manifest: datasets/manifests/eval_aggregate_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: aggregate_eval_results
+    operator: quality.aggregate_manifests
+    params:
+      overwrite: false
+      id_policy: left
+      manifests: []

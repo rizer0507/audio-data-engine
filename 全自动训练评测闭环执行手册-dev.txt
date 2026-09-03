@@ -11,7 +11,7 @@
   1. Parquet Manifest 是唯一真相源，XLSX 只用于人工审核。
   2. 每个流水线输出都会注册 Artifact ID；不要再人工寻找、复制、合并多个 XLSX。
   3. Dataset Release 一旦创建不可修改；标注或规则变化必须创建新 release_id。
-  4. baseline/candidate 都使用 Model Registry ID，不在评测命令里直接填写 checkpoint。
+  4. 评测与训练完全解耦：只要评测集与各模型推理结果 id 对齐即可；不必走 Model Registry。
   5. review 是明确的人工审批边界；未审核 hardcase/review_queue 不允许进入 Release。
   6. Qwen 生产识别默认通过独立 vLLM 服务调用；流水线进程不加载 Qwen GPU 模型。
      只有明确取消 QWEN_ASR_API_BASE 时，才回退到 qwen-asr 本地推理。
@@ -108,15 +108,20 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 
 
 -------------------------------------------------------
-2. Qwen 全量识别
+2. 同源多结果 ASR 识别（任意模型 / 任意批次）
 -------------------------------------------------------
-# 输出：datasets/manifests/qwen_asr_${BATCH}.parquet
-#
-# 2.1 先在独立终端启动 vLLM（GPU 1，服务常驻，不要在流水线命令后加 &）：
+# 同一 --source-name（$BATCH）共用 cleaned_${BATCH}。
+# 每次识别用 --asr-run <alias> 区分产物：
+#   datasets/manifests/{alias}_asr_${BATCH}.parquet
+#   transcripts.{alias}.text
+# 例：qwen1 / qwen2 / sensevoice1 / doubao1 … 可按需增减，不绑死模型清单。
 
+# ── 2.1 Qwen（示例：同权重启两个 vLLM，端口 5559 / 5560）────────────────
+
+# 终端 A：
 CUDA_VISIBLE_DEVICES=1 \
 vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
-  --gpu-memory-utilization 0.5 \
+  --gpu-memory-utilization 0.45 \
   --host 127.0.0.1 \
   --port 5559 \
   --served-model-name qwen3-asr \
@@ -128,146 +133,71 @@ vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
   --max-num-seqs 8 \
   --limit-mm-per-prompt '{"audio":1}'
 
-# 2.2 在流水线终端确认环境变量与接口：
-export QWEN_ASR_API_BASE=http://127.0.0.1:5559
-export QWEN_ASR_API_KEY=dummy
-
-curl -fsS http://127.0.0.1:5559/v1/models | python -m json.tool
-
-# 可选：先用真实短音频做端到端探针。返回 JSON 中必须含非空 text。
-curl -fsS http://127.0.0.1:5559/v1/audio/transcriptions \
-  -H "Authorization: Bearer ${QWEN_ASR_API_KEY}" \
-  -F model=qwen3-asr \
-  -F language=Chinese \
-  -F response_format=json \
-  -F file=@${PROBE_WAV} | python -m json.tool
-
-# 2.3 批量执行。设置 QWEN_ASR_API_BASE 后，客户端不会加载本地 Qwen 模型。
-# configs/asr/qwen_asr.yaml 当前值：
-#   model_path: /data2/data-cp/zcl/models/Qwen3-ASR-1___7B
-#   model: qwen3-asr（须等于 --served-model-name）
-#   concurrency: 4；batch_size: 32
-# pipelines/qwen_asr_batch.yaml sharding：gpus [4,5] × instances_per_gpu 4（vLLM 模式下仅占 CPU/网络）
-
-audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
-
-# 中断后续跑（使用控制台打印的 run root）：
-# audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-#   --source-name "$BATCH" --resume runs/<上次_run_root>
-
-# 只有明确需要单进程本地推理时才使用以下回退方式：
-# unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
-# export QWEN_ASR_MODEL_PATH=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
-# test -e "$QWEN_ASR_MODEL_PATH" || exit 1
-# audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
-
-
--------------------------------------------------------
-3. SenseVoice 全量识别
--------------------------------------------------------
-# SenseVoice 与 Qwen 独立运行，不依赖 Qwen 的 Manifest。
-# 输出：datasets/manifests/sensevoice_asr_${BATCH}.parquet
-# 当前 sharding：GPU 4、5，每卡 4 实例，共 8 并行 shard（见 pipelines/sensevoice_asr_batch.yaml）
-
-audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATCH"
-
-# 中断后续跑：
-# audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
-#   --source-name "$BATCH" --resume runs/<上次_run_root>
-
-
--------------------------------------------------------
-4. Kimi-Audio 全量识别（可选）
--------------------------------------------------------
-# Kimi 与 Qwen/SenseVoice 独立运行。vLLM 版与本地加载版产物不同，聚合时 join 名也不同：
-#   vLLM：kimi_asr_${BATCH}.parquet          → --join-manifest kimi
-#   本地：kimi_audio_asr_${BATCH}.parquet    → --join-manifest kimi_audio
-# 转写均写入 transcripts.kimi.text。
-
-# ── 4.1 vLLM HTTP 模式（GPU 6，端口 5554；客户端不加载 GPU 模型）────────────
-# 并行：pipelines/kimi_asr_batch.yaml 默认 8 shard × 4 thread；
-#       configs/asr/kimi.yaml concurrency=4（对接 vLLM --max-num-seqs）。
-
-# CUDA_VISIBLE_DEVICES=6 \
-# vllm serve /data2/data-cp/models/kimi-audio \
-#   --gpu-memory-utilization 0.5 \
-#   --host 127.0.0.1 \
-#   --port 5554 \
-#   --served-model-name kimi-audio \
-#   --tensor-parallel-size 1 \
-#   --trust-remote-code \
-#   --dtype bfloat16 \
-#   --max-model-len 8192 \
-#   --max-num-seqs 4 \
+# 终端 B：
+# CUDA_VISIBLE_DEVICES=2 \
+# vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
+#   --gpu-memory-utilization 0.45 --host 127.0.0.1 --port 5560 \
+#   --served-model-name qwen3-asr --tensor-parallel-size 1 --trust-remote-code \
+#   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja \
+#   --dtype bfloat16 --max-model-len 4096 --max-num-seqs 8 \
 #   --limit-mm-per-prompt '{"audio":1}'
 
-# export KIMI_ASR_API_BASE=http://127.0.0.1:5554
-# export KIMI_ASR_MODEL=kimi-audio
-# curl -fsS http://127.0.0.1:5554/v1/models | python -m json.tool
-# # 必须按顺序通过单文件、文件夹探针；输出中每条 text 均须非空：
-# python scripts/probe_kimi_vllm.py "$PROBE_WAV"
-# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --concurrency 4
-# # SOURCE_DIR 含多层子目录时使用：
-# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --recursive --concurrency 4
-# # 探针退出码：0=全部非空，1=输入/连接/配置错误，2=至少一条空转写。
-# # 只有两个探针均为 0 才开始整个 cleaned_${BATCH}.parquet。
-# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH"
+export QWEN_ASR_API_KEY=dummy
 
-# ── 4.2 本地 kimia_infer 模式（两卡 A800；与 vLLM 4.1 独立）────────────────
-# 前置：pip install -e ".[kimi-audio]"
-# 并发：pipelines/kimi_audio_asr_batch.yaml
-#   gpus [0, 1] × instances_per_gpu 1 = 2 个 shard 进程；进程内一次一条 generate。
-#   共享集群请把 YAML 里的 gpus 改成两张空闲 A800，避开 Qwen GPU 1 与 SenseVoice GPU 4,5。
-# configs/asr/kimi_audio.yaml：batch_size=1，inference_threads=1，load_detokenizer=false
-#
-# 必须按顺序通过单文件、文件夹探针；stdout 每条 JSON 的 text 均须非空：
-#   退出码 0=全部非空，1=输入/模型/推理错误，2=至少一条空转写。
-# 只有两个探针均为 0 才开始整个 cleaned_${BATCH}.parquet。
+export QWEN_ASR_API_BASE=http://127.0.0.1:5559
+curl -fsS http://127.0.0.1:5559/v1/models | python -m json.tool
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run qwen1
 
-export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
-test -e "$KIMI_AUDIO_MODEL_PATH" || exit 1
-
-python scripts/probe_kimi_audio.py "$PROBE_WAV"
-python scripts/probe_kimi_audio.py "$SOURCE_DIR" --limit 8
-# SOURCE_DIR 含多层子目录时使用：
-# python scripts/probe_kimi_audio.py "$SOURCE_DIR" --recursive --limit 8
-
-audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATCH"
-
-# 中断后续跑：
-# audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml \
-#   --source-name "$BATCH" --resume runs/<上次_run_root>
+export QWEN_ASR_API_BASE=http://127.0.0.1:5560
+curl -fsS http://127.0.0.1:5560/v1/models | python -m json.tool
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run qwen2
 
 
 -------------------------------------------------------
-5. 严格聚合并计算 agreement CER
+3. SenseVoice / 其他模型识别（继续用同一 source）
+-------------------------------------------------------
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run sensevoice1
+
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run sensevoice2
+
+# Doubao / Kimi 等同理：
+# audio-data pipeline run pipelines/doubao_asr_batch.yaml \
+#   --source-name "$BATCH" --asr-run doubao1
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml \
+#   --source-name "$BATCH" --asr-run kimi1
+# audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml \
+#   --source-name "$BATCH" --asr-run kimi_audio1
+
+
+-------------------------------------------------------
+4. （可选）额外 ASR 批次
+-------------------------------------------------------
+# 需要更多结果时，换 alias 再跑即可；source 仍是 $BATCH。
+
+
+-------------------------------------------------------
+5. 严格聚合并计算 agreement CER（指定 base）
 -------------------------------------------------------
 # 聚合会同时校验 id 和音频 sha256；错配会立即失败并在 run/reports 写 alignment report。
 
 audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
   --source-name "$BATCH" \
-  --join-manifest sensevoice
+  --aggregate-base qwen1 \
+  --join-manifest qwen2 \
+  --join-manifest sensevoice1 \
+  --join-manifest sensevoice2
 
-# 若还要聚合 Kimi（按实际使用的流水线选择 join 名）：
-# vLLM 版：
-# audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
-#   --source-name "$BATCH" \
-#   --join-manifest sensevoice --join-manifest kimi
-# 本地加载版：
-# audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
-#   --source-name "$BATCH" \
-#   --join-manifest sensevoice --join-manifest kimi_audio
-audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
   --source-name "$BATCH" \
-  --join-manifest sensevoice \
-  --join-manifest doubao \
-  --join-manifest qwen
+  --agreement-base qwen1 \
+  --force
 
-audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH" --force
-
-# 该流水线先做：zh_asr_v1 去标点 + qwen 精确短语清空（见 configs/normalization/blank_exact_qwen_v1.yaml），
-# 全部改写完成后再计算 agreement CER。
 # 输出：datasets/manifests/multi_asr_metrics_${BATCH}.parquet
+# classify 仅当 max_vs_base_agreement_cer == 0 才进 auto_gold（金标取 base）。
 
 
 ================================================================================
@@ -277,9 +207,10 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 -------------------------------------------------------
 5. 使用版本化策略自动分拣
 -------------------------------------------------------
-# 默认规则：configs/selection/zh_asr_v1.yaml
-# 结果桶：auto_gold / hardcase / noise / review_queue
-# auto_gold 会自动记录 gold_text、gold_source、annotation_revision。
+# 默认规则：configs/selection/zh_asr_v1.yaml（selection_zh_asr_v1_5）
+# 结果桶：auto_gold / hardcase / noise / review_queue / voicemail
+# auto_gold：相对 base max agreement CER ≤ 0.10；label 在非空转写中稳定随机选取。
+# voicemail：命中 configs/selection/voicemail_patterns_v1.yaml。
 
 audio-data pipeline run pipelines/classify_dataset.yaml \
   --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
@@ -287,11 +218,33 @@ audio-data pipeline run pipelines/classify_dataset.yaml \
   --force
 
 # 注意：agreement CER 只是模型间一致程度，不是真实准确率。
-# 修改阈值前必须在人审校准集上验证，并同步升级 policy_version。
+# 修改分拣策略前必须升级 policy_version。
 
 
 -------------------------------------------------------
-6. 一次导出所有需要人审的样本
+6. 导出并聚拢全部一致金标（auto_gold）——可直接进入评测
+-------------------------------------------------------
+# 多模型相对 base 完全一致的样本已写入 labels.gold_text / labels.label。
+# 本步导出含 label 列的 xlsx，并写出金标-only Manifest，供工序⑤评测直接使用。
+# 不一致样本（review_queue / hardcase）可先搁置，不阻塞金标评测。
+
+export GOLD_XLSX="data/exports/auto_gold_${BATCH}.xlsx"
+export GOLD_MANIFEST="datasets/manifests/gold_${BATCH}.parquet"
+
+audio-data review export-gold "datasets/manifests/classified_${BATCH}.parquet" \
+  --output "$GOLD_XLSX" \
+  --output-manifest "$GOLD_MANIFEST" \
+  --bucket auto_gold
+
+# 检查金标覆盖后即可把 EVAL_MANIFEST 指到 $GOLD_MANIFEST 跑评测：
+# audio-data eval check "$GOLD_MANIFEST"
+# export EVAL_MANIFEST="$GOLD_MANIFEST"
+
+# 若只要 xlsx、不写 Manifest：省略 --output-manifest 即可。
+
+
+-------------------------------------------------------
+7. 一次导出所有需要人审的样本（可先搁置）
 -------------------------------------------------------
 export REVIEW_REV=review_${BATCH}_v1
 export REVIEW_XLSX="data/exports/review_${BATCH}_${REVIEW_REV}.xlsx"
@@ -312,7 +265,7 @@ audio-data review export "datasets/manifests/classified_${BATCH}.parquet" \
 
 
 -------------------------------------------------------
-7. 导入审核结果
+8. 导入审核结果
 -------------------------------------------------------
 audio-data review import "datasets/manifests/classified_${BATCH}.parquet" \
   --input "$REVIEW_XLSX" \
@@ -322,20 +275,56 @@ audio-data review import "datasets/manifests/classified_${BATCH}.parquet" \
   --bucket hardcase
 
 # 导入成功会打印 reviewed Manifest 的 Artifact ID。
+# accepted 样本会同步写入 labels.label（= gold_text）。
 
 
 -------------------------------------------------------
-8. 分组、分层拆分并冻结 Release
+8b. 汇总全量 type 总表（工序金标汇总总输出）
+-------------------------------------------------------
+# type = classification_bucket ∈ {auto_gold, hardcase, noise, review_queue}
+# 超过 20000 行自动拆成 summary_${BATCH}-part-001.xlsx …
+# 人审搁置时可用 classified_ 代替 reviewed_。
+
+export SUMMARY_XLSX="/data2/data-cp/zcl/exports/summary_${BATCH}.xlsx"
+export SUMMARY_MANIFEST="datasets/manifests/summary_${BATCH}.parquet"
+
+audio-data review export-summary "datasets/manifests/reviewed_${BATCH}.parquet" \
+  --output "$SUMMARY_XLSX" \
+  --output-manifest "$SUMMARY_MANIFEST" \
+  --max-rows 20000
+
+# audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+#   --output "$SUMMARY_XLSX" --output-manifest "$SUMMARY_MANIFEST" --max-rows 20000
+
+
+-------------------------------------------------------
+9. 分组、分层拆分并冻结 Release
 -------------------------------------------------------
 export RELEASE_ID=ds_${BATCH}_v1
 
 # group-key 必须按真实数据选择：优先 conversation_id，其次 speaker_id。
 # 同一 group 永远不会跨 train/dev/test；classification_bucket 用于分层。
-# noise/rejected 自动排除；未审核的 review_queue/hardcase 会阻止 Release 创建。
+# noise/rejected 自动排除。
 
+# 路径 A（推荐先跑）：仅用 auto_gold，人审未完成也可冻结 / 评测
+audio-data release build "$GOLD_MANIFEST" \
+  --id "${RELEASE_ID}_auto_gold" \
+  --policy-version selection_zh_asr_v1_2 \
+  --normalization-version zh_asr_v1 \
+  --gold-revision "auto_${BATCH}" \
+  --group-key conversation_id \
+  --stratify-key classification_bucket \
+  --split-seed 42 \
+  --train-ratio 0.8 \
+  --dev-ratio 0.1 \
+  --test-ratio 0.1
+
+# 路径 B：人审完成后，用 reviewed Manifest 全量冻结
+# 未审核的 review_queue/hardcase 默认会阻止创建；若仍要先用已有金标：
+#   加 --allow-unresolved-review（只纳入 auto_accepted / human_accepted）。
 audio-data release build "datasets/manifests/reviewed_${BATCH}.parquet" \
   --id "$RELEASE_ID" \
-  --policy-version selection_zh_asr_v1_1 \
+  --policy-version selection_zh_asr_v1_2 \
   --normalization-version zh_asr_v1 \
   --gold-revision "$REVIEW_REV" \
   --group-key conversation_id \
@@ -344,6 +333,7 @@ audio-data release build "datasets/manifests/reviewed_${BATCH}.parquet" \
   --train-ratio 0.8 \
   --dev-ratio 0.1 \
   --test-ratio 0.1
+  # --allow-unresolved-review
 
 # 如果当前 Manifest 没有 conversation_id，但有 speaker_id：
 # 将 --group-key conversation_id 改成 --group-key speaker_id。
@@ -418,77 +408,105 @@ audio-data model show "$BASELINE_MODEL_ID"
 
 
 ================================================================================
-四、使用冻结测试集自动评测新旧模型（工序⑤）
+四、使用金标评测集自动评测多模型（工序⑤，与训练解耦）
 ================================================================================
+
+目标产物与手动「总表-字准率.xlsx」对齐：
+  - 样本级：id / type / label(gold) / 各模型文本 / 错字少字多字 / CER / 字准率
+  - 统计摘要 + 按 type 统计（总体字准率、平均字准率）
+  - evaluation.json：各模型 corpus CER、分桶、金标覆盖率（可选配对门禁）
+
+评测输入 Manifest 必须：
+  1. 样本 id 全局唯一（错配直接失败）；
+  2. labels.gold_text 尽量齐全（允许缺金标：只统计有金标子集，并在报告中注明）；
+  3. labels.type（或 classification_bucket）用于分桶；
+  4. 含 resampled_16k，供 vLLM 推理。
+
+与④训练无依赖：只要「评测集」与「各模型推理 Manifest」id 对齐即可。
 
 -------------------------------------------------------
-11. 选择评测集并执行 baseline/candidate 评测
+11.0 注册评测集 + 准入检查（必做）
 -------------------------------------------------------
-# 默认示例使用同一 Release 的 test split。更严格的做法是长期维护独立 holdout Release。
-#
-# 重要：默认评测流水线会根据 Model Registry 中的 checkpoint 依次加载 baseline/candidate，
-# 因此执行前必须取消批量建集阶段使用的 Qwen vLLM 环境变量：
-#
-#   unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
-#
-# 否则两个 inference step 都会被路由到同一个 vLLM 地址，而单模型 vLLM 服务不会按
-# Registry checkpoint 自动换权重，可能导致新旧模型实际使用相同权重、评测结果无效。
-# 本地评测还需要安装 `pip install -e ".[asr]"`，并确保两份 checkpoint 均可访问。
+export EVAL_NAME="eval_${BATCH}"
+export EVAL_SOURCE="datasets/manifests/summary_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/manifests/gold_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/manifests/reviewed_${BATCH}.parquet"
 
-export EVAL_MANIFEST="$(audio-data release path "$RELEASE_ID" --split test)"
-export EVAL_OUTPUT="data/evaluations/${RELEASE_ID}_${CANDIDATE_MODEL_ID}.parquet"
+audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
+audio-data eval check "$EVAL_NAME"
+# audio-data eval check "$EVAL_NAME" --min-gold-ratio 0.95
 
-audio-data pipeline run pipelines/evaluate_registered_models.yaml
 
-流水线自动完成：
-  baseline 推理（transcript key=old_model）
-  → 释放 baseline 模型和 GPU 缓存
-  → candidate 推理（transcript key=new_model）
-  → 与 gold_text 计算统一 CER
-  → corpus CER + classification bucket 分桶
-  → paired bootstrap 95% CI
-  → overall/hardcase regression gate
+-------------------------------------------------------
+11.1 各模型独立 vLLM 跑批推理
+-------------------------------------------------------
+# 每个权重单独端口；可用相同 --served-model-name qwen3-asr，不必走 Model Registry。
+# 若 summary 已有原模型文本，可只跑 SFT 别名。
 
-输出：
-  $EVAL_OUTPUT                         样本级结果 Manifest
-  runs/<本次评测_run>/reports/evaluation.json
+# 终端：qwen-sft-epoch10 / epoch100（示例路径按实际 checkpoint 改）
+# CUDA_VISIBLE_DEVICES=1 vllm serve /data2/data-cp/zcl/models/qwen-sft-epoch10 \
+#   --host 127.0.0.1 --port 5561 --served-model-name qwen3-asr ...
+# CUDA_VISIBLE_DEVICES=2 vllm serve /data2/data-cp/zcl/models/qwen-sft-epoch100 \
+#   --host 127.0.0.1 --port 5562 --served-model-name qwen3-asr ...
 
-若门禁失败：
-  流水线返回失败，但 evaluation.json 会保留；先检查 delta_cer、各 bucket 和 badcase，
-  不要用 --force 或修改阈值绕过发布判断。
+export QWEN_ASR_API_KEY=dummy
 
-如评测数据规模必须使用 vLLM：
-  1. 分别在不同端口启动 baseline 和 candidate vLLM，加载各自 checkpoint；
-  2. --served-model-name 分别设置为 BASELINE_MODEL_ID 和 CANDIDATE_MODEL_ID；
-  3. 复制 pipelines/evaluate_registered_models.yaml，为 baseline_inference 和
-     candidate_inference 分别显式填写不同的 api_base；
-  4. 不要只设置一个全局 QWEN_ASR_API_BASE；
-  5. 分别用 /v1/models 和一条真实音频探针确认两个端口，再开始全量评测。
+export QWEN_ASR_API_BASE=http://127.0.0.1:5561
+curl -fsS http://127.0.0.1:5561/v1/models | python -m json.tool
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch10
 
-示例（复制后的 YAML 片段）：
-  baseline_inference.params.api_base: http://127.0.0.1:5561
-  candidate_inference.params.api_base: http://127.0.0.1:5562
+export QWEN_ASR_API_BASE=http://127.0.0.1:5562
+curl -fsS http://127.0.0.1:5562/v1/models | python -m json.tool
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch100
 
-由于 registered_model 会把请求中的 model 设置为 Registry ID，两个 vLLM 服务的
---served-model-name 必须与对应 Registry ID 完全一致，否则会收到 HTTP 404/400。
+
+-------------------------------------------------------
+11.2 按 id 聚拢到评测集
+-------------------------------------------------------
+audio-data pipeline run pipelines/eval_aggregate.yaml \
+  --eval-name "$EVAL_NAME" \
+  --join-manifest qwen-sft-epoch10 \
+  --join-manifest qwen-sft-epoch100
+# 可选：--join-manifest qwen
+# 或复用工序②：--join-manifest "qwen1=datasets/manifests/qwen1_asr_${BATCH}.parquet"
+
+
+-------------------------------------------------------
+11.3 相对金标算字准 + 按 type 导出
+-------------------------------------------------------
+audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+  --eval-name "$EVAL_NAME" \
+  --eval-model qwen \
+  --eval-model qwen-sft-epoch10 \
+  --eval-model qwen-sft-epoch100
+
+# 输出：eval_metrics_eval_${BATCH}.parquet + runs/.../reports/evaluation.json|xlsx
+
+
+-------------------------------------------------------
+11.4 id / 金标规则（硬约束）
+-------------------------------------------------------
+1. evaluation_report 发现重复 id 立即失败。
+2. 无 gold_text 的样本：不计入 corpus CER / 字准率，但留在 xlsx「结果」中，
+   eval_scored=false，并在 evaluation.json 的 gold_coverage.missing_gold_ids 注明。
+3. type 优先读 labels.type；缺失时回退 classification_bucket。
+4. 清洗与①一致：configs/normalization/blank_exact_eval_v1.yaml（models: ["*"]）+ zh_asr_v1。
+5. 兼容旧入口 evaluate_registered_models.yaml（Registry + 双端口串行），不推荐。
 
 
 ================================================================================
-五、把训练与评测作为一个可恢复 Task DAG 执行
+五、（可选）把训练与评测串成 Task DAG
 ================================================================================
 
-人工审核与 Release 冻结完成后，可以复制任务模板：
+评测本身不依赖训练。仅当你希望「训练成功后再自动跑评测」时，才复制任务模板：
 
 cp tasks/train_and_evaluate.example.yaml tasks/train_and_evaluate_${BATCH}.yaml
 
 必须修改模板中的：
-  release ID
-  recipe
-  外部训练命令
-  candidate checkpoint / model ID
-  baseline model ID
-  EVAL_MANIFEST
-  EVAL_OUTPUT
+  release ID / recipe / 外部训练命令 / candidate checkpoint
+  评测节点改为 --eval-name / --asr-run / eval_aggregate / eval_metric_pipeline
 
 执行：
 audio-data task run "tasks/train_and_evaluate_${BATCH}.yaml"
@@ -623,12 +641,15 @@ audio-data model show <model_id>
 [ ] multi_asr_aggregate 的 --join-manifest（kimi 或 kimi_audio）
 [ ] （仅 Qwen 本地回退）QWEN_ASR_MODEL_PATH=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 [ ] REVIEW_REV
+[ ] GOLD_MANIFEST（datasets/manifests/gold_${BATCH}.parquet）
+[ ] EVAL_NAME（eval_${BATCH}）/ EVAL_SOURCE（summary_ 或 gold_）
 [ ] RELEASE_ID
 [ ] group-key（conversation_id 或 speaker_id）
 [ ] TRAIN_RECIPE / TRAIN_COMMAND
 [ ] CANDIDATE_MODEL_ID / CANDIDATE_CHECKPOINT
 [ ] BASELINE_MODEL_ID
-[ ] EVAL_OUTPUT
+[ ] 评测 vLLM 端口与 --asr-run 别名（例：qwen / qwen-sft-epoch10 / qwen-sft-epoch100）
+[ ] --eval-model 列表（与报告维度一致）
 
 通常不需要修改：
   datasets/manifests 内的中间文件路径
@@ -651,15 +672,16 @@ audio-data model show <model_id>
 [ ] （若跑 Kimi 本地）gpus 为两张空闲 A800，parallel_shards == GPU 槽位数，transcripts.kimi.text 非空
 [ ] aggregate alignment report 中 aligned=true，sha256_mismatches=0
 [ ] selection policy_version 已在人审校准集上验证
-[ ] review XLSX 所有行 decision 均为 accepted/rejected
+[ ] export-gold 已写出 auto_gold xlsx（含 label）与 gold_${BATCH}.parquet
+[ ] review XLSX 所有行 decision 均为 accepted/rejected（若本轮做人审）
 [ ] Release 创建成功，train/dev/test 总量与 accepted Gold 总量一致
 [ ] train/dev/test 不存在 conversation_id/speaker_id 交集
-[ ] Training Job 状态 succeeded，Model 状态 ready，checkpoint 存在
-[ ] baseline 与 candidate 都能通过 model show 查询
-[ ] 注册模型评测前已 unset 全局 QWEN_ASR_API_BASE，或已配置两个独立 vLLM 端口
-[ ] 若使用双 vLLM 评测，两个端口加载的 checkpoint 和 served-model-name 均已分别核验
-[ ] evaluation.json 同时包含 overall、buckets、paired_bootstrap、gates
-[ ] 门禁 passed=true 后才允许进入后续发布流程
+[ ] Training Job 状态 succeeded，Model 状态 ready，checkpoint 存在（若跑工序④）
+[ ] audio-data eval register / eval check 通过：无重复 id；金标覆盖已确认
+[ ] 各评测 vLLM 端口权重已核验；--asr-run 别名与 join / --eval-model 一致
+[ ] eval_aggregate alignment 中评测集 id 无 missing；extra 可忽略（left）
+[ ] evaluation.json 含 overall（各模型）、buckets（按 type）、gold_coverage
+[ ] evaluation.xlsx 含 结果 / 统计摘要 / 按type统计，可对比各阶段字准率
 
 
 ================================================================================
@@ -673,10 +695,12 @@ wav/pcm
   → multi_asr_aggregate_${BATCH}
   → multi_asr_metrics_${BATCH}
   → classified_${BATCH}
-  → review.xlsx（仅人工视图）
-  → reviewed_${BATCH}
+  → gold_${BATCH} + auto_gold_${BATCH}.xlsx（label 列=金标）
+  →（可选）review.xlsx → reviewed_${BATCH}
+  → summary_${BATCH}（type 总表）
   → Dataset Release: train/dev/test Artifact IDs
-  → Training Job
-  → Candidate Model Registry ID
-  → baseline/candidate inference
-  → evaluation.json + regression gate
+  →（可选）Training Job
+  → eval register → eval_${BATCH}
+  → {alias}_asr_eval_${BATCH}（各 vLLM 独立跑批）
+  → eval_aggregate_eval_${BATCH}（按 id 对齐）
+  → eval_metrics_eval_${BATCH} + evaluation.json/xlsx（按 type 多模型字准）

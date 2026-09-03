@@ -1,9 +1,19 @@
-comparisons:
-  # Gold production：pseudo-reference = 当前强基线（暂用 qwen）。
-  # 后续接入 Model C 时改为 reference.field: model_c_text，并增加各模型 vs model_c 项。
-  - name: sensevoice_vs_qwen
-    purpose: gold_generation_agreement
-    reference: {field: qwen_text}
-    hypothesis: {field: sensevoice_text}
-    metrics: [cer]
-    output: {prefix: sensevoice_vs_qwen_agreement}
+# Gold production：指定 base（pseudo-reference），其余 transcript 与 base 比 agreement CER。
+# hypotheses 缺省 = 样本上除 base 外的全部 transcript keys（由 quality.text_metrics 展开）。
+# CLI：audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
+#        --source-name $BATCH --agreement-base qwen1
+
+vs_base:
+  base: qwen1
+  purpose: gold_generation_agreement
+  metrics: [cer]
+  # hypotheses: [qwen2, sensevoice1, sensevoice2]  # 可选；省略则自动发现
+
+# 兼容旧写法：若同时给出 comparisons，会在 vs_base 展开结果之后追加执行。
+# comparisons:
+#   - name: sensevoice_vs_qwen
+#     purpose: gold_generation_agreement
+#     reference: {field: qwen_text}
+#     hypothesis: {field: sensevoice_text}
+#     metrics: [cer]
+#     output: {prefix: sensevoice_vs_qwen_agreement}

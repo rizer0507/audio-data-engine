@@ -105,6 +105,26 @@ def test_normalize_transcripts_blanks_exact_qwen_phrases(tmp_path):
     assert blanked.transcripts["qwen"]["extra"]["blanked_exact_hotword"] is True
     assert blanked.transcripts["sensevoice"]["text"] == "你好"
 
+    # alias keys (qwen1/qwen2) must also blank under the same YAML models list
+    blanked_alias = operator.process(
+        Sample(
+            id="hot-alias",
+            source_path="/tmp/a2.wav",
+            sha256="d" * 64,
+            transcripts={
+                "qwen1": {
+                    "text": "没有，暂时不用，不需要谢谢，不可以，啊不用，我不需要，不要，不用，不需要。"
+                },
+                "qwen2": {
+                    "text": "没有，暂时不用，不需要谢谢，不可以，啊不用，我不需要，不要，不用，不需要。"
+                },
+            },
+        ),
+        config,
+    ).sample
+    assert blanked_alias.transcripts["qwen1"]["text"] == ""
+    assert blanked_alias.transcripts["qwen2"]["text"] == ""
+
     # single short phrase must NOT be blanked under the dump-string rule
     kept_short = operator.process(
         Sample(

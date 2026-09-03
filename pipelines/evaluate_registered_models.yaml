@@ -1,8 +1,16 @@
-# 工序⑤：在冻结评测 Manifest 上串行运行注册表中的 baseline/candidate，计算指标并执行门禁。
-# 示例：
-#   EVAL_MANIFEST=manifest_xxx BASELINE_MODEL_ID=qwen_base_v1 \
-#   CANDIDATE_MODEL_ID=qwen_sft_v1 EVAL_OUTPUT=data/eval/run1.parquet \
+# 工序⑤（兼容旧入口）：一条 YAML 串行跑 baseline + candidate。
+# 推荐改用解耦流程（与训练无依赖）：
+#   1) audio-data eval register <summary> --name eval_$BATCH
+#   2) qwen_asr_batch --eval-name ... --asr-run <alias>（各 vLLM 独立跑批）
+#   3) eval_aggregate --eval-name ... --join-manifest ...
+#   4) eval_metric_pipeline --eval-name ... --eval-model ...
+#
+# 本文件仍可用：要求 Model Registry + 双端口环境变量。
+#
+#   EVAL_MANIFEST=... BASELINE_MODEL_ID=... CANDIDATE_MODEL_ID=... \
+#   BASELINE_ASR_API_BASE=... CANDIDATE_ASR_API_BASE=... EVAL_OUTPUT=... \
 #     audio-data pipeline run pipelines/evaluate_registered_models.yaml
+
 name: evaluate_registered_models
 input:
   manifest: ${EVAL_MANIFEST}
@@ -13,6 +21,13 @@ execution:
   workers: 1
   fail_fast: true
 pipeline:
+  - name: map_baseline
+    operator: quality.copy_transcripts
+    params:
+      mapping:
+        qwen: old_model
+      only_if_missing: true
+
   - name: baseline_inference
     operator: asr.qwen_batch
     params:
@@ -36,18 +51,33 @@ pipeline:
       api_base_env: CANDIDATE_ASR_API_BASE
       api_key_env: CANDIDATE_ASR_API_KEY
 
+  - name: release_candidate
+    operator: runtime.release_asr_models
+
+  - name: normalize_transcripts
+    operator: quality.normalize_transcripts
+    params:
+      models: [old_model, new_model]
+      keep_raw: true
+      blank_exact_hotwords_path: configs/normalization/blank_exact_eval_v1.yaml
+
   - name: evaluation_metrics
     operator: quality.text_metrics
     params:
       config_path: configs/metrics/model_eval.yaml
       normalization_path: configs/normalization/zh_asr_v1.yaml
+      skip_missing_reference: true
+      eval_hypotheses: [old_model, new_model]
 
   - name: evaluation_report
     operator: quality.evaluation_report
     params:
       baseline_prefix: old_model
       candidate_prefix: new_model
-      bucket_key: classification_bucket
+      model_prefixes: [old_model, new_model]
+      bucket_key: type
+      allow_missing_gold: true
+      export_xlsx: true
       fail_on_regression: true
       gates:
         - name: overall_cer_no_regression

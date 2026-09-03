@@ -106,8 +106,10 @@ def resolve_blank_exact_hotwords(
     models_raw = cfg.get("models")
     if models_raw is None:
         models = {default_model}
+    elif isinstance(models_raw, str):
+        models = {models_raw.strip()} if models_raw.strip() else {default_model}
     else:
-        models = {str(item) for item in models_raw}
+        models = {str(item).strip() for item in models_raw if str(item).strip()}
     return hotwords, models
 
 

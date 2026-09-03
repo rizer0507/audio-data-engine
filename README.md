@@ -98,12 +98,11 @@ audio-data training run --release ds_source_a_v1 --recipe recipes/qwen_sft.yaml 
   --model-id qwen_sft_v1 --base-model qwen_asr
 ```
 
-`pipelines/evaluate_registered_models.yaml` 直接从 Model Registry 解析 baseline/candidate checkpoint，
-串行推理并释放旧模型显存；随后生成 `reports/evaluation.json`，计算 corpus CER、业务桶指标，并
-执行整体与 hardcase 回归门禁。门禁失败时保留报告并让流水线失败。
+`pipelines/eval_metric_pipeline.yaml`（配合 `eval register` + `--eval-name` 独立推理）
+在金标/汇总评测集上对比多个模型阶段的字准率，按 type 导出 evaluation.xlsx；与训练 /
+Model Registry 无依赖。兼容入口 `evaluate_registered_models.yaml` 仍可用但不推荐。
 
-训练与评测可以放入可恢复的任务 DAG；成功节点及其声明产物仍存在时会跳过，失败节点保留独立
-stdout/stderr 和原子状态，修复外部问题后执行同一任务即可继续：
+训练与评测可以放入可恢复的任务 DAG（可选）；评测本身不依赖训练节点：
 
 ```bash
 audio-data task run tasks/train_and_evaluate.example.yaml

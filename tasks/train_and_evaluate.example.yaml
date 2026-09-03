@@ -1,5 +1,6 @@
 # 可恢复的任务级 DAG 示例。复制后替换 release、训练命令、模型路径和评测输入。
 # 人工 review 是显式审批边界：先完成 review import + release build，再启动本任务。
+# 评测与训练解耦：evaluate 节点不必 depends_on train；下方仅演示「训练后再评」的可选串联。
 name: train_and_evaluate
 nodes:
   - id: train_candidate
@@ -22,6 +23,8 @@ nodes:
     outputs:
       - /models/qwen_sft_v1
 
+  # 推荐：解耦评测（register → 独立推理 → aggregate → metric）。
+  # 下面仍保留旧耦合入口作兼容；请按手册第四节改成 --eval-name 流程。
   - id: evaluate_candidate
     depends_on: [train_candidate]
     command:

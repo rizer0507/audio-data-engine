@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +31,41 @@ class NormalizeTranscriptsOperator(BaseOperator):
     """
 
     name = "normalize_transcripts"
-    version = "1.1.0"
+    version = "1.1.1"
     category = "quality"
+
+    def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
+        """Invalidate when transcript keys/texts or blank-list file content change."""
+        params = dict(config.params)
+        path = params.get("blank_exact_hotwords_path")
+        blank_fingerprint = ""
+        if path:
+            blank_path = Path(path)
+            if blank_path.is_file():
+                blank_fingerprint = hashlib.sha256(
+                    blank_path.read_bytes()
+                ).hexdigest()
+        model_keys = params.get("models")
+        if model_keys is None:
+            model_keys = sorted(sample.transcripts.keys())
+        else:
+            model_keys = [str(item) for item in model_keys]
+        texts = {
+            key: sample.get_transcript_text(key)
+            for key in model_keys
+            if key in sample.transcripts
+        }
+        payload = {
+            "sha256": sample.sha256,
+            "operator": self.full_name,
+            "version": self.version,
+            "params": params,
+            "blank_file_sha256": blank_fingerprint,
+            "model_keys": model_keys,
+            "texts": texts,
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         params = dict(config.params)
@@ -51,6 +86,7 @@ class NormalizeTranscriptsOperator(BaseOperator):
         blank_hotwords, blank_models = resolve_blank_exact_hotwords(
             params.get("blank_exact_hotwords")
         )
+        blank_all = "*" in blank_models or "all" in blank_models
 
         updated: dict[str, Any] = {}
         for model in model_keys:
@@ -61,7 +97,7 @@ class NormalizeTranscriptsOperator(BaseOperator):
                 entry,
                 keep_raw=keep_raw,
                 blank_hotwords=blank_hotwords,
-                blank_model=model in blank_models,
+                blank_model=blank_all or model in blank_models,
             )
 
         return {

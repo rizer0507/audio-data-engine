@@ -318,6 +318,7 @@ def _build_shard_command(
     executor: str | None,
     force: bool,
     mock: bool,
+    transcript_key: str | None = None,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -344,6 +345,8 @@ def _build_shard_command(
         command.append("--force")
     if mock:
         command.append("--mock")
+    if transcript_key:
+        command += ["--transcript-key", transcript_key]
     return command
 
 
@@ -361,6 +364,7 @@ def spawn_shard_processes(
     log: Callable[[str], None] | None = None,
     progress_config: dict | None = None,
     progress_interval_s: float = 10.0,
+    transcript_key: str | None = None,
 ) -> dict[str, int]:
     """Run one child ``pipeline run --no-sharding`` per shard parquet.
 
@@ -380,6 +384,8 @@ def spawn_shard_processes(
         emit(f"  GPUs: {','.join(gpu_ids)}  instances-per-gpu: {sharding.instances_per_gpu}")
     if ingest_step_names:
         emit(f"  Dropping ingest steps: {', '.join(ingest_step_names)}")
+    if transcript_key:
+        emit(f"  Transcript key: {transcript_key}")
     emit(f"  Progress log: {run_root / 'PROGRESS.log'}")
 
     queue = list(shards)
@@ -442,6 +448,7 @@ def spawn_shard_processes(
                 executor=executor,
                 force=force,
                 mock=mock,
+                transcript_key=transcript_key,
             )
             log_file = (run_root / f"{shard.stem}.log").open("w", encoding="utf-8")
             env = None
@@ -499,6 +506,7 @@ def run_sharded_pipeline(
     shard_dir: Path | None = None,
     sharding_override: ShardingConfig | None = None,
     log: Callable[[str], None] | None = None,
+    transcript_key: str | None = None,
 ) -> ShardedRunResult:
     """Execute prepare (optional) → split → parallel children → merge."""
     emit = log or (lambda msg: logger.info(msg))
@@ -568,6 +576,7 @@ def run_sharded_pipeline(
         executor_override=cfg.execution_override.get("executor"),
         log=emit,
         progress_config=progress_config,
+        transcript_key=transcript_key,
     )
 
     failed = [name for name, code in exit_codes.items() if code != 0]

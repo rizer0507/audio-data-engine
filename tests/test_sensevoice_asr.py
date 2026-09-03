@@ -54,6 +54,21 @@ def test_batch_transcribes_structured_results_and_reuses_cache(tmp_path, monkeyp
     assert len(loads) == 1
 
 
+def test_batch_supports_transcript_key_alias(tmp_path, monkeypatch):
+    model = FakeModel()
+    monkeypatch.setattr(sensevoice_module, "_load_sensevoice_model", lambda settings: model)
+    operator = OperatorRegistry.get("asr.sensevoice_batch")
+    results = operator.process_batch(
+        _samples(1), _config(tmp_path, transcript_key="sensevoice1", mock=True)
+    )
+    assert "sensevoice1" in results[0].sample.transcripts
+    assert "sensevoice" not in results[0].sample.transcripts
+    skipped = operator.process_batch(
+        [results[0].sample], _config(tmp_path, transcript_key="sensevoice1", mock=True)
+    )
+    assert skipped[0].skipped is True
+
+
 def test_batch_isolates_broken_audio(tmp_path, monkeypatch):
     model = FakeModel("/audio/s1.wav")
     monkeypatch.setattr(sensevoice_module, "_load_sensevoice_model", lambda settings: model)

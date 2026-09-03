@@ -1,7 +1,8 @@
-# qwen 整句精确清空（CER 之前，与 zh_asr_v1 去标点同一阶段）。
+# qwen 族整句精确清空（CER 之前，与 zh_asr_v1 去标点同一阶段）。
 # 典型坏例：模型把 vocabulary 热词整段吐出，归一化后等于下面这一整句 → 置空。
 # 例 raw: 没有，暂时不用，不需要谢谢，不可以，啊不用，我不需要，不要，不用，不需要。
+# models 覆盖同源多 alias（--asr-run qwen1/qwen2）与旧键名 qwen。
 blank_exact_hotwords:
-  models: [qwen]
+  models: [qwen, qwen1, qwen2]
   hotwords:
     - 没有暂时不用不需要谢谢不可以啊不用我不需要不要不用不需要

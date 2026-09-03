@@ -1,13 +1,10 @@
-comparisons:
-  - name: old_model_vs_gold
-    purpose: model_evaluation
-    reference: {field: gold_text}
-    hypothesis: {field: old_model_text}
-    metrics: [cer]
-    output: {prefix: old_model}
-  - name: new_model_vs_gold
-    purpose: model_evaluation
-    reference: {field: gold_text}
-    hypothesis: {field: new_model_text}
-    metrics: [cer]
-    output: {prefix: new_model}
+# 工序⑤：相对金标（gold_text）计算各模型 CER / 字准率。
+# hypotheses 缺省 = 样本上除 gold 外的全部 transcript keys（由 quality.text_metrics 展开）。
+# CLI：audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+#        --eval-name eval_local_test --eval-model qwen --eval-model qwen-sft-epoch10
+
+vs_gold:
+  reference_field: gold_text
+  purpose: model_evaluation
+  metrics: [cer]
+  # hypotheses: [qwen, qwen-sft-epoch10, qwen-sft-epoch100]  # 可选；省略则自动发现

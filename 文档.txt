@@ -336,3 +336,59 @@ audio-data pipeline run pipelines/doubao_asr_single.yaml \
 
 # 假设已完成清洗，产物为 cleaned_local_test.parquet
 audio-data pipeline run pipelines/doubao_asr_batch.yaml --source-name local_test
+
+
+
+
+--------------------------------------------------------------------------------------------------------------
+export BATCH=local_test
+
+audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+  --source-name "$BATCH" \
+  --aggregate-base qwen1 \
+  --join-manifest qwen2 \
+  --join-manifest sensevoice1 \
+  --join-manifest sensevoice2 \
+  --join-manifest doubao1 \
+  --force
+
+audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
+  --source-name "$BATCH" \
+  --agreement-base qwen1 \
+  --force
+
+audio-data pipeline run pipelines/classify_dataset.yaml \
+  --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
+  --output-manifest "datasets/manifests/classified_${BATCH}.parquet" \
+  --force
+
+audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+  --output "data/exports/summary_${BATCH}.xlsx" \
+  --max-rows 20000 
+
+
+-------------------------------------------------------------------------------
+# 1. 注册评测集（通常用 summary）
+audio-data eval register "datasets/manifests/summary_${BATCH}.parquet" --name "eval_${BATCH}"
+audio-data eval check "eval_${BATCH}"
+
+# 2. 各权重独立 vLLM 跑批（端口区分；served-model-name 可同为 qwen3-asr）
+export QWEN_ASR_API_BASE=http://127.0.0.1:5561
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch10
+
+export QWEN_ASR_API_BASE=http://127.0.0.1:5562
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch100
+
+# 3. 以评测集为底表按 id 左连接（推理侧多出的 id 忽略）
+audio-data pipeline run pipelines/eval_aggregate.yaml \
+  --eval-name "eval_${BATCH}" \
+  --join-manifest qwen-sft-epoch10 \
+  --join-manifest qwen-sft-epoch100
+
+# 4. 相对 gold_text 多模型字准 + 按 type 导出
+audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+  --eval-name "eval_${BATCH}" \
+  --eval-model qwen --eval-model qwen-sft-epoch10 --eval-model qwen-sft-epoch100
+----------------------------------------------------------------------------------------------------------

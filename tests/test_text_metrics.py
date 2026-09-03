@@ -133,3 +133,65 @@ def test_aggregate_rejects_same_id_with_different_audio_hash(tmp_path: Path):
     report = (tmp_path / "run-hash/reports/aggregate_alignment.json").read_text(encoding="utf-8")
     assert '"sha256_mismatches": 1' in report
     assert '"aligned": false' in report
+
+
+def test_text_metrics_vs_base_expands_and_tracks_max(tmp_path: Path):
+    config_path = tmp_path / "gold_agreement.yaml"
+    config_path.write_text(
+        "vs_base:\n  base: qwen1\n  purpose: gold_generation_agreement\n  metrics: [cer]\n",
+        encoding="utf-8",
+    )
+    norm = tmp_path / "norm.yaml"
+    norm.write_text("name: test\npunctuation: {remove: true}\nwhitespace: {remove: true}\n", encoding="utf-8")
+    sample = Sample(
+        id="a",
+        source_path="a.wav",
+        transcripts={
+            "qwen1": {"text": "不需要"},
+            "qwen2": {"text": "不需要"},
+            "sensevoice1": {"text": "需要"},
+        },
+    )
+    result = OperatorRegistry.get("quality.text_metrics").process(
+        sample,
+        OperatorConfig(
+            params={
+                "config_path": str(config_path),
+                "normalization_path": str(norm),
+            }
+        ),
+    )
+    quality = result.sample.quality
+    assert quality["vs_base_reference"] == "qwen1"
+    assert quality["vs_base_hypothesis_count"] == 2
+    assert quality["qwen2_vs_qwen1_agreement_cer"] == 0
+    assert quality["sensevoice1_vs_qwen1_agreement_cer"] == pytest.approx(1 / 3, rel=1e-4)
+    assert quality["max_vs_base_agreement_cer"] == pytest.approx(1 / 3, rel=1e-4)
+
+
+def test_text_metrics_agreement_base_override(tmp_path: Path):
+    config_path = tmp_path / "gold_agreement.yaml"
+    config_path.write_text(
+        "vs_base:\n  base: ignored\n  purpose: gold_generation_agreement\n  metrics: [cer]\n",
+        encoding="utf-8",
+    )
+    norm = tmp_path / "norm.yaml"
+    norm.write_text("name: test\n", encoding="utf-8")
+    sample = Sample(
+        id="a",
+        source_path="a.wav",
+        transcripts={"qwen1": {"text": "需要"}, "doubao1": {"text": "需要"}},
+    )
+    result = OperatorRegistry.get("quality.text_metrics").process(
+        sample,
+        OperatorConfig(
+            params={
+                "config_path": str(config_path),
+                "normalization_path": str(norm),
+                "agreement_base": "qwen1",
+            }
+        ),
+    )
+    assert result.sample.quality["vs_base_reference"] == "qwen1"
+    assert result.sample.quality["max_vs_base_agreement_cer"] == 0
+    assert result.sample.quality["doubao1_vs_qwen1_agreement_cer"] == 0

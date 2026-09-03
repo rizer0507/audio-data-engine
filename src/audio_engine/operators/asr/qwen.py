@@ -268,22 +268,21 @@ class QwenBatchASROperator(BatchOperator):
         return super().compute_cache_key(sample, _cache_config(config, settings))
 
     def process_batch(self, samples: list[Sample], config: OperatorConfig) -> list[OperatorResult]:
-        settings = _resolve_batch_settings(config)
-        logger.info(
-            "Qwen batch backend=vllm api_base={} model={} force={} samples={}",
-            settings.get("api_base"),
-            settings.get("model", "qwen3-asr"),
-            config.force,
-            len(samples),
-        )
-        cache_config = _cache_config(config, settings)
         results: list[OperatorResult | None] = [None] * len(samples)
         pending: list[tuple[int, Sample, str]] = []
+        settings: dict[str, Any] | None = None
+
+        def ensure_settings() -> dict[str, Any]:
+            nonlocal settings
+            if settings is None:
+                settings = _resolve_batch_settings(config)
+            return settings
 
         for index, sample in enumerate(samples):
             if self.should_skip(sample, config):
                 results[index] = OperatorResult(sample=sample, skipped=True)
                 continue
+            cache_config = _cache_config(config, ensure_settings())
             cache_key = super().compute_cache_key(sample, cache_config)
             if not config.force:
                 cached = self.load_cache(cache_key, config)
@@ -297,6 +296,15 @@ class QwenBatchASROperator(BatchOperator):
 
         skipped = sum(result is not None and result.skipped for result in results)
         cache_hits = sum(result is not None and result.cache_hit for result in results)
+        if pending:
+            settings = ensure_settings()
+            logger.info(
+                "Qwen batch backend=vllm api_base={} model={} force={} samples={}",
+                settings.get("api_base"),
+                settings.get("model", "qwen3-asr"),
+                config.force,
+                len(samples),
+            )
         logger.info(
             "Qwen batch decision: pending={} skipped={} cache_hits={}",
             len(pending),
@@ -308,10 +316,11 @@ class QwenBatchASROperator(BatchOperator):
             for index, sample, cache_key in pending:
                 result = {
                     "text": f"[mock:qwen:{sample.id}]",
-                    "language": settings.get("language"),
+                    "language": settings.get("language") if settings else None,
                 }
-                results[index] = self._finalize(sample, result, cache_key, config, settings)
+                results[index] = self._finalize(sample, result, cache_key, config, settings or {})
         elif pending:
+            assert settings is not None
             inference_batch_size = max(1, int(settings.get("batch_size", 8)))
             for start in range(0, len(pending), inference_batch_size):
                 chunk = pending[start : start + inference_batch_size]

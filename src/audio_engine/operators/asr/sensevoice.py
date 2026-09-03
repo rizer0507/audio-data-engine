@@ -206,8 +206,9 @@ class _SenseVoiceUpdates:
             "extra": result["extra"],
         }
         input_key = config.params.get("input_audio_key", "raw")
+        transcript_key = str(config.params.get("transcript_key", "sensevoice"))
         return {
-            "transcripts": {"sensevoice": transcript},
+            "transcripts": {transcript_key: transcript},
             "lineage_entry": {
                 "operator": self.full_name,
                 "version": self.version,
@@ -250,6 +251,12 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
     name = "sensevoice_batch"
     version = "1.0.0"
     category = "asr"
+
+    def should_skip(self, sample: Sample, config: OperatorConfig) -> bool:
+        transcript_key = config.params.get("transcript_key")
+        if transcript_key:
+            return not config.force and str(transcript_key) in sample.transcripts
+        return super().should_skip(sample, config)
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         settings = _resolve_settings(config)
@@ -369,11 +376,13 @@ class SenseVoiceBatchASROperator(_SenseVoiceUpdates, BatchOperator):
         self.save_cache(cache_key, config, updates)
         # ── 诊断采样：打印写入确认 ──────────────────────────────────────────
         if diag:
-            sv = updated.transcripts.get("sensevoice", {})
+            key = str(config.params.get("transcript_key", "sensevoice"))
+            sv = updated.transcripts.get(key, {})
             logger.info(
-                "[DIAG][WRITE] sample={} | text={!r} | model={} | version={} | "
+                "[DIAG][WRITE] sample={} | key={} | text={!r} | model={} | version={} | "
                 "language={} | emotion={} | events={} | raw_text={!r}",
                 updated.id,
+                key,
                 sv.get("text", "<MISSING>"),
                 sv.get("model", "<MISSING>"),
                 sv.get("version", "<MISSING>"),
