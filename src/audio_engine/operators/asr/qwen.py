@@ -66,6 +66,14 @@ def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
         or os.environ.get("QWEN_ASR_API_KEY")
         or settings.get("api_key")
     )
+    # 与 vLLM --served-model-name 对齐；并发跑批时用 QWEN_ASR_MODEL 覆盖 yaml，无需改共享配置
+    settings["model"] = (
+        config.params.get("model")
+        or os.environ.get(str(config.params.get("model_env") or ""))
+        or os.environ.get("QWEN_ASR_MODEL")
+        or settings.get("model")
+        or "qwen3-asr"
+    )
     return settings
 
 

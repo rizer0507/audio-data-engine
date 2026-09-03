@@ -66,6 +66,24 @@ def test_qwen_batch_reads_step_specific_vllm_environment(tmp_path: Path, monkeyp
     assert settings["api_base"] == "http://127.0.0.1:5562"
 
 
+def test_qwen_batch_reads_served_model_environment(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("QWEN_ASR_API_BASE", "http://127.0.0.1:5553")
+    monkeypatch.setenv("QWEN_ASR_MODEL", "qwen-sft-e10")
+    settings = qwen_module._resolve_batch_settings(_config(tmp_path, api_base=None))
+    assert settings["model"] == "qwen-sft-e10"
+
+    monkeypatch.setenv("CANDIDATE_ASR_MODEL", "candidate-sft")
+    settings = qwen_module._resolve_batch_settings(
+        _config(tmp_path, api_base=None, model_env="CANDIDATE_ASR_MODEL")
+    )
+    assert settings["model"] == "candidate-sft"
+
+    settings = qwen_module._resolve_batch_settings(
+        _config(tmp_path, api_base=None, model="explicit-model")
+    )
+    assert settings["model"] == "explicit-model"
+
+
 def test_qwen_batch_transcribes_and_reuses_cache(tmp_path: Path, monkeypatch):
     calls: list[str] = []
 

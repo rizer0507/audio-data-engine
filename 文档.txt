@@ -392,3 +392,14 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
   --eval-name "eval_${BATCH}" \
   --eval-model qwen --eval-model qwen-sft-epoch10 --eval-model qwen-sft-epoch100
 ----------------------------------------------------------------------------------------------------------
+
+
+python scripts/run_eval_from_summary.py \
+  --summary data/exports/summary_local_test.xlsx \
+  --model qwen-sft-e10=datasets/manifests/qwen-sft-e10_asr_sft-ep10.parquet \
+  --model qwen-sft-e100=datasets/manifests/qwen-sft-e100_asr_sft-ep100.parquet \
+  --eval-name eval_local_test \
+  --eval-model qwen1 \
+  --eval-model qwen-sft-e10 \
+  --eval-model qwen-sft-e100 \
+  --force

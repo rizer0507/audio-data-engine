@@ -57,7 +57,10 @@ export SOURCE_DIR=/data2/data-cp/lizi/wav/${BATCH}
 export QWEN_ASR_API_BASE=http://127.0.0.1:5559
 export QWEN_ASR_API_KEY=dummy
 
-# vLLM 的 --served-model-name 必须与 configs/asr/qwen_asr.yaml 中 model 一致（qwen3-asr）。
+# vLLM 的 --served-model-name 默认与 configs/asr/qwen_asr.yaml 的 model（qwen3-asr）一致。
+# 若各实例用了不同 served-model-name，不要改共享 yaml，按终端导出：
+#   export QWEN_ASR_MODEL=<与该实例 --served-model-name 相同>
+# （优先级：算子 params.model > QWEN_ASR_MODEL > yaml）
 
 # 仅 Qwen 本地推理回退模式使用（取消 vLLM 环境变量后生效）：
 # unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY
@@ -554,8 +557,9 @@ audio-data model show <model_id>
   不要写：http://host:port/v1/v1
 
 2. 模型名
-  批量 Qwen 建集：configs/asr/qwen_asr.yaml 的 model 必须匹配 Qwen
-                 vLLM 的 --served-model-name（默认都是 qwen3-asr）。
+  批量 Qwen：请求里的 model 必须匹配该 vLLM 的 --served-model-name。
+             默认读 configs/asr/qwen_asr.yaml；并发跑批时用
+             export QWEN_ASR_MODEL=<served-model-name> 覆盖，勿改共享 yaml。
   Kimi：KIMI_ASR_MODEL 必须匹配 Kimi vLLM 的 --served-model-name。
   注册模型评测：served model 必须匹配对应 BASELINE_MODEL_ID/CANDIDATE_MODEL_ID。
 

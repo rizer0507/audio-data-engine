@@ -6,7 +6,9 @@
 # 兼容：不传 --source-name 时使用下方写死路径。
 # 前置：input 须含 resampled_16k
 # 本地推理环境变量：QWEN_ASR_MODEL_PATH
-# vLLM 推理环境变量：QWEN_ASR_API_BASE、QWEN_ASR_API_KEY（可选）
+# vLLM 推理环境变量：
+#   QWEN_ASR_API_BASE、QWEN_ASR_API_KEY（可选）
+#   QWEN_ASR_MODEL（可选，覆盖 yaml 的 model，须等于 vLLM --served-model-name）
 # 并行约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
 
 name: qwen_asr_batch

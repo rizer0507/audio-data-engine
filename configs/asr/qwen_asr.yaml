@@ -1,3 +1,5 @@
+# model 须与 vLLM --served-model-name 一致。
+# 并发跑批时不要改本文件：用环境变量 QWEN_ASR_MODEL / QWEN_ASR_API_BASE 覆盖。
 model: qwen3-asr
 model_version: "Qwen3-ASR-1.7B"
 model_path: /data2/data-cp/zcl/models/Qwen3-ASR-1___7B
@@ -8,7 +10,7 @@ api_base: null
 api_key: dummy
 concurrency: 4
 timeout: 120
-language: Chinese
+language: zh
 device_map: cuda:0
 dtype: bfloat16
 batch_size: 32
