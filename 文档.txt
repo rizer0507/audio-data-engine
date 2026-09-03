@@ -322,3 +322,14 @@ python scripts/calc_xlsx_char_acc.py \
     --hyp  C:/Users/rizer/Desktop/0828-test/0828-test-all.xlsx::sensevoice2_text \
     --char-acc  \
     --output "C:/Users/rizer/Desktop/0828-test/0828-test-all-字准.xlsx"
+
+
+
+audio-data pipeline run pipelines/doubao_asr_single.yaml \
+  --set input.source_dir=D:/path/to/audio_dir
+
+audio-data pipeline run pipelines/doubao_asr_single.yaml \
+  --set input.source_dir=D:/Work/asr数据/0902—test
+
+# 假设已完成清洗，产物为 cleaned_local_test.parquet
+audio-data pipeline run pipelines/doubao_asr_batch.yaml --source-name local_test

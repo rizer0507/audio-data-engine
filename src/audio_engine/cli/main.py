@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from audio_engine.core.dotenv import load_dotenv
 from audio_engine.core.manifest import Manifest
 from audio_engine.core.operator import OperatorConfig
 from audio_engine.core.catalog import (
@@ -141,6 +143,9 @@ def _resolve_operator(name: str) -> str:
         "qwen": "asr.qwen",
         "kimi_asr": "asr.kimi_batch",
         "kimi": "asr.kimi_batch",
+        "doubao_asr": "asr.doubao_batch",
+        "doubao": "asr.doubao_batch",
+        "doubao_single": "asr.doubao",
         "sensevoice": "asr.sensevoice",
         "pcm_to_wav": "audio.pcm_to_wav",
         "resample": "audio.resample",
@@ -1478,6 +1483,7 @@ def export_dataset(
 
 def main() -> None:
     """Console entry point for setuptools / typer."""
+    load_dotenv()
     app()
 
 

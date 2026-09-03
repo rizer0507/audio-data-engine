@@ -1,0 +1,20 @@
+# 豆包录音文件识别（Seed ASR 2.0）
+# 鉴权写入项目根目录 .env（见 .env.example），CLI 启动时自动加载。
+# 优先级：DOUBAO_ASR_API_KEY > DOUBAO_ASR_APP_KEY + DOUBAO_ASR_ACCESS_KEY
+resource_id: volc.seedasr.auc
+model: volc.seedasr.auc
+model_version: "2.0"
+language: zh-CN
+# 留空则按文件扩展名自动推断
+format:
+enable_itn: true
+enable_punc: true
+show_utterances: false
+poll_interval: 1.0
+max_polls: 150
+timeout: 300
+user_id: audio-data-engine
+# 单 shard 内并发 submit+poll 数；与 parallel_shards 相乘为总并发
+# 128 路起调；遇 429 限流则降到 8～12
+concurrency: 16
+batch_size: 16

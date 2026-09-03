@@ -29,9 +29,9 @@ execution:
 # 顶层分片并行：一条 pipeline run 即完成 split+run+merge（无 GPU）
 # 128 核：约 64 进程 × 每进程 16 线程；磁盘抖则把 parallel_shards 降到 32
 sharding:
-  shards: 128
+  shards: 8
   strategy: hash
-  parallel_shards: 64
+  parallel_shards: 16
   workers: 16
   executor: thread
 
