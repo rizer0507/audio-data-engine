@@ -1,15 +1,24 @@
-policy_version: selection_zh_asr_v1
+policy_version: selection_zh_asr_v1_2
 default_bucket: review_queue
 gold_source_model: qwen
+# 精确短语清空已在 asr_metric_pipeline 的 normalize_transcripts 中、CER 之前完成。
 defaults:
   label_broken: false
+  qwen_text: ""
+  sensevoice_text: ""
 rules:
   - bucket: noise
     reason: broken_or_invalid_audio
     expr: "label_broken == True or duration <= 0"
+  - bucket: noise
+    reason: empty_asr_transcripts
+    expr: "qwen_text == '' and sensevoice_text == ''"
+  - bucket: review_queue
+    reason: empty_gold_source_transcript
+    expr: "qwen_text == ''"
   - bucket: auto_gold
     reason: multi_asr_high_agreement
-    expr: "quality_sensevoice_vs_qwen_agreement_cer <= 0.10"
+    expr: "qwen_text != '' and sensevoice_text != '' and quality_sensevoice_vs_qwen_agreement_cer <= 0.10"
   - bucket: hardcase
     reason: multi_asr_large_disagreement
     expr: "quality_sensevoice_vs_qwen_agreement_cer >= 0.50"

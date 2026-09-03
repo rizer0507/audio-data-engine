@@ -94,6 +94,31 @@ audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name test_local
 
 
 -------------------------------------------------------
+2c-local. Kimi-Audio 全量识别（独立，本地 kimia_infer；不依赖 Qwen/SenseVoice/vLLM）
+-------------------------------------------------------
+# YAML: pipelines/kimi_audio_asr_batch.yaml
+# 产物: cleaned_<name> → kimi_audio_asr_<name>.parquet
+# 并行：两卡 A800，每卡 1 进程，进程内一次一条 generate。
+#       改 pipelines/kimi_audio_asr_batch.yaml 的 gpus（默认 [0, 1]）。
+
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+
+# 必须先过探针（退出码 0）再跑 Parquet：
+python scripts/probe_kimi_audio.py /path/to/short.wav
+python scripts/probe_kimi_audio.py /path/to/wav_folder --limit 8
+
+audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name test_local
+
+# 续跑:
+# audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml \
+#   --source-name test_local --resume runs/<上次_shards目录>
+
+# 聚合时 join 名是 kimi_audio（不要写成 kimi）：
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_local \
+#   --join-manifest sensevoice --join-manifest kimi_audio
+
+
+-------------------------------------------------------
 2d. 按 id 聚合多模型结果（不推理、不算指标）
 -------------------------------------------------------
 # base: qwen_asr_<name>；join: YAML 中 model 对应 {model}_asr_<name>
@@ -132,7 +157,8 @@ python scripts/export_multi_asr_xlsx.py \
   → cleaned_mt3000.parquet|.jsonl
   → qwen_asr_mt3000.parquet              # 2a 独立产物
   → sensevoice_asr_mt3000.parquet        # 2b 独立产物
-  → kimi_asr_mt3000.parquet              # 2c 独立产物
+  → kimi_asr_mt3000.parquet              # 2c vLLM 产物
+  → kimi_audio_asr_mt3000.parquet        # 2c-local 本地产物
   → multi_asr_aggregate_mt3000.parquet   # 2d 仅 join
   → multi_asr_metrics_mt3000.parquet     # 2e agreement CER
   → (可选) datasets/exports/multi_asr_aggregate_mt3000.xlsx
@@ -158,8 +184,10 @@ python scripts/export_multi_asr_xlsx.py \
 [ ] 命令中的 --source-name / --source-dir
 [ ] （可选）pipelines/qwen_asr_batch.yaml、sensevoice_asr_batch.yaml 的 gpus/shards
 [ ] （可选）pipelines/kimi_asr_batch.yaml 的 sharding；configs/asr/kimi.yaml 的 concurrency
+[ ] （可选）pipelines/kimi_audio_asr_batch.yaml 的 gpus（两卡 A800 默认 [0,1]）
+[ ] （可选）KIMI_AUDIO_MODEL_PATH；先跑 scripts/probe_kimi_audio.py
 [ ] （可选）multi_asr_aggregate.yaml 的 manifests / --join-manifest
-[ ] 本文件中的模型环境变量（含 KIMI_ASR_API_BASE / KIMI_ASR_MODEL）
+[ ] 本文件中的模型环境变量（含 KIMI_ASR_API_BASE / KIMI_ASR_MODEL / KIMI_AUDIO_MODEL_PATH）
 # 一般不再改 resources/manifest.yaml 与 YAML 内 input/output 路径
 
 

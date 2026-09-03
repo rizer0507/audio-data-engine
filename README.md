@@ -85,7 +85,7 @@ audio-data review import classified_source_A --input review.xlsx \
 
 ```bash
 audio-data release build reviewed_source_A --id ds_source_a_v1 \
-  --policy-version selection_zh_asr_v1 --normalization-version zh_asr_v1 \
+  --policy-version selection_zh_asr_v1_1 --normalization-version zh_asr_v1 \
   --gold-revision review_v1 --group-key speaker_id --split-seed 42
 ```
 

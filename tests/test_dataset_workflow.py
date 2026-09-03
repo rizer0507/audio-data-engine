@@ -44,6 +44,70 @@ def test_classify_uses_ordered_rules_and_auditable_default():
     assert result[0].labels["gold_text"] == "金标"
 
 
+def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
+    samples = [
+        Sample(
+            id="both_empty",
+            source_path="empty.wav",
+            duration=8.9,
+            transcripts={
+                "qwen": {"text": ""},
+                "sensevoice": {"text": "<|withitn|>。"},
+            },
+            quality={"sensevoice_vs_qwen_agreement_cer": 0.0},
+        ),
+        Sample(
+            id="gold_empty",
+            source_path="one_side.wav",
+            duration=3.0,
+            transcripts={
+                "qwen": {"text": ""},
+                "sensevoice": {"text": "<|zh|>还有字"},
+            },
+            quality={"sensevoice_vs_qwen_agreement_cer": 2.0},
+        ),
+        Sample(
+            id="agree",
+            source_path="good.wav",
+            duration=2.0,
+            transcripts={
+                "qwen": {"text": "你好，世界！"},
+                "sensevoice": {"text": "<|zh|><|NEUTRAL|>你好世界。"},
+            },
+            quality={"sensevoice_vs_qwen_agreement_cer": 0.0},
+        ),
+        Sample(
+            id="hard",
+            source_path="hard.wav",
+            duration=2.0,
+            transcripts={
+                "qwen": {"text": "今天天气很好"},
+                "sensevoice": {"text": "明天不用来了"},
+            },
+            quality={"sensevoice_vs_qwen_agreement_cer": 0.8},
+        ),
+    ]
+    result = OperatorRegistry.get("quality.classify").run(
+        samples,
+        OperatorConfig(params={"config_path": "configs/selection/zh_asr_v1.yaml"}),
+    )
+    by_id = {sample.id: sample for sample in result}
+    assert by_id["both_empty"].labels["classification_bucket"] == "noise"
+    assert by_id["both_empty"].labels["classification_reason_codes"] == ["empty_asr_transcripts"]
+    assert by_id["gold_empty"].labels["classification_bucket"] == "review_queue"
+    assert by_id["gold_empty"].labels["classification_reason_codes"] == [
+        "empty_gold_source_transcript"
+    ]
+    assert by_id["agree"].labels["classification_bucket"] == "auto_gold"
+    assert by_id["agree"].labels["gold_text"] == "你好世界"
+    assert by_id["agree"].transcripts["qwen"]["text"] == "你好世界"
+    assert by_id["agree"].transcripts["sensevoice"]["text"] == "你好世界"
+    assert by_id["agree"].transcripts["sensevoice"]["extra"]["raw_text"] == (
+        "<|zh|><|NEUTRAL|>你好世界。"
+    )
+    assert by_id["hard"].labels["classification_bucket"] == "hardcase"
+
+
 def test_group_split_is_deterministic_and_never_leaks_groups():
     samples = [
         Sample(id=f"s{i}", source_path=f"{i}.wav", labels={"speaker_id": f"p{i // 2}"})

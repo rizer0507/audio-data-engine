@@ -66,6 +66,79 @@ def plain_transcript_text(value: Any) -> str:
     return normalize_transcript(value)
 
 
+_VOCAB_PREFIX_RE = re.compile(r"^\s*vocabulary\s*:\s*", re.IGNORECASE)
+_HOTWORD_SPLIT_RE = re.compile(r"[/，,|]+")
+
+
+def parse_vocabulary_hotwords(raw: Any) -> frozenset[str]:
+    """Parse Qwen-style ``vocabulary:…`` / list into plain hotword strings.
+
+    Separators are ``/``, ``，``, ``,``, ``|``. Each token is run through
+    ``plain_transcript_text`` so comparisons ignore punctuation.
+    """
+    if raw is None:
+        return frozenset()
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        tokens: list[str] = [str(item) for item in raw]
+    else:
+        text = str(raw).strip()
+        if not text:
+            return frozenset()
+        text = _VOCAB_PREFIX_RE.sub("", text)
+        tokens = _HOTWORD_SPLIT_RE.split(text)
+    return frozenset(plain for token in tokens if (plain := plain_transcript_text(token)))
+
+
+def resolve_blank_exact_hotwords(
+    cfg: Any,
+    *,
+    default_model: str = "qwen",
+) -> tuple[frozenset[str], set[str]]:
+    """Resolve blank-list config into (plain phrases, model keys)."""
+    if cfg is None:
+        return frozenset(), set()
+    if isinstance(cfg, (list, tuple, str)):
+        return parse_vocabulary_hotwords(cfg), {default_model}
+    if not isinstance(cfg, dict):
+        raise ValueError("blank_exact_hotwords must be a list, string, or mapping")
+    raw = cfg.get("hotwords", cfg.get("vocabulary", cfg.get("words")))
+    hotwords = parse_vocabulary_hotwords(raw)
+    models_raw = cfg.get("models")
+    if models_raw is None:
+        models = {default_model}
+    else:
+        models = {str(item) for item in models_raw}
+    return hotwords, models
+
+
+def rewrite_plain_transcript_entry(
+    entry: Any,
+    *,
+    keep_raw: bool = True,
+    blank_hotwords: frozenset[str] = frozenset(),
+    blank_model: bool = False,
+) -> dict[str, Any]:
+    """Normalize one transcript entry; optionally blank exact phrase matches."""
+    if isinstance(entry, dict):
+        original = str(entry.get("text") or "")
+        new_entry = dict(entry)
+        extra = dict(new_entry.get("extra") or {})
+    else:
+        original = str(entry)
+        new_entry = {}
+        extra = {}
+    if keep_raw:
+        extra.setdefault("raw_text", original)
+    cleaned = plain_transcript_text(original)
+    if blank_model and cleaned and cleaned in blank_hotwords:
+        extra["blanked_exact_hotword"] = True
+        cleaned = ""
+    if keep_raw or extra:
+        new_entry["extra"] = extra
+    new_entry["text"] = cleaned
+    return new_entry
+
+
 def levenshtein_ops(reference: str, hypothesis: str) -> dict[str, int | float | None]:
     """Character-level edit ops with ``reference`` as baseline.
 

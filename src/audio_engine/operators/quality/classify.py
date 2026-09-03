@@ -7,6 +7,16 @@ from pathlib import Path
 from audio_engine.core.operator import ManifestOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
+from audio_engine.core.transcript_reconcile import (
+    plain_transcript_text,
+    rewrite_plain_transcript_entry,
+)
+
+
+def _rewrite_plain_transcripts(sample: Sample) -> None:
+    """Idempotent plain-text rewrite; blanking already happened before CER."""
+    for model, entry in list(sample.transcripts.items()):
+        sample.transcripts[model] = rewrite_plain_transcript_entry(entry, keep_raw=True)
 
 
 @register_operator
@@ -14,7 +24,7 @@ class ClassifyOperator(ManifestOperator):
     """Apply ordered, versioned selection rules and retain an auditable reason code."""
 
     name = "classify"
-    version = "1.0.0"
+    version = "1.2.1"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -32,12 +42,16 @@ class ClassifyOperator(ManifestOperator):
             raise ValueError("quality.classify requires non-empty ordered rules")
 
         updated = [sample.model_copy(deep=True) for sample in samples]
+        for sample in updated:
+            _rewrite_plain_transcripts(sample)
         frame = pd.DataFrame([sample.to_flat_dict() for sample in updated])
         for field, value in (params.get("defaults") or {}).items():
             if field not in frame:
                 frame[field] = value
             else:
                 frame[field] = frame[field].fillna(value)
+        for column in [name for name in frame.columns if name.endswith("_text")]:
+            frame[column] = frame[column].fillna("")
         decisions: list[tuple[str, list[str]]] = [(default_bucket, ["default"]) for _ in updated]
         undecided = set(range(len(updated)))
         for rule in rules:
@@ -65,7 +79,7 @@ class ClassifyOperator(ManifestOperator):
             if bucket == "auto_gold":
                 if not gold_source_model:
                     raise ValueError("auto_gold classification requires gold_source_model")
-                gold_text = sample.get_transcript_text(gold_source_model).strip()
+                gold_text = plain_transcript_text(sample.get_transcript_text(gold_source_model))
                 if not gold_text:
                     raise ValueError(
                         f"auto_gold sample {sample.id} has empty Gold source transcript"

@@ -6,9 +6,10 @@ device: cuda
 # ASR 仅需文本输出；关闭 detokenizer 可显著节省显存。
 load_detokenizer: false
 
-# Native batch-capable wrappers receive this many files per call.  The official
-# generate-only wrapper falls back to one generation at a time for GPU safety.
-batch_size: 4
+# Official KimiAudio.generate is one utterance at a time. Keep this at 1.
+# Dual A800 throughput comes from two shard processes (see
+# pipelines/kimi_audio_asr_batch.yaml), not from in-process batching.
+batch_size: 1
 inference_threads: 1
 
 prompt: Please transcribe the audio accurately. Output only the transcription.

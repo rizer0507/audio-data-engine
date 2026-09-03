@@ -143,6 +143,7 @@ def _resolve_operator(name: str) -> str:
         "qwen": "asr.qwen",
         "kimi_asr": "asr.kimi_batch",
         "kimi": "asr.kimi_batch",
+        "kimi_audio_batch": "asr.kimi_audio_batch",
         "doubao_asr": "asr.doubao_batch",
         "doubao": "asr.doubao_batch",
         "doubao_single": "asr.doubao",

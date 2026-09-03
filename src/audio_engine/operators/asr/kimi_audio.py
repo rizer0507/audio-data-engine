@@ -29,6 +29,25 @@ def _load_asr_config(config_path: str | None) -> dict[str, Any]:
     return {}
 
 
+def _resolve_runtime_device(settings: dict[str, Any]) -> str:
+    """Map device into the process-visible GPU.
+
+    Shard workers set ``CUDA_VISIBLE_DEVICES`` to one card, so ``cuda`` / ``cuda:0``
+    inside the process is the assigned A800. Do not keep a physical index such as
+    ``cuda:6`` after the visibility mask is applied.
+    """
+    device = str(settings.get("device", "cuda") or "cuda")
+    if device == "cpu":
+        return device
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if not visible or visible == "-1" or "cuda" not in device:
+        return device
+    parts = [item.strip() for item in visible.split(",") if item.strip() and item.strip() != "-1"]
+    if len(parts) == 1:
+        return "cuda:0"
+    return device
+
+
 def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
     settings = _load_asr_config(
         config.params.get("config_path", "configs/asr/kimi_audio.yaml")
@@ -40,22 +59,37 @@ def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
         or settings.get("model_path")
         or settings.get("model", "moonshotai/Kimi-Audio-7B-Instruct")
     )
+    # Official KimiAudio.generate is one utterance at a time. Throughput comes from
+    # one shard process per GPU (see pipelines/kimi_audio_asr_batch.yaml), not from
+    # in-process batching or CUDA-sharing threads.
     settings["batch_size"] = max(1, int(settings.get("batch_size", 1)))
     settings["inference_threads"] = max(1, int(settings.get("inference_threads", 1)))
+    settings["device"] = _resolve_runtime_device(settings)
     return settings
 
 
 def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorConfig:
     params = dict(config.params)
-    for key in ("model", "model_version", "version", "model_path", "device", "prompt"):
-        if key in settings:
-            params[f"resolved_{key}"] = settings[key]
+    fingerprint_keys = (
+        "model",
+        "model_version",
+        "version",
+        "model_path",
+        "device",
+        "prompt",
+        "load_detokenizer",
+        "generation_kwargs",
+    )
+    params["resolved_kimi_audio_settings"] = {
+        key: settings[key] for key in fingerprint_keys if key in settings
+    }
     return config.model_copy(update={"params": params})
 
 
 def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     model_path = str(settings["model_path"])
-    device = str(settings.get("device", "cuda"))
+    device = _resolve_runtime_device(settings)
     path = Path(model_path).expanduser()
     if path.is_absolute() and not path.is_dir():
         raise FileNotFoundError(
@@ -69,15 +103,16 @@ def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
     extra_model_kwargs = settings.get("model_kwargs") or {}
     if isinstance(extra_model_kwargs, dict):
         model_kwargs.update(extra_model_kwargs)
-    device = str(settings.get("device", "cuda"))
     cache_key = json.dumps({"model_kwargs": model_kwargs, "device": device}, sort_keys=True)
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
 
     with _MODEL_LOCK:
         if cache_key in _MODEL_CACHE:
             logger.debug(
-                "[DIAG][MODEL] Kimi-Audio cache hit: model_path={} device={}",
+                "[DIAG][MODEL] Kimi-Audio cache hit: model_path={} device={} CUDA_VISIBLE_DEVICES={}",
                 model_path,
                 device,
+                visible,
             )
             return _MODEL_CACHE[cache_key]
         try:
@@ -88,15 +123,21 @@ def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
                 "pip install 'audio-data-engine[kimi-audio]'"
             ) from exc
         logger.info(
-            "[DIAG][MODEL] loading Kimi-Audio: path={} device={} load_detokenizer={}",
+            "[DIAG][MODEL] loading Kimi-Audio: path={} device={} "
+            "CUDA_VISIBLE_DEVICES={} load_detokenizer={}",
             model_path,
             device,
+            visible,
             model_kwargs["load_detokenizer"],
         )
         t0 = time.perf_counter()
         model = KimiAudio(**model_kwargs)
-        if hasattr(model, "to"):
-            model.to(device)
+        mover = getattr(model, "to", None)
+        if callable(mover):
+            try:
+                mover(device)
+            except Exception as exc:  # noqa: BLE001 - KimiAudio is not always an nn.Module
+                logger.debug("KimiAudio.to({}) skipped: {}", device, exc)
         elapsed = time.perf_counter() - t0
         logger.info(
             "[DIAG][MODEL] Kimi-Audio loaded OK in {:.2f}s | type={} | path={} | device={}",
@@ -128,11 +169,20 @@ def _build_messages(audio_path: str, settings: dict[str, Any]) -> list[dict[str,
     ]
 
 
+def _extract_text(raw: Any) -> str:
+    if isinstance(raw, tuple):
+        raw = raw[1] if len(raw) >= 2 else raw[0]
+    if isinstance(raw, dict):
+        raw = raw.get("text", "")
+    return str(raw or "").strip()
+
+
 def _transcribe_one(model: Any, audio_path: str, settings: dict[str, Any]) -> dict[str, Any]:
     messages = _build_messages(audio_path, settings)
     generation_kwargs = dict(settings.get("generation_kwargs") or {})
-    _, text_output = model.generate(messages, **generation_kwargs, output_type="text")
-    return {"text": str(text_output).strip()}
+    generation_kwargs.pop("output_type", None)
+    raw = model.generate(messages, **generation_kwargs, output_type="text")
+    return {"text": _extract_text(raw)}
 
 
 def _normalize_batch_results(
@@ -221,7 +271,7 @@ class _KimiAudioUpdates:
 @register_operator
 class KimiAudioASROperator(_KimiAudioUpdates, BaseASROperator):
     name = "kimi_audio"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
         settings = _resolve_settings(config)
@@ -244,13 +294,22 @@ class KimiAudioASROperator(_KimiAudioUpdates, BaseASROperator):
             "version": settings.get("model_version", settings.get("version", "unknown")),
         }
 
+    def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
+        settings = _resolve_settings(config)
+        result = self.transcribe(sample, config)
+        return self._updates(result, config, settings)
+
 
 @register_operator
 class KimiAudioBatchASROperator(_KimiAudioUpdates, BatchOperator):
-    """Persistent-model, batched Kimi-Audio inference with failure isolation."""
+    """Persistent-model Kimi-Audio inference: one utterance per generate() call.
+
+    Multi-GPU throughput comes from shard processes (one GPU each), not from
+    sharing a CUDA model across threads.
+    """
 
     name = "kimi_audio_batch"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "asr"
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
@@ -306,6 +365,14 @@ class KimiAudioBatchASROperator(_KimiAudioUpdates, BatchOperator):
                     results[index] = self._failed(sample, exc)
             else:
                 size = max(1, int(settings.get("batch_size", 1)))
+                logger.info(
+                    "Kimi-Audio shard inference: pending={} batch_size={} "
+                    "device={} CUDA_VISIBLE_DEVICES={}",
+                    len(pending),
+                    size,
+                    settings.get("device"),
+                    os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+                )
                 for start in range(0, len(pending), size):
                     chunk = pending[start : start + size]
                     self._process_chunk(chunk, model, config, settings, results)

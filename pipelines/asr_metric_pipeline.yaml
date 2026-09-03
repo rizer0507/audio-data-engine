@@ -1,9 +1,10 @@
-# 工序② 之后：对聚合结果计算 agreement CER（与 Evaluation 共用 MetricRunner）。
+# 工序② 之后：先按 zh_asr_v1 口径改写文本（去标点 + qwen 精确短语清空），再算 agreement CER。
 #
 #   audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name mt3000
 #   → multi_asr_aggregate_mt3000 → multi_asr_metrics_mt3000.parquet
 #
-# 配置：configs/metrics/gold_agreement.yaml + configs/normalization/zh_asr_v1.yaml
+# 配置：configs/normalization/blank_exact_qwen_v1.yaml
+#       + configs/metrics/gold_agreement.yaml + configs/normalization/zh_asr_v1.yaml
 # 兼容：不传 --source-name 时使用下方写死路径。
 
 name: asr_metric_pipeline
@@ -12,6 +13,11 @@ input:
 output:
   manifest: datasets/manifests/multi_asr_metrics_source_A.parquet
 pipeline:
+  - name: normalize_transcripts
+    operator: quality.normalize_transcripts
+    params:
+      keep_raw: true
+      blank_exact_hotwords_path: configs/normalization/blank_exact_qwen_v1.yaml
   - name: agreement_metrics
     operator: quality.text_metrics
     params:

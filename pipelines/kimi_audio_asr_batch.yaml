@@ -1,7 +1,11 @@
 # 工序②-c-local：全量 Kimi-Audio ASR（本地 kimia_infer 加载；与 vLLM 版 kimi_asr_batch 独立）
 #
-#   audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name mt3000
-#   → cleaned_mt3000 → kimi_audio_asr_mt3000.parquet
+#   上线前必须先通过探针（单 WAV，再 WAV 目录）：
+#     python scripts/probe_kimi_audio.py "$PROBE_WAV"
+#     python scripts/probe_kimi_audio.py "$SOURCE_DIR" --limit 8
+#   然后：
+#     audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name mt3000
+#     → cleaned_mt3000 → kimi_audio_asr_mt3000.parquet
 #
 # 前置：
 #   1. input 须含 resampled_16k
@@ -10,8 +14,11 @@
 # 环境变量：
 #   KIMI_AUDIO_MODEL_PATH   默认 configs/asr/kimi_audio.yaml 中的 model_path
 #
-# 并行约束：shards == parallel_shards <= len(gpus) * instances_per_gpu
-# 不要在单进程内用 execution.workers 共享同一 GPU 模型；并发由 shard 进程控制。
+# 并发（两卡 A800）：
+#   一次一条 generate；吞吐 = 进程数 = GPU 数。
+#   parallel_shards == shards == len(gpus) * instances_per_gpu
+#   不要在单进程内用 execution.workers 共享同一 GPU 模型。
+#   共享集群请把 gpus 改成两张空闲卡，避开 Qwen / SenseVoice 占用的卡。
 
 name: kimi_audio_asr_batch
 
@@ -28,10 +35,10 @@ execution:
   checkpoint_every: 500
 
 sharding:
-  shards: 8
+  shards: 2
   strategy: duration-balanced
-  parallel_shards: 8
-  gpus: [6]
+  parallel_shards: 2
+  gpus: [0, 1]
   instances_per_gpu: 1
   workers: 1
   executor: sequential

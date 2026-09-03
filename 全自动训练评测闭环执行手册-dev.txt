@@ -27,7 +27,8 @@
 #   工程目录：  /data2/data-cp/lizi/audio-data-engine
 #   Qwen vLLM： GPU 1，port 5559，/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 #   SenseVoice：GPU 4、5（每卡 4 shard），/data2/data-cp/xijujun/models/SenseVoiceSmall
-#   Kimi：      GPU 6，/data2/data-cp/models/kimi-audio（本地或 vLLM port 5554）
+#   Kimi vLLM： port 5554（可选；与本地互不替代，见 4.1）
+#   Kimi 本地： 两卡 A800，每卡 1 进程一次一条（默认 gpus [0,1]；共享集群请改空闲卡号）
 
 cd /data2/data-cp/lizi/audio-data-engine
 # 若使用 conda 环境（与 vLLM 同机时常用）：
@@ -64,7 +65,7 @@ export QWEN_ASR_API_KEY=dummy
 
 export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 
-# Kimi-Audio 本地加载（kimi_audio_asr_batch；GPU 6）：
+# Kimi-Audio 本地加载（kimi_audio_asr_batch；两卡 A800，一次一条）：
 export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
 
 # Kimi-Audio vLLM HTTP（kimi_asr_batch；GPU 6，端口 5554；与本地模式二选一或按需并行）：
@@ -77,6 +78,7 @@ export PROBE_WAV=/data2/data-cp/lizi/audio-data-engine/test_wav/sample.wav
 # 建议先检查：
 test -d "$SOURCE_DIR" || { echo "SOURCE_DIR 不存在"; exit 1; }
 test -e "$SENSEVOICE_MODEL_PATH" || { echo "SenseVoice 模型不存在"; exit 1; }
+# 跑本地 Kimi 时取消上一行注释：
 # test -e "$KIMI_AUDIO_MODEL_PATH" || { echo "Kimi-Audio 本地模型不存在"; exit 1; }
 
 # vLLM 模式检查。必须看到 served model；仅端口可连接还不算就绪。
@@ -211,13 +213,24 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATC
 # # 只有两个探针均为 0 才开始整个 cleaned_${BATCH}.parquet。
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH"
 
-# ── 4.2 本地 kimia_infer 模式（GPU 6；与 SenseVoice 相同并发模型）──────────
+# ── 4.2 本地 kimia_infer 模式（两卡 A800；与 vLLM 4.1 独立）────────────────
 # 前置：pip install -e ".[kimi-audio]"
-# 当前 sharding：GPU 6，instances_per_gpu=1，parallel_shards=8
-# configs/asr/kimi_audio.yaml：batch_size=4，load_detokenizer=false
+# 并发：pipelines/kimi_audio_asr_batch.yaml
+#   gpus [0, 1] × instances_per_gpu 1 = 2 个 shard 进程；进程内一次一条 generate。
+#   共享集群请把 YAML 里的 gpus 改成两张空闲 A800，避开 Qwen GPU 1 与 SenseVoice GPU 4,5。
+# configs/asr/kimi_audio.yaml：batch_size=1，inference_threads=1，load_detokenizer=false
+#
+# 必须按顺序通过单文件、文件夹探针；stdout 每条 JSON 的 text 均须非空：
+#   退出码 0=全部非空，1=输入/模型/推理错误，2=至少一条空转写。
+# 只有两个探针均为 0 才开始整个 cleaned_${BATCH}.parquet。
 
 export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
 test -e "$KIMI_AUDIO_MODEL_PATH" || exit 1
+
+python scripts/probe_kimi_audio.py "$PROBE_WAV"
+python scripts/probe_kimi_audio.py "$SOURCE_DIR" --limit 8
+# SOURCE_DIR 含多层子目录时使用：
+# python scripts/probe_kimi_audio.py "$SOURCE_DIR" --recursive --limit 8
 
 audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATCH"
 
@@ -244,6 +257,11 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
 # audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
 #   --source-name "$BATCH" \
 #   --join-manifest sensevoice --join-manifest kimi_audio
+audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+  --source-name "$BATCH" \
+  --join-manifest sensevoice \
+  --join-manifest doubao \
+  --join-manifest qwen
 
 audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH"
 
@@ -314,7 +332,7 @@ export RELEASE_ID=ds_${BATCH}_v1
 
 audio-data release build "datasets/manifests/reviewed_${BATCH}.parquet" \
   --id "$RELEASE_ID" \
-  --policy-version selection_zh_asr_v1 \
+  --policy-version selection_zh_asr_v1_1 \
   --normalization-version zh_asr_v1 \
   --gold-revision "$REVIEW_REV" \
   --group-key conversation_id \
@@ -525,7 +543,7 @@ audio-data model show <model_id>
              --max-num-seqs 建议 ≥ 8。
   Kimi vLLM：parallel_shards(8) × concurrency(4) ≈ 32 路；vLLM 在 GPU 6、port 5554。
   SenseVoice 本地：GPU 4、5 × instances_per_gpu(4) = 8 shard，batch_size=32。
-  Kimi 本地：GPU 6 × instances_per_gpu(1) = 8 shard（单卡多 shard 串行加载），batch_size=4。
+  Kimi 本地：两卡 A800 × instances_per_gpu(1) = 2 shard，batch_size=1（一次一条 generate）。
   出现 OOM、超时或服务排队时，先降低 concurrency / parallel_shards / batch_size。
 
 4. 常见错误
@@ -553,22 +571,31 @@ audio-data model show <model_id>
   KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio（覆盖 configs/asr/kimi_audio.yaml）
   ASR 场景 load_detokenizer: false（默认已关闭），可显著节省显存。
 
-2. 并发预算
-  与 SenseVoice 相同：parallel_shards <= len(gpus) * instances_per_gpu。
-  每个 shard 进程加载一次 Kimi-Audio；batch_size 控制进程内每轮处理的文件数。
-  inference_threads 在共享 CUDA 模型时应保持 1；不要用 execution.workers 做 GPU 并发。
+2. 探针
+  python scripts/probe_kimi_audio.py "$PROBE_WAV"
+  python scripts/probe_kimi_audio.py "$SOURCE_DIR" --limit 8
+  单文件和文件夹探针均为退出码 0 后，才跑 Parquet。
+  不要用 scripts/probe_kimi_vllm.py 测本地权重（那是 vLLM HTTP 探针）。
 
-3. 常见错误
+3. 并发预算
+  官方 generate 一次一条。吞吐 = 进程数 = GPU 数。
+  parallel_shards <= len(gpus) * instances_per_gpu。
+  默认两卡 A800：gpus [0, 1]，instances_per_gpu=1，shards=2，batch_size=1。
+  每个 shard 进程加载一次模型，并绑定 CUDA_VISIBLE_DEVICES。
+  inference_threads 保持 1；不要用 execution.workers 做 GPU 并发。
+
+4. 常见错误
   ImportError kimia_infer：未安装 [kimi-audio] extra。
   FileNotFoundError 本地模型目录：检查 KIMI_AUDIO_MODEL_PATH。
-  CUDA OOM：降低 parallel_shards、instances_per_gpu 或 batch_size；7B 通常先从每卡 1 实例开始。
-  空 text：先用单条脚本探针（见 docs/流水线改进/构造kimi本地模型加载的流水线.md）。
+  CUDA OOM：先确认每卡只有 1 个进程；不要把 batch_size / inference_threads 调上去。
+  空 text：先用 scripts/probe_kimi_audio.py 对同一条 wav 复现。
+  sharding 校验失败：parallel_shards 不能大于 GPU 槽位数。
 
-4. 缓存与重跑
-  model_path、prompt、generation_kwargs 会参与 cache 键；改配置后需 --force 或清 cache。
+5. 缓存与重跑
+  model_path、prompt、generation_kwargs、device 会参与 cache 键；改配置后需 --force 或清 cache。
   shard 结束后 release_asr_models 会释放进程内模型缓存；同一机器串行跑多模型时无需手工 kill GPU 进程。
 
-5. vLLM 版 vs 本地版
+6. vLLM 版 vs 本地版
   二者 operator、配置、产物文件名均不同，不可混用 join 名：
     kimi_asr_batch       → kimi_asr_<BATCH>       → --join-manifest kimi
     kimi_audio_asr_batch → kimi_audio_asr_<BATCH> → --join-manifest kimi_audio
@@ -588,7 +615,8 @@ audio-data model show <model_id>
 [ ] （可选 Kimi vLLM）GPU 6，/data2/data-cp/models/kimi-audio，port 5554，KIMI_ASR_MODEL=kimi-audio
 [ ] （可选 Kimi vLLM）kimi_asr_batch sharding；configs/asr/kimi.yaml concurrency=4
 [ ] （可选 Kimi 本地）KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
-[ ] （可选 Kimi 本地）kimi_audio_asr_batch gpus [6] instances_per_gpu 1；kimi_audio.yaml batch_size=4
+[ ] （可选 Kimi 本地）kimi_audio_asr_batch gpus [0,1] × instances_per_gpu 1；batch_size=1
+[ ] （可选 Kimi 本地）先跑 probe_kimi_audio.py 单文件和文件夹探针
 [ ] multi_asr_aggregate 的 --join-manifest（kimi 或 kimi_audio）
 [ ] （仅 Qwen 本地回退）QWEN_ASR_MODEL_PATH=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 [ ] REVIEW_REV
@@ -616,8 +644,8 @@ audio-data model show <model_id>
 [ ] Qwen transcription curl 探针返回非空 text
 [ ] Qwen 实际并发不超过 vLLM/GPU 的稳定承载能力
 [ ] （若跑 Kimi vLLM）Kimi /v1/models 与 KIMI_ASR_MODEL 一致，transcription 探针非空
-[ ] （若跑 Kimi 本地）KIMI_AUDIO_MODEL_PATH 存在，小 manifest 冒烟后 transcripts.kimi.text 非空
-[ ] （若跑 Kimi 本地）parallel_shards 不超过可用 GPU slot 数
+[ ] （若跑 Kimi 本地）KIMI_AUDIO_MODEL_PATH 存在；probe_kimi_audio.py 单文件和文件夹探针均为 0
+[ ] （若跑 Kimi 本地）gpus 为两张空闲 A800，parallel_shards == GPU 槽位数，transcripts.kimi.text 非空
 [ ] aggregate alignment report 中 aligned=true，sha256_mismatches=0
 [ ] selection policy_version 已在人审校准集上验证
 [ ] review XLSX 所有行 decision 均为 accepted/rejected

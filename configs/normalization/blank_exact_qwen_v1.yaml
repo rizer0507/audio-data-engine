@@ -1,0 +1,12 @@
+# 与 zh_asr_v1 去标点同一阶段：qwen 全文（归一化后）恰好等于下列任一短语时置空，再算 CER。
+blank_exact_hotwords:
+  models: [qwen]
+  hotwords:
+    - 没有
+    - 暂时不用
+    - 不需要
+    - 谢谢
+    - 不可以啊
+    - 不用
+    - 我不需要
+    - 不要

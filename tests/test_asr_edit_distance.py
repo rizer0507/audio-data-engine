@@ -76,3 +76,51 @@ def test_normalize_transcripts_strips_tags_and_punct():
     assert sense["text"] == "您好世界"
     assert sense["extra"]["raw_text"] == "<|zh|><|EMO_UNKNOW|>您好，世界"
     assert sense["extra"]["emotion"] == "EMO_UNKNOW"
+
+
+def test_normalize_transcripts_blanks_exact_qwen_phrases():
+    operator = OperatorRegistry.get("quality.normalize_transcripts")
+    params = {
+        "keep_raw": True,
+        "blank_exact_hotwords_path": "configs/normalization/blank_exact_qwen_v1.yaml",
+    }
+
+    blanked = operator.process(
+        Sample(
+            id="hot",
+            source_path="/tmp/a.wav",
+            transcripts={
+                "qwen": {"text": "不需要！"},
+                "sensevoice": {"text": "<|zh|>不需要。"},
+            },
+        ),
+        OperatorConfig(params=params),
+    ).sample
+    assert blanked.transcripts["qwen"]["text"] == ""
+    assert blanked.transcripts["qwen"]["extra"]["raw_text"] == "不需要！"
+    assert blanked.transcripts["qwen"]["extra"]["blanked_exact_hotword"] is True
+    assert blanked.transcripts["sensevoice"]["text"] == "不需要"
+
+    kept = operator.process(
+        Sample(
+            id="more",
+            source_path="/tmp/b.wav",
+            transcripts={
+                "qwen": {"text": "我不需要贷款"},
+                "sensevoice": {"text": "我不需要贷款"},
+            },
+        ),
+        OperatorConfig(params=params),
+    ).sample
+    assert kept.transcripts["qwen"]["text"] == "我不需要贷款"
+
+    phrase = operator.process(
+        Sample(
+            id="wo",
+            source_path="/tmp/c.wav",
+            transcripts={"qwen": {"text": "我不需要"}},
+        ),
+        OperatorConfig(params=params),
+    ).sample
+    assert phrase.transcripts["qwen"]["text"] == ""
+

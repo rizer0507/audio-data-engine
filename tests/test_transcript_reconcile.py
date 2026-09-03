@@ -9,6 +9,7 @@ import pytest
 from audio_engine.core.transcript_reconcile import (
     character_similarity,
     clean_control_tags,
+    parse_vocabulary_hotwords,
     plain_transcript_text,
     reconcile_transcripts,
 )
@@ -20,6 +21,15 @@ def test_clean_and_character_similarity():
     assert plain_transcript_text("<|zh|><|EMO_UNKNOW|>你好，世界！") == "你好世界"
     assert character_similarity("你好。", "<|zh|>你 好") == 1.0
     assert character_similarity("你好", "你们好") == pytest.approx(0.6667)
+
+
+def test_parse_vocabulary_hotwords():
+    assert parse_vocabulary_hotwords(
+        "vocabulary:没有，不需要/需要，用/不用，要/不要"
+    ) == frozenset({"没有", "不需要", "需要", "用", "不用", "要", "不要"})
+    assert parse_vocabulary_hotwords(["不需要！", " 用 "]) == frozenset({"不需要", "用"})
+    assert parse_vocabulary_hotwords("") == frozenset()
+    assert parse_vocabulary_hotwords(None) == frozenset()
 
 
 def test_reconcile_xlsx_and_fenp(tmp_path: Path):
