@@ -11,20 +11,20 @@ chcp 65001 >nul 2>&1
 set "SRC=%~dp0.."
 for %%I in ("%SRC%") do set "SRC=%%~fI"
 
-set "DEST=E:\audio-data-engine"
+set "DEST=F:\audio-data-engine"
 set "LOG=%TEMP%\audio-data-engine-usb-sync.log"
 
 :: ---------- 检查 U 盘 ----------
-if not exist "E:\" (
+if not exist "F:\" (
     echo.
-    echo [错误] 未检测到 E: 盘，请先插入 U 盘后重试。
+    echo [错误] 未检测到 F: 盘，请先插入 U 盘后重试。
     echo.
     pause
     exit /b 1
 )
 
 :: 安全校验：仅允许删除固定目标路径，避免误删
-if /I not "%DEST%"=="E:\audio-data-engine" (
+if /I not "%DEST%"=="F:\audio-data-engine" (
     echo.
     echo [错误] 目标路径异常，已中止: %DEST%
     echo.
