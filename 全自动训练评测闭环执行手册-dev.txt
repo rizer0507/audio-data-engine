@@ -204,9 +204,9 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATC
 # curl -fsS http://127.0.0.1:5554/v1/models | python -m json.tool
 # # 必须按顺序通过单文件、文件夹探针；输出中每条 text 均须非空：
 # python scripts/probe_kimi_vllm.py "$PROBE_WAV"
-# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --concurrency 1
+# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --concurrency 4
 # # SOURCE_DIR 含多层子目录时使用：
-# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --recursive --concurrency 1
+# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --recursive --concurrency 4
 # # 探针退出码：0=全部非空，1=输入/连接/配置错误，2=至少一条空转写。
 # # 只有两个探针均为 0 才开始整个 cleaned_${BATCH}.parquet。
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH"

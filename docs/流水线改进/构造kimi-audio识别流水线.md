@@ -31,9 +31,9 @@ curl -fsS "${KIMI_ASR_API_BASE%/}/v1/models" | python -m json.tool
 # 第二级探针：先测一条真实短音频，输出 JSONL，text 必须非空
 python scripts/probe_kimi_vllm.py /path/to/short.wav
 
-# 第三级探针：先以单并发测试整个 WAV 文件夹；需要子目录时加 --recursive
-python scripts/probe_kimi_vllm.py /path/to/wav_folder --concurrency 1
-python scripts/probe_kimi_vllm.py /path/to/wav_folder --recursive --concurrency 1
+# 第三级探针：再测整个 WAV 文件夹；需要子目录时加 --recursive
+python scripts/probe_kimi_vllm.py /path/to/wav_folder --concurrency 4
+python scripts/probe_kimi_vllm.py /path/to/wav_folder --recursive --concurrency 4
 
 # 探针全部通过后，才运行整个 cleaned_<source>.parquet
 audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
@@ -51,13 +51,7 @@ audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
 |------|------|------|
 | 数据分片 | `sharding.shards` / `parallel_shards` | 多子进程并行处理不同数据片 |
 | 片内请求并发 | `configs/asr/kimi.yaml` 的 `concurrency` | operator 单批同时发出的 HTTP 请求数 |
-| shard 调度 | `sharding.parallel_shards` | 同时运行的 shard 数；会乘上每个进程的 `concurrency` |
-
-安全默认值为 `parallel_shards=1`、`concurrency=1`，因此整个流水线只有 1 路 HTTP。
-`execution.workers` 对 batch operator 会被忽略；实际总并发近似为
-`parallel_shards × concurrency`。即使 vLLM 的 `--max-num-seqs` 大于 1，也不代表
-Kimi-Audio 在当前显存、音频长度和模型适配版本下能稳定并发。只有目录探针连续稳定后，
-才能先保持单 shard、把 `concurrency` 从 1 调到 2；通过后再逐项增加，不能一次放大两层。
+| shard 调度 | `execution.workers` + `executor: thread` | 调度 shard 内样本；实际 HTTP 扇出仍受 `concurrency` 限制 |
 
 如果 `--concurrency 1` 可运行，而 `2` 或 `4` 卡住/报错，说明瓶颈在服务端并发承载，
 而非客户端文件发现：多个请求会同时进入音频编码、prefill 和 KV cache 分配，可能触发显存

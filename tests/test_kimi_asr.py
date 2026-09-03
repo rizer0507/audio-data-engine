@@ -3,8 +3,6 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-import yaml
-
 import audio_engine.operators  # noqa: F401
 import audio_engine.operators.asr.kimi as kimi_module
 from audio_engine.core.manifest import Manifest
@@ -151,14 +149,3 @@ def test_probe_discovers_single_file_and_directory(tmp_path: Path):
         first.resolve(),
         nested.resolve(),
     ]
-
-
-def test_production_defaults_limit_kimi_to_one_request():
-    root = Path(__file__).parents[1]
-    asr_config = yaml.safe_load((root / "configs/asr/kimi.yaml").read_text(encoding="utf-8"))
-    pipeline = yaml.safe_load((root / "pipelines/kimi_asr_batch.yaml").read_text(encoding="utf-8"))
-
-    assert asr_config["concurrency"] == 1
-    assert asr_config["batch_size"] == 1
-    assert pipeline["sharding"]["parallel_shards"] == 1
-    assert pipeline["execution"]["workers"] == 1

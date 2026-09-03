@@ -51,7 +51,7 @@ SRC=/data2/data-cp/lizi/tmp/audio-data-engine
 DST=/data2/data-cp/lizi/audio-data-engine
 
 # 1) 代码与配置目录
-for d in src docs pipelines configs tests scripts; do
+for d in src docs pipelines configs tests scripts tasks; do
   mkdir -p "$DST/$d"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' \
@@ -66,9 +66,12 @@ for f in \
   pyproject.toml \
   README.md \
   .gitignore \
+  .env.example \
   文档.txt \
   单条流水线执行命令.txt \
   三条流水线执行手册.txt \
+  全自动训练评测闭环执行手册-dev.txt \
+  全自动训练评测闭环执行手册-local.txt \
   目录.txt
 do
   if [ -e "$SRC/$f" ]; then
@@ -85,7 +88,7 @@ done
 # fi
 
 # 明确不覆盖（勿加入上面列表）：
-#   data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/
+#   data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/  .env
 
 cd "$DST" && pip install -e .
 

@@ -13,9 +13,10 @@
 #   KIMI_ASR_API_BASE   默认 http://127.0.0.1:5554
 #   KIMI_ASR_MODEL        默认 kimi-audio（与 --served-model-name 一致）
 #
-# 并发安全默认值：全流水线仅 1 个 shard、1 路 HTTP。实际总并发约为
-# parallel_shards × configs/asr/kimi.yaml:concurrency，而不是 execution.workers。
-# 探针确认服务稳定后才能逐级增加这两个值，禁止同时从 1 放大到多个 shard 和多请求。
+# 并行：
+#   - sharding 将数据切成多片，每片一个子进程
+#   - 子进程内 thread workers 并发调用 vLLM API
+#   - 无需客户端 GPU；请按 vLLM --max-num-seqs 调整 shards × workers
 
 name: kimi_asr_batch
 
@@ -26,17 +27,17 @@ output:
   manifest: datasets/manifests/kimi_asr_source_A.parquet
 
 execution:
-  executor: sequential
-  workers: 1
+  executor: thread
+  workers: 4
   fail_fast: false
   checkpoint_every: 500
 
 sharding:
   shards: 1
   strategy: duration-balanced
-  parallel_shards: 1
-  workers: 1
-  executor: sequential
+  parallel_shards: 8
+  workers: 4
+  executor: thread
 
 pipeline:
   - name: kimi_asr

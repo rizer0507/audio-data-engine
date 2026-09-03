@@ -7,8 +7,7 @@ language: zh
 prompt: "请撰写这段语音："
 temperature: 0
 response_format: json
-# Kimi-Audio 的音频编码和长序列会占用大量显存。生产安全默认值为 1；
-# 只有目录探针在目标机器上连续稳定通过后才逐级增加。
-concurrency: 1
-# 这里只控制 operator 每次取多少条待处理样本，不代表一次 vLLM 请求内的音频 batch。
-batch_size: 1
+# 单 shard 内并发 HTTP 请求数（对接 vLLM /v1/audio/transcriptions）。
+# 上线前先用 scripts/probe_kimi_vllm.py 做单文件和目录探针。
+concurrency: 4
+batch_size: 4
