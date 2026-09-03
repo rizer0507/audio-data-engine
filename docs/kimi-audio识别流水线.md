@@ -1,64 +1,43 @@
-# Kimi-Audio 高并发识别流水线
+# Kimi-Audio 本地高并发识别流水线
 
-## 现状与实现位置
+Kimi 的标准入口已改为**直接加载本地权重**，不再依赖 vLLM、HTTP 服务或端口。
+`asr.kimi` 和 `asr.kimi_batch` 均复用进程内模型缓存；旧的 `asr.kimi_audio*`
+名称仅作为兼容别名保留。
 
-此前仓库只在输出命名和多模型聚合中预留了 `kimi` 名称，没有 Kimi-Audio
-推理 operator 或可执行 pipeline。本次补齐：
-
-- `asr.kimi_batch`：批推理、逐样本缓存、坏音频隔离、断点友好的批处理 operator；
-- `configs/asr/kimi_audio.yaml`：模型、提示词与生成参数；
-- `pipelines/kimi_asr_batch.yaml`：时长均衡切片、多 GPU 多进程执行与最终合并；
-- `KIMI_AUDIO_MODEL_PATH`：服务器本地权重路径覆盖。
-
-## 并发模型
-
-高吞吐由两层组成：
-
-1. **进程级并行**：manifest 先按时长均衡切片，每个并行 shard 绑定一个 GPU
-   slot，并独立加载一次模型。这避免多线程共享 CUDA 模型以及短 shard 等待长音频 shard。
-2. **模型级批处理**：每个进程将待识别数据按 `batch_size` 分组。若部署 wrapper
-   提供 `transcribe_batch` 或支持列表输入的 `transcribe`，一次送入整批；官方
-   `build_prompt`/`generate` 接口则兼容回退为逐条生成。
-
-`checkpoint_every: 500` 会定期落盘。进程中断后重跑同一命令时，operator 的逐样本
-cache 会跳过已成功的数据；指定原 run 目录还可以用 pipeline 的 resume 能力恢复 checkpoint。
-一个批次失败时会自动拆成单条重试，因此损坏 WAV 只标记自身失败，不拖垮整个 shard。
-
-## 环境和配置
-
-按 Kimi-Audio 官方仓库安装 `kimia_infer` 及其匹配的 PyTorch/CUDA 依赖，然后设置：
+## 安装与配置
 
 ```bash
+pip install -e '.[kimi-audio]'
 export KIMI_AUDIO_MODEL_PATH=/data/models/Kimi-Audio-7B-Instruct
 ```
 
-先根据单实例显存测量调整 `configs/asr/kimi_audio.yaml`：
+模型路径也可写在 `configs/asr/kimi.yaml`。环境变量优先于 operator 参数和 YAML。
+`load_detokenizer: false` 可降低只做 ASR 时的显存占用。
 
-- `batch_size`：原生 batch wrapper 每次接收的文件数，建议从 1/2/4/8 梯度压测；
-- `inference_threads`：仅 generate-only wrapper 使用。共享单个 CUDA 模型时保持 `1`；
-- `generation_kwargs`：确定性识别默认 temperature 为 0；
-- `prompt`：要求仅输出转写文本，避免解释性回答污染训练语料。
+单文件探针：
 
-再调整 pipeline 的 `gpus`、`parallel_shards`、`instances_per_gpu`。必须满足：
-
-```text
-parallel_shards <= len(gpus) * instances_per_gpu
+```bash
+PYTHONPATH=src python scripts/test_kimi_single.py --audio /path/to/sample.wav
 ```
 
-Kimi-Audio 7B 通常先从每卡一个实例开始，确认显存余量后才增加每卡实例数。
-
-## 十万条数据执行
-
-pipeline YAML 已包含 sharding，常规执行一条命令即可完成 split、并发 run 和 merge：
+## 高并发设计
 
 ```bash
 audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
 ```
 
-产物为 `datasets/manifests/kimi_asr_mt3000.parquet`，转写位于
-`transcripts.kimi.text`。建议先对小 manifest 做真实模型冒烟测试，查看 run 目录中的
-`run.log`、`metrics.json` 和失败样本，然后再放大到全量。
+流水线按音频时长均衡切片，每个 shard 是独立进程并通过
+`CUDA_VISIBLE_DEVICES` 绑定一张 GPU。每个进程只加载一次模型，并优先调用后端的
+`transcribe_batch`，由 `batch_size` 控制单次送入模型的文件数。这样并发发生在隔离的
+GPU 进程之间，不会让多个线程不安全地共享同一个模型实例。
 
-需要手动控制时可沿用 Qwen 的三段式操作：manifest split、pipeline run-shards、
-manifest merge。不要在 pipeline 内把 `execution.workers` 调大来共享同一 GPU 模型；GPU
-并发应由 shard 进程和 GPU slot 显式控制。
+部署时必须按机器修改 `sharding.gpus`。通常设置：
+
+- `parallel_shards = len(gpus) * instances_per_gpu`；
+- 显存紧张时保持 `instances_per_gpu: 1`；
+- 逐步提高 `batch_size`，直到吞吐不再上升或接近显存上限；
+- 仅当所安装后端明确保证 `generate()` 线程安全时，才提高 `inference_threads`。
+
+批次失败会自动降级为逐文件重试，因此坏音频只会标记自身失败。缓存键包含最终解析的
+模型路径、版本、设备和提示词，重复运行可直接复用结果。输出仍为
+`datasets/manifests/kimi_asr_<source>.parquet`，文本位于 `transcripts.kimi.text`。
