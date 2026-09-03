@@ -248,7 +248,11 @@ audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATC
 
 audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
   --source-name "$BATCH" \
-  --join-manifest sensevoice
+  --join-manifest sensevoice \
+  --join-manifest qwen
+
+audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+  --source-name "$BATCH"
 
 # 若还要聚合 Kimi（按实际使用的流水线选择 join 名）：
 # vLLM 版：
