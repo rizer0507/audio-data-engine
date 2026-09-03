@@ -1,8 +1,8 @@
-# Kimi-Audio 本地高并发识别流水线
+# Kimi-Audio 本地高并发识别流水线（兼容模式）
 
-Kimi 的标准入口已改为**直接加载本地权重**，不再依赖 vLLM、HTTP 服务或端口。
-`asr.kimi` 和 `asr.kimi_batch` 均复用进程内模型缓存；旧的 `asr.kimi_audio*`
-名称仅作为兼容别名保留。
+Kimi 的标准入口 `asr.kimi` / `asr.kimi_batch` 使用 vLLM HTTP；本地权重直载由
+`asr.kimi_audio` / `asr.kimi_audio_batch` 作为兼容入口提供。本页只说明本地模式；
+vLLM 的探针与 Parquet 批量流程见 `docs/流水线改进/构造kimi-audio识别流水线.md`。
 
 ## 安装与配置
 
@@ -11,19 +11,19 @@ pip install -e '.[kimi-audio]'
 export KIMI_AUDIO_MODEL_PATH=/data/models/Kimi-Audio-7B-Instruct
 ```
 
-模型路径也可写在 `configs/asr/kimi.yaml`。环境变量优先于 operator 参数和 YAML。
+模型路径也可写在 `configs/asr/kimi_audio.yaml`。环境变量优先于 operator 参数和 YAML。
 `load_detokenizer: false` 可降低只做 ASR 时的显存占用。
 
 单文件探针：
 
 ```bash
-PYTHONPATH=src python scripts/test_kimi_single.py --audio /path/to/sample.wav
+audio-data run kimi_audio --dataset <manifest> --config configs/asr/kimi_audio.yaml
 ```
 
 ## 高并发设计
 
 ```bash
-audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
+audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name mt3000
 ```
 
 流水线按音频时长均衡切片，每个 shard 是独立进程并通过
@@ -40,4 +40,4 @@ GPU 进程之间，不会让多个线程不安全地共享同一个模型实例�
 
 批次失败会自动降级为逐文件重试，因此坏音频只会标记自身失败。缓存键包含最终解析的
 模型路径、版本、设备和提示词，重复运行可直接复用结果。输出仍为
-`datasets/manifests/kimi_asr_<source>.parquet`，文本位于 `transcripts.kimi.text`。
+`datasets/manifests/kimi_audio_asr_<source>.parquet`，文本位于 `transcripts.kimi.text`。
