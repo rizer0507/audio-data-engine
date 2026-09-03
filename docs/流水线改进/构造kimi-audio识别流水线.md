@@ -53,7 +53,10 @@ audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
 | 片内请求并发 | `configs/asr/kimi.yaml` 的 `concurrency` | operator 单批同时发出的 HTTP 请求数 |
 | shard 调度 | `execution.workers` + `executor: thread` | 调度 shard 内样本；实际 HTTP 扇出仍受 `concurrency` 限制 |
 
-默认 8 片 × 4 线程 = 最多 32 路并发请求。请根据 vLLM 的 `--max-num-seqs` 和服务器负载调整 `sharding` 与 `concurrency`。
+如果 `--concurrency 1` 可运行，而 `2` 或 `4` 卡住/报错，说明瓶颈在服务端并发承载，
+而非客户端文件发现：多个请求会同时进入音频编码、prefill 和 KV cache 分配，可能触发显存
+峰值、队列超时，或暴露当前 Kimi remote-code/多模态 processor 的并发安全问题。此时必须
+保持 `concurrency: 1`，并查看 vLLM 日志中的第一条 OOM、500 或 timeout，不能靠重试放大负载。
 
 `KIMI_ASR_API_BASE` 可填写服务根地址（如 `http://127.0.0.1:5554`）或
 OpenAI 基地址（如 `http://127.0.0.1:5554/v1`），客户端会避免重复拼接 `/v1`。

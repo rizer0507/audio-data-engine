@@ -33,7 +33,7 @@ execution:
   checkpoint_every: 500
 
 sharding:
-  shards: 8
+  shards: 1
   strategy: duration-balanced
   parallel_shards: 8
   workers: 4

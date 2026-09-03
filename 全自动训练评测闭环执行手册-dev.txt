@@ -183,8 +183,8 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATC
 # 转写均写入 transcripts.kimi.text。
 
 # ── 4.1 vLLM HTTP 模式（GPU 6，端口 5554；客户端不加载 GPU 模型）────────────
-# 并行：pipelines/kimi_asr_batch.yaml 默认 8 shard × 4 thread；
-#       configs/asr/kimi.yaml concurrency=4（对接 vLLM --max-num-seqs）。
+# 安全默认：pipelines/kimi_asr_batch.yaml 为 1 shard，configs/asr/kimi.yaml
+# concurrency=1，全流水线只有 1 路 HTTP。探针稳定后再逐级扩容。
 
 # CUDA_VISIBLE_DEVICES=6 \
 # vllm serve /data2/data-cp/models/kimi-audio \
@@ -523,7 +523,9 @@ audio-data model show <model_id>
 3. 并发预算（当前生产默认值）
   Qwen vLLM：parallel_shards(8) × concurrency(4) ≈ 32 路 HTTP；vLLM 在 GPU 1、port 5559，
              --max-num-seqs 建议 ≥ 8。
-  Kimi vLLM：parallel_shards(8) × concurrency(4) ≈ 32 路；vLLM 在 GPU 6、port 5554。
+  Kimi vLLM：安全默认 parallel_shards(1) × concurrency(1) = 1 路；GPU 6、port 5554。
+             execution.workers 对 batch operator 无效。目录探针稳定后先只把 concurrency
+             调到 2；若 2/4 路卡住或报错，立即回退 1，检查服务端 OOM、500 和 timeout。
   SenseVoice 本地：GPU 4、5 × instances_per_gpu(4) = 8 shard，batch_size=32。
   Kimi 本地：GPU 6 × instances_per_gpu(1) = 8 shard（单卡多 shard 串行加载），batch_size=4。
   出现 OOM、超时或服务排队时，先降低 concurrency / parallel_shards / batch_size。
@@ -586,7 +588,7 @@ audio-data model show <model_id>
 [ ] SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 [ ] SenseVoice sharding：gpus [4,5] × instances_per_gpu 4
 [ ] （可选 Kimi vLLM）GPU 6，/data2/data-cp/models/kimi-audio，port 5554，KIMI_ASR_MODEL=kimi-audio
-[ ] （可选 Kimi vLLM）kimi_asr_batch sharding；configs/asr/kimi.yaml concurrency=4
+[ ] （可选 Kimi vLLM）kimi_asr_batch 默认单 shard；configs/asr/kimi.yaml concurrency=1
 [ ] （可选 Kimi 本地）KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
 [ ] （可选 Kimi 本地）kimi_audio_asr_batch gpus [6] instances_per_gpu 1；kimi_audio.yaml batch_size=4
 [ ] multi_asr_aggregate 的 --join-manifest（kimi 或 kimi_audio）
