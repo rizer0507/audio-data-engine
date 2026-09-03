@@ -263,8 +263,10 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
   --join-manifest doubao \
   --join-manifest qwen
 
-audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH"
+audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH" --force
 
+# 该流水线先做：zh_asr_v1 去标点 + qwen 精确短语清空（见 configs/normalization/blank_exact_qwen_v1.yaml），
+# 全部改写完成后再计算 agreement CER。
 # 输出：datasets/manifests/multi_asr_metrics_${BATCH}.parquet
 
 
@@ -281,7 +283,8 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 
 audio-data pipeline run pipelines/classify_dataset.yaml \
   --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
-  --output-manifest "datasets/manifests/classified_${BATCH}.parquet"
+  --output-manifest "datasets/manifests/classified_${BATCH}.parquet" \
+  --force
 
 # 注意：agreement CER 只是模型间一致程度，不是真实准确率。
 # 修改阈值前必须在人审校准集上验证，并同步升级 policy_version。

@@ -16,4 +16,4 @@ max_new_tokens: 256
 return_time_stamps: false
 temperature: 0
 response_format: json
-context: "vocabulary:没有，不需要/需要，用/不用，要/不要"
+context: "vocabulary:没有，暂时不用，不需要谢谢，不可以啊，不用，我不需要，不要，不用，不需要"

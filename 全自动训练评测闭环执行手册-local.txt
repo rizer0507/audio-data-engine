@@ -276,6 +276,8 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
 
 audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH"
 
+# 该流水线先做：zh_asr_v1 去标点 + qwen 精确短语清空（见 configs/normalization/blank_exact_qwen_v1.yaml），
+# 全部改写完成后再计算 agreement CER。
 # 输出：datasets/manifests/multi_asr_metrics_${BATCH}.parquet
 
 

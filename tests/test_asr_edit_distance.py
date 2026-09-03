@@ -78,49 +78,56 @@ def test_normalize_transcripts_strips_tags_and_punct():
     assert sense["extra"]["emotion"] == "EMO_UNKNOW"
 
 
-def test_normalize_transcripts_blanks_exact_qwen_phrases():
+def test_normalize_transcripts_blanks_exact_qwen_phrases(tmp_path):
     operator = OperatorRegistry.get("quality.normalize_transcripts")
     params = {
         "keep_raw": True,
         "blank_exact_hotwords_path": "configs/normalization/blank_exact_qwen_v1.yaml",
     }
+    config = OperatorConfig(params=params, cache_dir=tmp_path / "cache", force=True)
 
+    # vocabulary dump as one sentence (the real failure mode)
     blanked = operator.process(
         Sample(
             id="hot",
             source_path="/tmp/a.wav",
+            sha256="a" * 64,
             transcripts={
-                "qwen": {"text": "不需要！"},
-                "sensevoice": {"text": "<|zh|>不需要。"},
+                "qwen": {
+                    "text": "没有，暂时不用，不需要谢谢，不可以，啊不用，我不需要，不要，不用，不需要。"
+                },
+                "sensevoice": {"text": "<|zh|>你好。"},
             },
         ),
-        OperatorConfig(params=params),
+        config,
     ).sample
     assert blanked.transcripts["qwen"]["text"] == ""
-    assert blanked.transcripts["qwen"]["extra"]["raw_text"] == "不需要！"
     assert blanked.transcripts["qwen"]["extra"]["blanked_exact_hotword"] is True
-    assert blanked.transcripts["sensevoice"]["text"] == "不需要"
+    assert blanked.transcripts["sensevoice"]["text"] == "你好"
+
+    # single short phrase must NOT be blanked under the dump-string rule
+    kept_short = operator.process(
+        Sample(
+            id="short",
+            source_path="/tmp/b.wav",
+            sha256="b" * 64,
+            transcripts={"qwen": {"text": "不需要！"}},
+        ),
+        config,
+    ).sample
+    assert kept_short.transcripts["qwen"]["text"] == "不需要"
 
     kept = operator.process(
         Sample(
             id="more",
-            source_path="/tmp/b.wav",
+            source_path="/tmp/c.wav",
+            sha256="c" * 64,
             transcripts={
                 "qwen": {"text": "我不需要贷款"},
                 "sensevoice": {"text": "我不需要贷款"},
             },
         ),
-        OperatorConfig(params=params),
+        config,
     ).sample
     assert kept.transcripts["qwen"]["text"] == "我不需要贷款"
-
-    phrase = operator.process(
-        Sample(
-            id="wo",
-            source_path="/tmp/c.wav",
-            transcripts={"qwen": {"text": "我不需要"}},
-        ),
-        OperatorConfig(params=params),
-    ).sample
-    assert phrase.transcripts["qwen"]["text"] == ""
 
