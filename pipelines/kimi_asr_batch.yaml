@@ -1,11 +1,27 @@
-# Kimi-Audio local high-throughput ASR.
-# Each shard is an isolated process pinned to one GPU and loads the model once;
-# samples inside a shard use native model batching. Adjust the GPU list and the
-# shard count together for the target host.
+# 工序②-c：全量 Kimi-Audio ASR（vLLM 服务；与其他模型独立）
+#
+#   audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
+#   → cleaned_mt3000 → kimi_asr_mt3000.parquet
+#
+# 前置：
+#   1. input 须含 resampled_16k
+#   2. 先启动 vLLM
+#   3. scripts/probe_kimi_vllm.py 的单 WAV 和 WAV 目录探针均通过
+#      （见 docs/流水线改进/构造kimi-audio识别流水线.md）
+#
+# 环境变量：
+#   KIMI_ASR_API_BASE   默认 http://127.0.0.1:5554
+#   KIMI_ASR_MODEL        默认 kimi-audio（与 --served-model-name 一致）
+#
+# 并发安全默认值：全流水线仅 1 个 shard、1 路 HTTP。实际总并发约为
+# parallel_shards × configs/asr/kimi.yaml:concurrency，而不是 execution.workers。
+# 探针确认服务稳定后才能逐级增加这两个值，禁止同时从 1 放大到多个 shard 和多请求。
+
 name: kimi_asr_batch
 
 input:
   manifest: datasets/manifests/cleaned_source_A.parquet
+
 output:
   manifest: datasets/manifests/kimi_asr_source_A.parquet
 
@@ -16,11 +32,9 @@ execution:
   checkpoint_every: 500
 
 sharding:
-  shards: 8
+  shards: 1
   strategy: duration-balanced
-  parallel_shards: 8
-  gpus: [0, 1, 2, 3, 4, 5, 6, 7]
-  instances_per_gpu: 1
+  parallel_shards: 1
   workers: 1
   executor: sequential
 
@@ -30,5 +44,3 @@ pipeline:
     params:
       input_audio_key: resampled_16k
       config_path: configs/asr/kimi.yaml
-  - name: release_after_kimi
-    operator: runtime.release_asr_models

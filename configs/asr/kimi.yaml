@@ -1,21 +1,14 @@
-# Canonical Kimi-Audio backend: weights are loaded directly in every shard process.
-model: kimi-audio-7b-instruct
-model_path: /data2/data-cp/models/kimi-audio
+model: kimi-audio
 model_version: "Kimi-Audio-7B-Instruct"
-device: cuda
-load_detokenizer: false
-
-# Native batch size. Increase until GPU memory is saturated; failed batches are
-# retried per file so one corrupt recording does not poison the entire shard.
-batch_size: 8
-# Only used when the installed kimia_infer has no native batch API. Keep at 1
-# unless the backend explicitly documents concurrent generate() as thread-safe.
-inference_threads: 1
-
-prompt: Please transcribe the audio accurately. Output only the transcription.
-model_kwargs: {}
-generation_kwargs:
-  audio_temperature: 0.0
-  audio_top_k: 5
-  text_temperature: 0.0
-  text_top_k: 5
+api_base: http://127.0.0.1:5554
+api_key: dummy
+timeout: 120
+language: zh
+prompt: "请撰写这段语音："
+temperature: 0
+response_format: json
+# Kimi-Audio 的音频编码和长序列会占用大量显存。生产安全默认值为 1；
+# 只有目录探针在目标机器上连续稳定通过后才逐级增加。
+concurrency: 1
+# 这里只控制 operator 每次取多少条待处理样本，不代表一次 vLLM 请求内的音频 batch。
+batch_size: 1
