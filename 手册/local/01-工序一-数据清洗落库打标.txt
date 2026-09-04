@@ -1,8 +1,15 @@
-工序一：数据清洗落库打标（local · 一键执行）
+﻿工序一：数据清洗落库打标（local · 一键执行）
 ================================================================================
-# 详解见：手册/local/00-总详细手册.txt
+# 对齐：docs/01-项目架构/工序总览.md · 工序一（①清洗 + ②ASR/聚拢/字准 + ③分拣）
+# 详解：手册/local/00-总详细手册.txt
 # 前置：另开终端已起好 Qwen vLLM（例：port 5559 / 5560）
 # 改批次只改 BATCH / SOURCE_DIR
+# 外源金标（不生成共识金标、产物直接喂工序三）：
+#   docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
+#   清洗+ASR 后：
+#   audio-data pipeline run pipelines/classify_external_gold.yaml \
+#     --source-name "$BATCH" --aggregate-base qwen \
+#     --external-gold path/to/金标.xlsx --label-col label_text_raw --force
 
 cd D:/Work/audio-data-engine
 # source .venv/bin/activate   # 或 .\.venv\Scripts\Activate.ps1

@@ -1,0 +1,16 @@
+# 工序一 · 外源金标分拣（external_gold_v1）
+# 金标以外源 xlsx 为准；相对 compare_model 转写写 type（四桶首版）。
+# 须先跑 quality.inject_external_gold。
+policy_version: selection_external_gold_v1
+gold_mode: external
+engine: external_v1
+rule_version: external_gold_v1
+
+# 留空则自动选样本上第一个 qwen* transcript，否则按字典序第一个
+compare_model: ""
+
+hotwords_path: configs/normalization/blank_exact_eval_interview_v1.yaml
+voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml
+
+defaults:
+  label_broken: false

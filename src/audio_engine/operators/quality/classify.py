@@ -18,6 +18,10 @@ from audio_engine.core.transcript_reconcile import (
     plain_transcript_text,
     rewrite_plain_transcript_entry,
 )
+from audio_engine.operators.quality.external_gold import (
+    classify_external_sample,
+    load_hotwords,
+)
 
 # Flat columns that end with _text but are not ASR transcript fields.
 _NON_ASR_TEXT_FIELDS = frozenset(
@@ -232,12 +236,67 @@ def _apply_consensus_engine(
     return updated
 
 
+def _apply_external_engine(
+    updated: list[Sample],
+    *,
+    params: dict,
+    policy_version: str,
+    voicemail_pattern: re.Pattern[str] | None,
+    operator_name: str,
+    operator_version: str,
+) -> list[Sample]:
+    """External-gold mode: keep injected gold_text; bucket vs compare_model ASR."""
+    hotwords = load_hotwords(params.get("hotwords_path"))
+    compare_model = str(params.get("compare_model") or "").strip() or None
+    for sample in updated:
+        raw_preserve = str(
+            sample.labels.get("label_text_raw")
+            or sample.labels.get("gold_text")
+            or sample.labels.get("label")
+            or ""
+        )
+        mode = str(sample.labels.get("gold_mode") or sample.labels.get("gold_source") or "").strip().lower()
+        if mode != "external":
+            raise ValueError(
+                f"sample {sample.id}: gold_mode=external classify requires prior "
+                "quality.inject_external_gold (labels.gold_mode/gold_source=external)"
+            )
+        preassigned = str(sample.labels.get("external_type") or "").strip() or None
+        result = classify_external_sample(
+            sample,
+            compare_model=compare_model,
+            hotwords=hotwords,
+            voicemail_pattern=voicemail_pattern,
+            preassigned_type=preassigned,
+        )
+        sample.labels.update(result.to_labels(policy_version, preserve_raw=raw_preserve))
+        sample.mark_completed(operator_name)
+        sample.add_lineage(
+            operator_name,
+            operator_version,
+            {
+                "policy_version": policy_version,
+                "rule_version": result.rule_version,
+                "gold_mode": "external",
+                "bucket": result.type,
+                "decision": result.decision,
+                "reason_codes": [result.reason],
+                "compare_model": result.compare_model,
+            },
+        )
+    return updated
+
+
 @register_operator
 class ClassifyOperator(ManifestOperator):
-    """Apply versioned selection rules; prefer consensus engine over expr rules."""
+    """Apply versioned selection rules; prefer consensus engine over expr rules.
+
+    ``gold_mode: external`` / ``engine: external_v1`` keeps injected external gold and
+    buckets against a single compare-model transcript (process-1 split path).
+    """
 
     name = "classify"
-    version = "2.0.0"
+    version = "2.1.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -250,11 +309,14 @@ class ClassifyOperator(ManifestOperator):
             raise ValueError("quality.classify requires policy_version")
 
         engine = str(params.get("engine") or "").strip().lower()
+        gold_mode = str(params.get("gold_mode") or "").strip().lower()
+        use_external = gold_mode == "external" or engine in {"external", "external_v1"}
         rules = params.get("rules") or []
-        use_consensus = engine in {"consensus", "consensus_v1", "selection_v1.1"} or (
-            not rules and engine != "expr"
+        use_consensus = (not use_external) and (
+            engine in {"consensus", "consensus_v1", "selection_v1.1"}
+            or (not rules and engine != "expr")
         )
-        if not use_consensus:
+        if not use_consensus and not use_external:
             if not isinstance(rules, list) or not rules:
                 raise ValueError("quality.classify requires non-empty ordered rules")
 
@@ -273,6 +335,16 @@ class ClassifyOperator(ManifestOperator):
             frame[column] = frame[column].fillna("")
         _mark_all_transcripts_empty(frame)
         _mark_voicemail_hits(frame, updated, voicemail_pattern)
+
+        if use_external:
+            return _apply_external_engine(
+                updated,
+                params=params,
+                policy_version=policy_version,
+                voicemail_pattern=voicemail_pattern,
+                operator_name=self.full_name,
+                operator_version=self.version,
+            )
 
         if use_consensus:
             return _apply_consensus_engine(

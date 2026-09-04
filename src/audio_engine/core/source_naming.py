@@ -330,6 +330,8 @@ def apply_source_name_to_single_pipeline(
       ``multi_asr_aggregate_<name>``, and rewrite join manifests to
       ``{model}_asr_<name>``.
     - ``asr_metric*``: ``multi_asr_aggregate_<name>`` → ``multi_asr_metrics_<name>``.
+    - ``classify_external_gold*``: ``{aggregate_base|qwen}_asr_<name>`` →
+      ``classified_<name>`` (external gold inject + classify).
     """
     name = validate_source_name(source_name)
     run_alias = validate_asr_run(asr_run) if asr_run is not None else None
@@ -416,6 +418,21 @@ def apply_source_name_to_single_pipeline(
             "aggregate_manifests": None,
             "asr_run": None,
             "aggregate_base": None,
+        }
+
+    if "external_gold" in key or "classify_external" in key:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        base_model = base_alias or "qwen"
+        resolved = resolve_existing_manifest(manifest_stem(model_asr_kind(base_model), name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("classified", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": base_model,
         }
 
     asr_kind = _asr_output_kind(pipeline_name)

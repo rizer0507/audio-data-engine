@@ -139,6 +139,38 @@ def _first_asr_transcript_key(cfg: PipelineConfig) -> str | None:
     return None
 
 
+def _apply_external_gold(
+    cfg: PipelineConfig,
+    *,
+    xlsx_path: Path | None,
+    label_col: str | None,
+    id_col: str | None,
+    compare_model: str | None,
+) -> None:
+    """Patch inject + classify steps for the external-gold process-1 path."""
+    needs_inject = any(step.operator == "quality.inject_external_gold" for step in cfg.steps)
+    if xlsx_path is not None and not needs_inject:
+        raise typer.BadParameter(
+            "--external-gold requires a quality.inject_external_gold step "
+            "(e.g. pipelines/classify_external_gold.yaml)"
+        )
+    for step in cfg.steps:
+        if step.operator == "quality.inject_external_gold":
+            patched = dict(step.params)
+            if xlsx_path is not None:
+                patched["xlsx_path"] = str(xlsx_path.resolve())
+            if label_col:
+                patched["label_col"] = label_col
+            if id_col:
+                patched["id_col"] = id_col
+            step.params = patched
+        if step.operator == "quality.classify" and compare_model:
+            step.params = {
+                **step.params,
+                "compare_model": validate_asr_run(compare_model),
+            }
+
+
 def _apply_agreement_base(cfg: PipelineConfig, agreement_base: str) -> None:
     """Patch ``quality.text_metrics`` to use ``vs_base.base`` / agreement_base."""
     alias = validate_asr_run(agreement_base)
@@ -461,7 +493,9 @@ def pipeline_run(
         "--aggregate-base",
         help=(
             "For multi_asr_aggregate: base result alias whose manifest is the "
-            "join left table (default: qwen). Example: qwen1"
+            "join left table (default: qwen). For classify_external_gold: ASR "
+            "alias used as input bottom table + default compare_model "
+            "(e.g. qwen3-asr)."
         ),
     ),
     agreement_base: Optional[str] = typer.Option(
@@ -488,6 +522,33 @@ def pipeline_run(
             "For eval_metric_pipeline / asr_eval: transcript key to score vs "
             "gold_text (repeatable). Example: --eval-model qwen "
             "--eval-model qwen-sft-epoch10"
+        ),
+    ),
+    external_gold: Optional[Path] = typer.Option(
+        None,
+        "--external-gold",
+        help=(
+            "For classify_external_gold: path to external gold xlsx "
+            "(injects into quality.inject_external_gold). "
+            "Also accepted via env EXTERNAL_GOLD_XLSX."
+        ),
+    ),
+    label_col: Optional[str] = typer.Option(
+        None,
+        "--label-col",
+        help="For classify_external_gold: gold text column in the xlsx (default label_text_raw)",
+    ),
+    id_col: Optional[str] = typer.Option(
+        None,
+        "--id-col",
+        help="For classify_external_gold: id column in the xlsx (default id/sample_id)",
+    ),
+    compare_model: Optional[str] = typer.Option(
+        None,
+        "--compare-model",
+        help=(
+            "For classify_external_gold: transcript key used for type bucketing "
+            "(default: --aggregate-base, else auto-pick qwen*)"
         ),
     ),
 ) -> None:
@@ -517,7 +578,7 @@ def pipeline_run(
         raise typer.BadParameter("--aggregate-base requires --source-name")
     if aggregate_base is not None and eval_name is not None:
         raise typer.BadParameter(
-            "--aggregate-base is for multi_asr_aggregate; "
+            "--aggregate-base is for multi_asr_aggregate / classify_external_gold; "
             "eval_aggregate always uses the eval set as the left table"
         )
     if asr_run is not None and transcript_key is not None and asr_run != transcript_key:
@@ -666,6 +727,9 @@ def pipeline_run(
             )
         else:
             cfg.name = pipeline_run_name(cfg.name, source_name)
+        if overrides.get("aggregate_base") and aggregate_base is None:
+            # Preserve rewrite default (e.g. classify_external_gold → qwen)
+            aggregate_base = str(overrides["aggregate_base"])
         console.print(f"  Source name: [cyan]{source_name}[/cyan]")
         if overrides.get("asr_run"):
             console.print(f"  ASR run:     [cyan]{overrides['asr_run']}[/cyan]")
@@ -710,6 +774,32 @@ def pipeline_run(
             + ", ".join(validate_asr_run(item) for item in eval_model)
             + "[/cyan]"
         )
+
+    # External-gold path: inject xlsx + optional compare_model for classify.
+    effective_compare = compare_model or aggregate_base
+    if (
+        external_gold is not None
+        or label_col
+        or id_col
+        or compare_model
+        or any(step.operator == "quality.inject_external_gold" for step in cfg.steps)
+    ):
+        try:
+            _apply_external_gold(
+                cfg,
+                xlsx_path=external_gold,
+                label_col=label_col,
+                id_col=id_col,
+                compare_model=effective_compare,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        if external_gold is not None:
+            console.print(f"  Ext gold:    [cyan]{external_gold.resolve()}[/cyan]")
+        if effective_compare and any(
+            step.operator == "quality.classify" for step in cfg.steps
+        ):
+            console.print(f"  Compare:     [cyan]{validate_asr_run(effective_compare)}[/cyan]")
 
     # Shard workers pass --transcript-key without --asr-run/--source-name.
     if transcript_key is not None and asr_run is None:

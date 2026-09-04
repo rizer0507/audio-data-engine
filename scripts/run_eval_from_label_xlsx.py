@@ -1,5 +1,13 @@
-#!/usr/bin/env python3
-"""从人工标注 xlsx + 多模型 ASR parquet 构建评测 summary 并跑字准流程。
+﻿#!/usr/bin/env python3
+"""【过渡旁路】从人工标注 xlsx + 多模型 ASR parquet 构建评测 summary 并跑字准流程。
+
+正式主路径请用工序一拆分入口（产出 classified_* 再 eval register）::
+
+  audio-data pipeline run pipelines/classify_external_gold.yaml \\
+    --source-name "$BATCH" --aggregate-base qwen3-asr \\
+    --external-gold path/to/金标.xlsx --label-col label_text_raw
+
+详见 docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md。
 
 清洗口径：
   - 去【…】（含括号内文字）+ zh_asr_v1 去标点/空白
@@ -223,8 +231,14 @@ def build_summary_frame(
 
 
 def main() -> int:
+    print(
+        "[WARN] run_eval_from_label_xlsx.py 为过渡旁路；"
+        "正式路径请用: audio-data pipeline run pipelines/classify_external_gold.yaml "
+        "→ eval register（见 docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md）",
+        file=sys.stderr,
+    )
     parser = argparse.ArgumentParser(
-        description="人工标注 xlsx + ASR parquet → 清洗/分 type → 多模型字准评测"
+        description="【过渡】人工标注 xlsx + ASR parquet → 清洗/分 type → 多模型字准评测"
     )
     parser.add_argument("--label-xlsx", type=Path, required=True)
     parser.add_argument("--label-col", default="label_text_raw")

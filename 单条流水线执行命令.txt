@@ -1,4 +1,4 @@
-单条流水线执行命令
+﻿单条流水线执行命令
 =======================================================
 用途：维护生产入口命令；分片/并行/合并由 YAML sharding 自动完成。
 改批次：用 --source-name（+ 清洗时的 --source-dir），一般不用改 YAML 路径。
@@ -159,16 +159,43 @@ python scripts/export_multi_asr_xlsx.py \
   → sensevoice_asr_mt3000.parquet        # 2b 独立产物
   → kimi_asr_mt3000.parquet              # 2c vLLM 产物
   → kimi_audio_asr_mt3000.parquet        # 2c-local 本地产物
-  → multi_asr_aggregate_mt3000.parquet   # 2d 仅 join
-  → multi_asr_metrics_mt3000.parquet     # 2e agreement CER
+  → multi_asr_aggregate_mt3000.parquet   # 2d 仅 join（内部金标路径）
+  → multi_asr_metrics_mt3000.parquet     # 2e agreement CER（内部金标路径）
+  → classified_mt3000.parquet            # 2g 外源金标路径（可跳过 2d/2e）
   → (可选) datasets/exports/multi_asr_aggregate_mt3000.xlsx
 
 
 -------------------------------------------------------
-2g. 外源标注 baseline 字准率（脚本，非流水线）
+2g. 外源金标 → 正式 classified_*（工序一拆分 · B2）
+-------------------------------------------------------
+# 前置：①清洗 + ②同 family ASR（至少跑 base 权重，得到 {alias}_asr_<name>）
+# 跳过：2d 聚合 / 2e agreement（评测字准在工序三）
+# YAML: pipelines/classify_external_gold.yaml
+# 配置: configs/selection/external_gold_v1.yaml
+# 产物: classified_<name>.parquet（gold_text=外源，type=四桶）
+# 详解: docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
+
+# export BATCH=mt3000
+# export EXTERNAL_GOLD_XLSX=path/to/外源金标.xlsx   # 或用 --external-gold
+
+audio-data pipeline run pipelines/classify_external_gold.yaml \
+  --source-name test_local \
+  --aggregate-base qwen \
+  --external-gold "path/to/外源金标.xlsx" \
+  --label-col label_text_raw \
+  --force
+
+# --aggregate-base 须与 ASR 别名/transcript key 一致（例 qwen3-asr）
+# 可选: --compare-model / --id-col
+# 之后: audio-data eval register datasets/manifests/classified_<name>.parquet --name eval_<name>
+
+
+-------------------------------------------------------
+2h. 外源标注 baseline 字准率（旁路脚本，过渡；优先用 2g）
 -------------------------------------------------------
 # 以外部标注文件 A 为 reference，对齐模型 parquet/jsonl 后算 evaluation CER
 # 详见 docs/07-操作手册/外源基线字准率脚本.md
+# 正式路径请用 2g → 工序三，勿长期依赖本脚本 / run_eval_from_label_xlsx.py
 
 # python scripts/eval_external_baseline_cer.py \
 #   --baseline 数据集/标注A.xlsx \
@@ -187,6 +214,7 @@ python scripts/export_multi_asr_xlsx.py \
 [ ] （可选）pipelines/kimi_audio_asr_batch.yaml 的 gpus（两卡 A800 默认 [0,1]）
 [ ] （可选）KIMI_AUDIO_MODEL_PATH；先跑 scripts/probe_kimi_audio.py
 [ ] （可选）multi_asr_aggregate.yaml 的 manifests / --join-manifest
+[ ] （外源金标）--external-gold / --aggregate-base / --label-col
 [ ] 本文件中的模型环境变量（含 KIMI_ASR_API_BASE / KIMI_ASR_MODEL / KIMI_AUDIO_MODEL_PATH）
 # 一般不再改 resources/manifest.yaml 与 YAML 内 input/output 路径
 

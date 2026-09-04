@@ -1,29 +1,83 @@
-工序三：评测（dev · 一键执行）
+﻿工序三：评测（dev · 一键执行）
 ================================================================================
-# 详解见：手册/dev/00-总详细手册.txt
-# 前置：已有 RELEASE_ID + CANDIDATE_MODEL_ID（及 baseline）
+# 对齐：docs/01-项目架构/工序总览.md · 工序三（引擎⑤，与训练解耦）
+# 详解：手册/dev/00-总详细手册.txt · docs/03-流水线/评测流水线.md
+# 已落地：docs/04-改进需求/已完成/005-评测流水线改进需求.md
+#         docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
 # 注意：跑前务必 unset 建集用的全局 QWEN_ASR_API_BASE，避免新旧模型串同一端口
 
 cd /data2/data-cp/lizi/audio-data-engine
 source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
 
 export BATCH=mt3000
-export RELEASE_ID=ds_${BATCH}_v1
-export CANDIDATE_MODEL_ID=qwen_sft_${BATCH}_v1
-export BASELINE_MODEL_ID=qwen_base_v1
-
+export EVAL_NAME="eval_${BATCH}"
 unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY QWEN_ASR_API_BASES
+export QWEN_ASR_API_KEY=dummy
 
-export EVAL_MANIFEST="$(audio-data release path "$RELEASE_ID" --split test)"
-export EVAL_OUTPUT="data/evaluations/${RELEASE_ID}_${CANDIDATE_MODEL_ID}.parquet"
+# ---------------------------------------------------------------------------
+# 场景 1：工序一金标 → 正式评测（推荐；与训练 / Registry 无依赖）
+# ---------------------------------------------------------------------------
+export EVAL_SOURCE="datasets/manifests/summary_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/manifests/gold_${BATCH}.parquet"
 
-# 1) Registry 双模型评测（服务器现场入口）
-audio-data pipeline run pipelines/evaluate_registered_models.yaml
+audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
+audio-data eval check "$EVAL_NAME"
+
+# 同 family：base + SFT 分端口（summary 已有 base 时可跳过）
+export QWEN_ASR_API_BASE=http://127.0.0.1:5560
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "$EVAL_NAME" --asr-run qwen
+
+export QWEN_ASR_API_BASE=http://127.0.0.1:5561
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch10
+
+export QWEN_ASR_API_BASE=http://127.0.0.1:5562
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch100
+
+audio-data pipeline run pipelines/eval_aggregate.yaml \
+  --eval-name "$EVAL_NAME" \
+  --join-manifest qwen \
+  --join-manifest qwen-sft-epoch10 \
+  --join-manifest qwen-sft-epoch100
+
+audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+  --eval-name "$EVAL_NAME" \
+  --eval-model qwen \
+  --eval-model qwen-sft-epoch10 \
+  --eval-model qwen-sft-epoch100
 
 # 输出：
-#   $EVAL_OUTPUT
-#   runs/<本次评测_run>/reports/evaluation.json
+#   datasets/manifests/eval_* / {alias}_asr_eval_* / eval_aggregate_* / eval_metrics_*
+#   runs/<本次评测_run>/reports/evaluation.json + evaluation.xlsx
 
-# 2) 可选：双 vLLM 大评测（端口分开，YAML 里各自 api_base）
-# # baseline → :5561，candidate → :5562，served-model-name = 各自 Registry ID
-# # 复制 pipelines/evaluate_registered_models.yaml 后改 api_base，再 run
+# ---------------------------------------------------------------------------
+# 场景 2：外源 xlsx → classify_external_gold → classified_ → 正式评测
+# ---------------------------------------------------------------------------
+# 前置：工序一已清洗 + 同 family ASR（--asr-run 与 --aggregate-base 一致）
+
+# audio-data pipeline run pipelines/classify_external_gold.yaml \
+#   --source-name "$BATCH" \
+#   --aggregate-base qwen3-asr \
+#   --external-gold path/to/外源金标.xlsx \
+#   --label-col label_text_raw \
+#   --force
+#
+# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
+# audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
+# audio-data eval check "$EVAL_NAME"
+# 其后同场景 1（可用已有 {alias}_asr_* 做 --join-manifest，或再 --eval-name 跑批）
+
+# 过渡旁路（不推荐，启动会 WARN）：scripts/run_eval_from_label_xlsx.py
+
+# ---------------------------------------------------------------------------
+# 兼容旧入口（不推荐）：Registry + 双端口串行
+# ---------------------------------------------------------------------------
+# export RELEASE_ID=ds_${BATCH}_v1
+# export CANDIDATE_MODEL_ID=qwen_sft_${BATCH}_v1
+# export BASELINE_MODEL_ID=qwen_base_v1
+# export EVAL_MANIFEST="$(audio-data release path "$RELEASE_ID" --split test)"
+# export EVAL_OUTPUT="data/evaluations/${RELEASE_ID}_${CANDIDATE_MODEL_ID}.parquet"
+# audio-data pipeline run pipelines/evaluate_registered_models.yaml

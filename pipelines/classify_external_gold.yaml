@@ -1,0 +1,32 @@
+# 工序一 · 外源金标路径：注入 xlsx 金标 → 外源感知分拣 → classified_*
+# 前置：①清洗 + ②同 family ASR（以 --aggregate-base / 默认 qwen 的 asr parquet 为底表）
+# 跳过：multi_asr_aggregate / asr_metric_pipeline（评测字准在工序三做）
+#
+# 例：
+#   audio-data pipeline run pipelines/classify_external_gold.yaml \
+#     --source-name "$BATCH" \
+#     --aggregate-base qwen3-asr \
+#     --external-gold path/to/金标.xlsx \
+#     --label-col label_text_raw \
+#     --force
+name: classify_external_gold
+input:
+  manifest: datasets/manifests/qwen_asr_source_A.parquet
+output:
+  manifest: datasets/manifests/classified_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: inject_external_gold
+    operator: quality.inject_external_gold
+    params:
+      # xlsx_path 由 CLI --external-gold 或环境变量 EXTERNAL_GOLD_XLSX 注入
+      label_col: label_text_raw
+      align_policy: intersection
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/external_gold_v1.yaml
+      # compare_model 可由 CLI --compare-model 覆盖；默认同 --aggregate-base

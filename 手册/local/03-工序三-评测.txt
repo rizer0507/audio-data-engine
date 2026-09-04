@@ -1,48 +1,63 @@
-工序三：评测（local · 一键执行）
+﻿工序三：评测（local · 一键执行）
 ================================================================================
-# 详解见：手册/local/00-总详细手册.txt
-# 前置：工序一已有 summary / gold；各权重 vLLM 已按端口起好
-# 与训练解耦：可不跑工序二
+# 对齐：docs/01-项目架构/工序总览.md · 工序三（引擎⑤，与训练解耦）
+# 详解：手册/local/00-总详细手册.txt · docs/03-流水线/评测流水线.md
+# 已落地：docs/04-改进需求/已完成/005-评测流水线改进需求.md
+#         docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
 
 cd D:/Work/audio-data-engine
 # source .venv/bin/activate
 
 export BATCH=local_test
 export QWEN_ASR_API_KEY=dummy
+export EVAL_NAME="eval_${BATCH}"
 
-# 1) 注册评测集
-audio-data eval register "datasets/manifests/summary_${BATCH}.parquet" --name "eval_${BATCH}"
-# 若还没有 summary parquet，可先用 classified_，或：
-# audio-data eval register "datasets/manifests/gold_${BATCH}.parquet" --name "eval_${BATCH}"
-audio-data eval check "eval_${BATCH}"
+# ---------------------------------------------------------------------------
+# 场景 1：工序一金标（summary_ / classified_ / gold_）→ 正式评测
+# ---------------------------------------------------------------------------
+export EVAL_SOURCE="datasets/manifests/summary_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/manifests/gold_${BATCH}.parquet"
 
-# 2) 各权重独立跑批（端口区分）
+audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
+audio-data eval check "$EVAL_NAME"
+
+# 同 family：base + SFT 各端口独立跑批（summary 已有 base 文本时可跳过 qwen）
 export QWEN_ASR_API_BASE=http://127.0.0.1:5561
 audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-  --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch10
+  --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch10
 
 export QWEN_ASR_API_BASE=http://127.0.0.1:5562
 audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-  --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch100
+  --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch100
 
-# 3) 按 id 聚拢
 audio-data pipeline run pipelines/eval_aggregate.yaml \
-  --eval-name "eval_${BATCH}" \
+  --eval-name "$EVAL_NAME" \
   --join-manifest qwen-sft-epoch10 \
   --join-manifest qwen-sft-epoch100
 
-# 4) 相对 gold_text 算字准 + 按 type 导出
 audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
-  --eval-name "eval_${BATCH}" \
+  --eval-name "$EVAL_NAME" \
   --eval-model qwen \
   --eval-model qwen-sft-epoch10 \
   --eval-model qwen-sft-epoch100
 
-# 可选：从 summary xlsx 一键评测
-# python scripts/run_eval_from_summary.py \
-#   --summary data/exports/summary_${BATCH}.xlsx \
-#   --model qwen-sft-e10=datasets/manifests/qwen-sft-e10_asr_sft-ep10.parquet \
-#   --model qwen-sft-e100=datasets/manifests/qwen-sft-e100_asr_sft-ep100.parquet \
-#   --eval-name eval_${BATCH} \
-#   --eval-model qwen1 --eval-model qwen-sft-e10 --eval-model qwen-sft-e100 \
+# ---------------------------------------------------------------------------
+# 场景 2：外源 xlsx → classify_external_gold → classified_ → 正式评测
+# ---------------------------------------------------------------------------
+# 前置：工序一已清洗 + 同 family ASR（--asr-run 与 --aggregate-base 一致）
+
+# audio-data pipeline run pipelines/classify_external_gold.yaml \
+#   --source-name "$BATCH" \
+#   --aggregate-base qwen3-asr \
+#   --external-gold path/to/外源金标.xlsx \
+#   --label-col label_text_raw \
 #   --force
+#
+# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
+# audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
+# audio-data eval check "$EVAL_NAME"
+# 其后同场景 1
+
+# 过渡旁路（不推荐，启动会 WARN）：scripts/run_eval_from_label_xlsx.py
+# 更薄只算 CER：scripts/eval_external_baseline_cer.py
