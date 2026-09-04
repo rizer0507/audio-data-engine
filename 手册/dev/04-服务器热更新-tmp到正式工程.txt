@@ -1,0 +1,80 @@
+服务器热更新：tmp → 正式工程（只加/覆盖，不删）
+================================================================================
+用途：
+  U 盘内容已拷到服务器 tmp 后，用本脚本把代码/配置/手册热更新进正式工程。
+  不碰资产与运行产物，保证服务器环境「只增加/覆盖，不减少」。
+
+路径：
+  tmp 打包目录：  /data2/data-cp/lizi/tmp/audio-data-engine
+  正式工程：      /data2/data-cp/lizi/audio-data-engine
+
+原则：
+  - 目录同步：有 rsync 用 rsync -a（不加 --delete）；无 rsync 用 cp -a
+  - 仅覆盖白名单同名路径；DST 多出来的文件/目录一律保留
+  - resources/manifest.yaml 含正式机 source path，默认不同步
+
+白名单目录（与 scripts/sync_to_usb.bat 一致）：
+  src  docs  pipelines  configs  tests  scripts  tasks  手册
+
+白名单根文件：
+  pyproject.toml  README.md  .gitignore  .env.example
+  文档.txt  单条流水线执行命令.txt  三条流水线执行手册.txt
+  全自动训练评测闭环执行手册-dev.txt
+  全自动训练评测闭环执行手册-local.txt
+  目录.txt
+
+明确不覆盖：
+  data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/  .env
+
+--------------------------------------------------------------------------------
+一键执行（Bash，在服务器上跑）
+--------------------------------------------------------------------------------
+
+SRC=/data2/data-cp/lizi/tmp/audio-data-engine
+DST=/data2/data-cp/lizi/audio-data-engine
+
+# 1) 代码与配置目录（增量覆盖，不 --delete）
+for d in src docs pipelines configs tests scripts tasks 手册; do
+  mkdir -p "$DST/$d"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --exclude '__pycache__/' --exclude '*.pyc' \
+      "$SRC/$d/" "$DST/$d/"
+  else
+    cp -a "$SRC/$d/." "$DST/$d/"
+  fi
+done
+
+# 2) 工程元数据 + 重要文档（显式白名单）
+for f in \
+  pyproject.toml \
+  README.md \
+  .gitignore \
+  .env.example \
+  文档.txt \
+  单条流水线执行命令.txt \
+  三条流水线执行手册.txt \
+  全自动训练评测闭环执行手册-dev.txt \
+  全自动训练评测闭环执行手册-local.txt \
+  目录.txt
+do
+  if [ -e "$SRC/$f" ]; then
+    cp -a "$SRC/$f" "$DST/$f"
+  fi
+done
+
+# 3) 可选：同步 resources（会覆盖正式机 source path，确认后再开）
+# mkdir -p "$DST/resources"
+# if command -v rsync >/dev/null 2>&1; then
+#   rsync -a --exclude '__pycache__/' "$SRC/resources/" "$DST/resources/"
+# else
+#   cp -a "$SRC/resources/." "$DST/resources/"
+# fi
+
+cd "$DST" && pip install -e .
+
+--------------------------------------------------------------------------------
+流程对照
+--------------------------------------------------------------------------------
+本机 → scripts/sync_to_usb.bat → U 盘 F:\audio-data-engine
+  → 拷到服务器 tmp → 本脚本 → 正式工程
+  → pip install -e .

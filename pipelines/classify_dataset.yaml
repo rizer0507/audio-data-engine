@@ -1,5 +1,5 @@
-# 工序③：在多 ASR 指标 Manifest 上执行有版本的有序分类规则。
-# 阈值必须先在人审校准集上验证，不能将模型一致率直接视为真实准确率。
+# 工序③：在多 ASR Manifest 上执行 selection_v1.1 共识分拣（type/decision/label）。
+# 配置：configs/selection/zh_asr_v1.yaml（engine: consensus_v1）
 name: classify_dataset
 input:
   manifest: datasets/manifests/multi_asr_metrics_source_A.parquet

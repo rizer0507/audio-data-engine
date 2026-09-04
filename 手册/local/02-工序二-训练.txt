@@ -1,0 +1,35 @@
+工序二：训练（local · 一键执行）
+================================================================================
+# 详解见：手册/local/00-总详细手册.txt
+# 前置：工序一已冻结 Release
+
+cd D:/Work/audio-data-engine
+# source .venv/bin/activate
+
+export BATCH=local_test
+export RELEASE_ID=ds_${BATCH}_v1
+export TRAIN_RECIPE=D:/Work/Qwen3-ASR-main/finetuning/qwen3_asr_sft.py
+export TRAIN_COMMAND="python D:/Work/Qwen3-ASR-main/finetuning/qwen3_asr_sft.py"
+export CANDIDATE_MODEL_ID=qwen_sft_${BATCH}_v1
+export CANDIDATE_CHECKPOINT=D:/Work/Qwen3-ASR-main/data/outputs/${CANDIDATE_MODEL_ID}
+
+# 1) 外部训练 + 注册
+audio-data training run \
+  --release "$RELEASE_ID" \
+  --recipe "$TRAIN_RECIPE" \
+  --command "$TRAIN_COMMAND" \
+  --checkpoint "$CANDIDATE_CHECKPOINT" \
+  --model-id "$CANDIDATE_MODEL_ID" \
+  --base-model qwen_asr
+
+audio-data model show "$CANDIDATE_MODEL_ID"
+
+# 2) 可选：注册 baseline（只需一次）
+# export BASELINE_MODEL_ID=qwen_base_v1
+# export BASELINE_CHECKPOINT=D:/Work/Qwen3-ASR-main/models/qwen3-asr-0.6b
+# export BASELINE_RELEASE_ID=ds_baseline_training_v1
+# audio-data model register \
+#   --id "$BASELINE_MODEL_ID" --base-model qwen_asr \
+#   --release "$BASELINE_RELEASE_ID" \
+#   --recipe D:/Work/Qwen3-ASR-main/finetuning/qwen3_asr_sft.py \
+#   --checkpoint "$BASELINE_CHECKPOINT" --status ready

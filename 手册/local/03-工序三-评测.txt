@@ -1,0 +1,48 @@
+工序三：评测（local · 一键执行）
+================================================================================
+# 详解见：手册/local/00-总详细手册.txt
+# 前置：工序一已有 summary / gold；各权重 vLLM 已按端口起好
+# 与训练解耦：可不跑工序二
+
+cd D:/Work/audio-data-engine
+# source .venv/bin/activate
+
+export BATCH=local_test
+export QWEN_ASR_API_KEY=dummy
+
+# 1) 注册评测集
+audio-data eval register "datasets/manifests/summary_${BATCH}.parquet" --name "eval_${BATCH}"
+# 若还没有 summary parquet，可先用 classified_，或：
+# audio-data eval register "datasets/manifests/gold_${BATCH}.parquet" --name "eval_${BATCH}"
+audio-data eval check "eval_${BATCH}"
+
+# 2) 各权重独立跑批（端口区分）
+export QWEN_ASR_API_BASE=http://127.0.0.1:5561
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch10
+
+export QWEN_ASR_API_BASE=http://127.0.0.1:5562
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch100
+
+# 3) 按 id 聚拢
+audio-data pipeline run pipelines/eval_aggregate.yaml \
+  --eval-name "eval_${BATCH}" \
+  --join-manifest qwen-sft-epoch10 \
+  --join-manifest qwen-sft-epoch100
+
+# 4) 相对 gold_text 算字准 + 按 type 导出
+audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+  --eval-name "eval_${BATCH}" \
+  --eval-model qwen \
+  --eval-model qwen-sft-epoch10 \
+  --eval-model qwen-sft-epoch100
+
+# 可选：从 summary xlsx 一键评测
+# python scripts/run_eval_from_summary.py \
+#   --summary data/exports/summary_${BATCH}.xlsx \
+#   --model qwen-sft-e10=datasets/manifests/qwen-sft-e10_asr_sft-ep10.parquet \
+#   --model qwen-sft-e100=datasets/manifests/qwen-sft-e100_asr_sft-ep100.parquet \
+#   --eval-name eval_${BATCH} \
+#   --eval-model qwen1 --eval-model qwen-sft-e10 --eval-model qwen-sft-e100 \
+#   --force

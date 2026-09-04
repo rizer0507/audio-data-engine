@@ -1,39 +1,55 @@
-policy_version: selection_zh_asr_v1_5
-default_bucket: review_queue
-gold_source_model: qwen1
-# 金标选取：auto_gold 时在非空转写中按 sample_id 稳定“随机”选一条作为 label/gold_text
-gold_pick: random
-# 一致判定：字准率(1-CER) ≥ 0.9 → max agreement CER ≤ 0.10
-gold_agreement_cer_max: 0.10
+# 工序③分拣策略：transcript consensus selection_v1.1
+# 无「字准率」；使用模型族感知的 transcript_similarity + medoid，禁止随机选金标。
+policy_version: selection_zh_asr_v1_6
+engine: consensus_v1
+rule_version: selection_v1.1
+
+strict_threshold: 0.95
+consensus_threshold: 0.90
+dominant_ratio: 0.75
+empty_ratio_for_hallucination: 0.75
+
+primary_family: qwen
+secondary_family: sensevoice
+
+model_families:
+  qwen:
+    - qwen
+    - qwen1
+    - qwen2
+  sensevoice:
+    - sensevoice
+    - sensevoice1
+    - sensevoice2
+  doubao:
+    - doubao
+    - doubao1
+    - doubao2
+  kimi:
+    - kimi
+    - kimi1
+    - kimi2
+
+semantic:
+  # negative 优先于 positive，避免「不需要」命中「需要」
+  negative:
+    - 暂时不需要
+    - 不考虑
+    - 没需要
+    - 不需要
+    - 不愿意
+    - 不可以
+    - 不用
+    - 不要
+  positive:
+    - 有需要
+    - 可以
+    - 愿意
+    - 考虑
+    - 需要
+    - 要
+
 voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml
-# 精确短语清空已在 asr_metric_pipeline 的 normalize_transcripts 中、CER 之前完成。
-# 全部转写为空：视为全局一致，但分到 noise；语音信箱话术 → voicemail。
+
 defaults:
   label_broken: false
-  qwen1_text: ""
-  all_transcripts_empty: false
-  voicemail_hit: false
-  quality_max_vs_base_agreement_cer: -1.0
-  quality_vs_base_hypothesis_count: 0
-rules:
-  - bucket: noise
-    reason: broken_or_invalid_audio
-    expr: "label_broken == True or duration <= 0"
-  - bucket: noise
-    reason: empty_asr_transcripts
-    expr: "all_transcripts_empty == True"
-  - bucket: voicemail
-    reason: voicemail_or_phone_assistant
-    expr: "voicemail_hit == True"
-  - bucket: review_queue
-    reason: empty_gold_source_transcript
-    expr: "qwen1_text == ''"
-  - bucket: review_queue
-    reason: missing_agreement_hypotheses
-    expr: "quality_vs_base_hypothesis_count < 1"
-  - bucket: auto_gold
-    reason: multi_asr_high_agreement
-    expr: "qwen1_text != '' and quality_vs_base_hypothesis_count >= 1 and quality_max_vs_base_agreement_cer <= 0.10"
-  - bucket: hardcase
-    reason: multi_asr_disagreement
-    expr: "quality_max_vs_base_agreement_cer > 0.10"

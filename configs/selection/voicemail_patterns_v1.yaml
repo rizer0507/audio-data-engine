@@ -1,4 +1,4 @@
-# 语音信箱 / 电话助理类转写识别（classify 用正则命中任一条即进 voicemail 桶）
+# 语音信箱 / 电话助理类转写识别（classify：需 ≥2 模型族命中才进 voicemail）
 # 在任意 ASR 转写文本上匹配（去标点后的 plain text + 可选 raw_text）。
 name: voicemail_patterns_v1
 version: 2

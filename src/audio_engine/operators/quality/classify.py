@@ -10,6 +10,10 @@ import yaml
 from audio_engine.core.operator import ManifestOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
+from audio_engine.core.selection_engine import (
+    SelectionConfig,
+    classify_sample,
+)
 from audio_engine.core.transcript_reconcile import (
     plain_transcript_text,
     rewrite_plain_transcript_entry,
@@ -19,7 +23,6 @@ from audio_engine.core.transcript_reconcile import (
 _NON_ASR_TEXT_FIELDS = frozenset(
     {"gold_text", "baseline_text", "label_text", "ref_text", "hyp_text"}
 )
-
 
 def _rewrite_plain_transcripts(sample: Sample) -> None:
     """Idempotent plain-text rewrite; blanking already happened before CER."""
@@ -113,7 +116,7 @@ def _pick_gold_transcript(
     gold_source_model: str,
     gold_pick: str,
 ) -> tuple[str, str]:
-    """Return (model_key, gold_text)."""
+    """Return (model_key, gold_text). Legacy expr-engine helper."""
     candidates = _nonempty_transcripts(sample)
     if not candidates:
         raise ValueError(f"auto_gold sample {sample.id} has no non-empty transcripts")
@@ -122,7 +125,6 @@ def _pick_gold_transcript(
         for model, text in candidates:
             if model == gold_source_model:
                 return model, text
-        # fall through to first non-empty if configured base is empty
         return candidates[0]
     if mode in {"random", "any"}:
         digest = hashlib.sha256(str(sample.id).encode("utf-8")).hexdigest()
@@ -131,12 +133,111 @@ def _pick_gold_transcript(
     raise ValueError(f"unsupported gold_pick={gold_pick!r}; use base|random")
 
 
+def _apply_expr_rules(
+    updated: list[Sample],
+    frame: pd.DataFrame,
+    *,
+    policy_version: str,
+    rules: list[dict],
+    default_bucket: str,
+    gold_source_model: str,
+    gold_pick: str,
+    operator_name: str,
+    operator_version: str,
+) -> list[Sample]:
+    decisions: list[tuple[str, list[str]]] = [(default_bucket, ["default"]) for _ in updated]
+    undecided = set(range(len(updated)))
+    for rule in rules:
+        expr = str(rule.get("expr") or "")
+        bucket = str(rule.get("bucket") or "")
+        reason = str(rule.get("reason") or "")
+        if not expr or not bucket or not reason:
+            raise ValueError("each classify rule requires expr, bucket and reason")
+        try:
+            matched = set(frame.query(expr, engine="python").index) & undecided
+        except Exception as exc:
+            raise ValueError(f"invalid classify expression {expr!r}: {exc}") from exc
+        for position in matched:
+            decisions[position] = (bucket, [reason])
+        undecided -= matched
+
+    for sample, (bucket, reasons) in zip(updated, decisions, strict=True):
+        sample.labels.update(
+            {
+                "classification_bucket": bucket,
+                "type": bucket,
+                "classification_reason_codes": reasons,
+                "selection_policy_version": policy_version,
+            }
+        )
+        if bucket == "auto_gold":
+            if not gold_source_model and gold_pick.lower() in {"base", "gold_source", "fixed"}:
+                raise ValueError("auto_gold classification requires gold_source_model")
+            model_key, gold_text = _pick_gold_transcript(
+                sample,
+                gold_source_model=gold_source_model,
+                gold_pick=gold_pick,
+            )
+            if not gold_text:
+                raise ValueError(
+                    f"auto_gold sample {sample.id} has empty Gold transcript"
+                )
+            sample.labels.update(
+                {
+                    "annotation_state": "auto_accepted",
+                    "gold_text": gold_text,
+                    "label": gold_text,
+                    "gold_source": model_key,
+                    "annotation_revision": policy_version,
+                    "decision": "auto_accept",
+                }
+            )
+        sample.mark_completed(operator_name)
+        sample.add_lineage(
+            operator_name,
+            operator_version,
+            {"policy_version": policy_version, "bucket": bucket, "reason_codes": reasons},
+        )
+    return updated
+
+
+def _apply_consensus_engine(
+    updated: list[Sample],
+    frame: pd.DataFrame,
+    *,
+    params: dict,
+    policy_version: str,
+    voicemail_pattern: re.Pattern[str] | None,
+    operator_name: str,
+    operator_version: str,
+) -> list[Sample]:
+    selection = SelectionConfig.from_params(params)
+    for index, sample in enumerate(updated):
+        if "label_broken" in frame.columns:
+            sample.labels["label_broken"] = bool(frame.loc[index, "label_broken"])
+        result = classify_sample(sample, selection, voicemail_pattern=voicemail_pattern)
+        sample.labels.update(result.to_labels(policy_version))
+        sample.mark_completed(operator_name)
+        sample.add_lineage(
+            operator_name,
+            operator_version,
+            {
+                "policy_version": policy_version,
+                "rule_version": result.rule_version,
+                "bucket": result.type,
+                "decision": result.decision,
+                "reason_codes": [result.reason],
+            },
+        )
+    return updated
+
+
 @register_operator
 class ClassifyOperator(ManifestOperator):
-    """Apply ordered, versioned selection rules and retain an auditable reason code."""
+    """Apply versioned selection rules; prefer consensus engine over expr rules."""
 
     name = "classify"
-    version = "1.3.0"
+    version = "2.0.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -145,14 +246,17 @@ class ClassifyOperator(ManifestOperator):
             loaded = yaml.safe_load(Path(params["config_path"]).read_text(encoding="utf-8")) or {}
             params = {**loaded, **params}
         policy_version = str(params.get("policy_version") or "")
-        rules = params.get("rules") or []
-        default_bucket = str(params.get("default_bucket", "review_queue"))
-        gold_source_model = str(params.get("gold_source_model", ""))
-        gold_pick = str(params.get("gold_pick", "base"))
         if not policy_version:
             raise ValueError("quality.classify requires policy_version")
-        if not isinstance(rules, list) or not rules:
-            raise ValueError("quality.classify requires non-empty ordered rules")
+
+        engine = str(params.get("engine") or "").strip().lower()
+        rules = params.get("rules") or []
+        use_consensus = engine in {"consensus", "consensus_v1", "selection_v1.1"} or (
+            not rules and engine != "expr"
+        )
+        if not use_consensus:
+            if not isinstance(rules, list) or not rules:
+                raise ValueError("quality.classify requires non-empty ordered rules")
 
         voicemail_pattern = _load_voicemail_patterns(params.get("voicemail_patterns_path"))
 
@@ -170,56 +274,25 @@ class ClassifyOperator(ManifestOperator):
         _mark_all_transcripts_empty(frame)
         _mark_voicemail_hits(frame, updated, voicemail_pattern)
 
-        decisions: list[tuple[str, list[str]]] = [(default_bucket, ["default"]) for _ in updated]
-        undecided = set(range(len(updated)))
-        for rule in rules:
-            expr = str(rule.get("expr") or "")
-            bucket = str(rule.get("bucket") or "")
-            reason = str(rule.get("reason") or "")
-            if not expr or not bucket or not reason:
-                raise ValueError("each classify rule requires expr, bucket and reason")
-            try:
-                matched = set(frame.query(expr, engine="python").index) & undecided
-            except Exception as exc:
-                raise ValueError(f"invalid classify expression {expr!r}: {exc}") from exc
-            for position in matched:
-                decisions[position] = (bucket, [reason])
-            undecided -= matched
+        if use_consensus:
+            return _apply_consensus_engine(
+                updated,
+                frame,
+                params=params,
+                policy_version=policy_version,
+                voicemail_pattern=voicemail_pattern,
+                operator_name=self.full_name,
+                operator_version=self.version,
+            )
 
-        for sample, (bucket, reasons) in zip(updated, decisions, strict=True):
-            sample.labels.update(
-                {
-                    "classification_bucket": bucket,
-                    "type": bucket,
-                    "classification_reason_codes": reasons,
-                    "selection_policy_version": policy_version,
-                }
-            )
-            if bucket == "auto_gold":
-                if not gold_source_model and gold_pick.lower() in {"base", "gold_source", "fixed"}:
-                    raise ValueError("auto_gold classification requires gold_source_model")
-                model_key, gold_text = _pick_gold_transcript(
-                    sample,
-                    gold_source_model=gold_source_model,
-                    gold_pick=gold_pick,
-                )
-                if not gold_text:
-                    raise ValueError(
-                        f"auto_gold sample {sample.id} has empty Gold transcript"
-                    )
-                sample.labels.update(
-                    {
-                        "annotation_state": "auto_accepted",
-                        "gold_text": gold_text,
-                        "label": gold_text,
-                        "gold_source": model_key,
-                        "annotation_revision": policy_version,
-                    }
-                )
-            sample.mark_completed(self.full_name)
-            sample.add_lineage(
-                self.full_name,
-                self.version,
-                {"policy_version": policy_version, "bucket": bucket, "reason_codes": reasons},
-            )
-        return updated
+        return _apply_expr_rules(
+            updated,
+            frame,
+            policy_version=policy_version,
+            rules=rules,
+            default_bucket=str(params.get("default_bucket", "review_queue")),
+            gold_source_model=str(params.get("gold_source_model", "")),
+            gold_pick=str(params.get("gold_pick", "base")),
+            operator_name=self.full_name,
+            operator_version=self.version,
+        )

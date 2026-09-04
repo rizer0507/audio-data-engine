@@ -92,6 +92,15 @@ def _review_queue_id(dataset_path: Path, buckets: list[str], revision: str) -> s
     return f"review_{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
 
 
+_DEFAULT_REVIEW_BUCKETS = [
+    "qwen_missing",
+    "hardcase",
+    "hallucination",
+    "semantic_inversion",
+    "review_queue",
+]
+
+
 def _apply_aggregate_manifests(cfg: PipelineConfig, manifests: list[dict]) -> None:
     """Patch ``quality.aggregate_manifests`` step params with resolved join list."""
     updated = False
@@ -964,12 +973,26 @@ def release_build(
     else:
         source_path = _resolve_dataset(dataset)
     full_manifest = Manifest.load(source_path)
+    pending_types = {
+        "review_queue",
+        "qwen_missing",
+        "hardcase",
+        "hallucination",
+        "semantic_inversion",
+    }
     unresolved = [
         sample.id
         for sample in full_manifest
-        if sample.labels.get("classification_bucket") in {"review_queue", "hardcase"}
-        and sample.labels.get("annotation_state")
+        if sample.labels.get("annotation_state")
         not in {"human_accepted", "auto_accepted", "rejected"}
+        and (
+            sample.labels.get("decision") in {"model_review", "manual_review"}
+            or sample.labels.get("classification_bucket") in pending_types
+            or (
+                sample.labels.get("classification_bucket") == "voicemail"
+                and sample.labels.get("decision") != "auto_accept"
+            )
+        )
     ]
     if unresolved and not allow_unresolved_review:
         raise typer.BadParameter(
@@ -1138,13 +1161,18 @@ def review_export(
     dataset: str = typer.Argument(...),
     output: Path = typer.Option(..., "--output", "-o"),
     bucket: Optional[list[str]] = typer.Option(
-        None, "--bucket", help="Bucket to review; repeatable (default: review_queue)"
+        None,
+        "--bucket",
+        help=(
+            "Bucket to review; repeatable "
+            "(default: qwen_missing/hardcase/hallucination/semantic_inversion/review_queue)"
+        ),
     ),
     revision: str = typer.Option(..., "--revision"),
 ) -> None:
     dataset_path = _resolve_dataset(dataset)
     manifest = Manifest.load(dataset_path)
-    buckets = bucket or ["review_queue"]
+    buckets = bucket or list(_DEFAULT_REVIEW_BUCKETS)
     queue_id = _review_queue_id(dataset_path, buckets, revision)
     rows = []
     for sample in manifest:
@@ -1186,19 +1214,23 @@ def review_export_gold(
     bucket: Optional[list[str]] = typer.Option(
         None,
         "--bucket",
-        help="Bucket to collect; repeatable (default: auto_gold)",
+        help="Bucket to collect; repeatable (default: auto_gold + consensus_gold)",
     ),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
-    """Export multi-ASR agreement gold (auto_gold) with label column and optional Manifest."""
+    """Export auto-accepted gold (auto_gold / consensus_gold) with label column."""
     dataset_path = _resolve_dataset(dataset)
     manifest = Manifest.load(dataset_path)
-    buckets = bucket or ["auto_gold"]
+    buckets = bucket or ["auto_gold", "consensus_gold"]
     gold_samples = []
     rows = []
     missing_gold: list[str] = []
     for sample in manifest:
         if sample.labels.get("classification_bucket") not in buckets:
+            continue
+        # Only export auto-accepted (or legacy rows without decision).
+        decision = str(sample.labels.get("decision") or "").strip()
+        if decision and decision not in {"auto_accept", ""}:
             continue
         gold_text = str(sample.labels.get("gold_text") or sample.labels.get("label") or "").strip()
         if not gold_text:
@@ -1289,7 +1321,7 @@ def review_import(
         raise typer.BadParameter(f"review file missing columns: {sorted(missing)}")
     if frame["sample_id"].duplicated().any():
         raise typer.BadParameter("review file contains duplicate sample_id")
-    buckets = bucket or ["review_queue"]
+    buckets = bucket or list(_DEFAULT_REVIEW_BUCKETS)
     expected_queue_id = _review_queue_id(dataset_path, buckets, expected_revision)
     if set(frame["queue_id"]) != {expected_queue_id}:
         raise typer.BadParameter(f"review queue identity mismatch: expected {expected_queue_id}")
@@ -1393,7 +1425,7 @@ def review_export_summary(
 ) -> None:
     """Export full-batch summary xlsx with type=classification_bucket.
 
-    工序金标汇总总表：type ∈ {auto_gold, hardcase, noise, review_queue}。
+    工序金标汇总总表：type=classification_bucket（含 consensus_gold / qwen_missing 等）。
     输入一般为 review import 后的 reviewed_*.parquet；人审搁置时也可用 classified_*.
     """
     dataset_path = _resolve_dataset(dataset)

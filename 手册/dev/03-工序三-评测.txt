@@ -1,0 +1,29 @@
+工序三：评测（dev · 一键执行）
+================================================================================
+# 详解见：手册/dev/00-总详细手册.txt
+# 前置：已有 RELEASE_ID + CANDIDATE_MODEL_ID（及 baseline）
+# 注意：跑前务必 unset 建集用的全局 QWEN_ASR_API_BASE，避免新旧模型串同一端口
+
+cd /data2/data-cp/lizi/audio-data-engine
+source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
+
+export BATCH=mt3000
+export RELEASE_ID=ds_${BATCH}_v1
+export CANDIDATE_MODEL_ID=qwen_sft_${BATCH}_v1
+export BASELINE_MODEL_ID=qwen_base_v1
+
+unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY QWEN_ASR_API_BASES
+
+export EVAL_MANIFEST="$(audio-data release path "$RELEASE_ID" --split test)"
+export EVAL_OUTPUT="data/evaluations/${RELEASE_ID}_${CANDIDATE_MODEL_ID}.parquet"
+
+# 1) Registry 双模型评测（服务器现场入口）
+audio-data pipeline run pipelines/evaluate_registered_models.yaml
+
+# 输出：
+#   $EVAL_OUTPUT
+#   runs/<本次评测_run>/reports/evaluation.json
+
+# 2) 可选：双 vLLM 大评测（端口分开，YAML 里各自 api_base）
+# # baseline → :5561，candidate → :5562，served-model-name = 各自 Registry ID
+# # 复制 pipelines/evaluate_registered_models.yaml 后改 api_base，再 run

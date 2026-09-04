@@ -1,0 +1,40 @@
+工序二：训练（dev · 一键执行）
+================================================================================
+# 详解见：手册/dev/00-总详细手册.txt
+# 前置：工序一已冻结 Release（有 RELEASE_ID）
+
+cd /data2/data-cp/lizi/audio-data-engine
+source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
+
+export BATCH=mt3000
+export RELEASE_ID=ds_${BATCH}_v1
+export TRAIN_RECIPE=/data2/data-cp/lizi/trainer/recipes/qwen_sft_v3.yaml
+export TRAIN_COMMAND="python /data2/data-cp/lizi/trainer/train.py"
+export CANDIDATE_MODEL_ID=qwen_sft_${BATCH}_v1
+export CANDIDATE_CHECKPOINT=/data2/data-cp/zcl/models/${CANDIDATE_MODEL_ID}
+
+# 1) 外部训练 + 注册 candidate
+audio-data training run \
+  --release "$RELEASE_ID" \
+  --recipe "$TRAIN_RECIPE" \
+  --command "$TRAIN_COMMAND" \
+  --checkpoint "$CANDIDATE_CHECKPOINT" \
+  --model-id "$CANDIDATE_MODEL_ID" \
+  --base-model qwen_asr
+
+audio-data model show "$CANDIDATE_MODEL_ID"
+
+# 2) 可选：首次注册 baseline（只需一次）
+# export BASELINE_MODEL_ID=qwen_base_v1
+# export BASELINE_CHECKPOINT=/data2/data-cp/zcl/models/qwen_base_v1
+# export BASELINE_RELEASE_ID=ds_baseline_training_v1
+# audio-data model register \
+#   --id "$BASELINE_MODEL_ID" --base-model qwen_asr \
+#   --release "$BASELINE_RELEASE_ID" \
+#   --recipe /data2/data-cp/lizi/trainer/recipes/baseline_original.yaml \
+#   --checkpoint "$BASELINE_CHECKPOINT" --status ready
+
+# 3) 可选：训练+评测 Task DAG
+# cp tasks/train_and_evaluate.example.yaml tasks/train_and_evaluate_${BATCH}.yaml
+# # 改 YAML 里 release/recipe/checkpoint/model id 后：
+# audio-data task run "tasks/train_and_evaluate_${BATCH}.yaml"

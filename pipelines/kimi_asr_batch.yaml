@@ -7,7 +7,7 @@
 #   1. input 须含 resampled_16k
 #   2. 先启动 vLLM
 #   3. scripts/probe_kimi_vllm.py 的单 WAV 和 WAV 目录探针均通过
-#      （见 docs/流水线改进/构造kimi-audio识别流水线.md）
+#      （见 docs/07-操作手册/Kimi-Audio-vLLM识别流水线.md）
 #
 # 环境变量：
 #   KIMI_ASR_API_BASE   默认 http://127.0.0.1:5554

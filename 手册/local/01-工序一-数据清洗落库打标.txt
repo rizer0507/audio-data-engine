@@ -1,0 +1,76 @@
+工序一：数据清洗落库打标（local · 一键执行）
+================================================================================
+# 详解见：手册/local/00-总详细手册.txt
+# 前置：另开终端已起好 Qwen vLLM（例：port 5559 / 5560）
+# 改批次只改 BATCH / SOURCE_DIR
+
+cd D:/Work/audio-data-engine
+# source .venv/bin/activate   # 或 .\.venv\Scripts\Activate.ps1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+export BATCH=local_test
+export SOURCE_DIR=D:/Work/asr数据/test_wav
+export QWEN_ASR_API_KEY=dummy
+export SENSEVOICE_MODEL_PATH=D:/Work/models/SenseVoiceSmall
+
+# 1) 清洗落库
+audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
+  --source-name "$BATCH" \
+  --source-dir "$SOURCE_DIR"
+
+# 2) 同源多 ASR（别名可按需增减）
+export QWEN_ASR_API_BASE=http://127.0.0.1:5559
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run qwen1
+
+export QWEN_ASR_API_BASE=http://127.0.0.1:5560
+audio-data pipeline run pipelines/qwen_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run qwen2
+
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run sensevoice1
+
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run sensevoice2
+
+# 可选：
+# audio-data pipeline run pipelines/doubao_asr_batch.yaml \
+#   --source-name "$BATCH" --asr-run doubao1
+
+# 3) 聚合 + 字准 + 分拣 + 汇总
+audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
+  --source-name "$BATCH" \
+  --aggregate-base qwen1 \
+  --join-manifest qwen2 \
+  --join-manifest sensevoice1 \
+  --join-manifest sensevoice2 \
+  --force
+# 有 doubao1 时再加：--join-manifest doubao1
+
+audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
+  --source-name "$BATCH" \
+  --agreement-base qwen1 \
+  --force
+
+audio-data pipeline run pipelines/classify_dataset.yaml \
+  --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
+  --output-manifest "datasets/manifests/classified_${BATCH}.parquet" \
+  --force
+
+audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+  --output "data/exports/summary_${BATCH}.xlsx" \
+  --max-rows 20000
+
+# 4) 可选：导出金标 / 人审 / Release（详解见总手册）
+# audio-data review export-gold "datasets/manifests/classified_${BATCH}.parquet" \
+#   --output "data/exports/auto_gold_${BATCH}.xlsx" \
+#   --output-manifest "datasets/manifests/gold_${BATCH}.parquet"
+# audio-data release build "datasets/manifests/gold_${BATCH}.parquet" \
+#   --id "ds_${BATCH}_v1_auto_gold" \
+#   --policy-version selection_zh_asr_v1_2 \
+#   --normalization-version zh_asr_v1 \
+#   --gold-revision "auto_${BATCH}" \
+#   --group-key conversation_id \
+#   --stratify-key classification_bucket \
+#   --split-seed 42 --train-ratio 0.8 --dev-ratio 0.1 --test-ratio 0.1

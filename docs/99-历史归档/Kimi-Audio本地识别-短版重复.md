@@ -2,7 +2,7 @@
 
 Kimi 的标准入口 `asr.kimi` / `asr.kimi_batch` 使用 vLLM HTTP；本地权重直载由
 `asr.kimi_audio` / `asr.kimi_audio_batch` 作为**独立**入口提供。本页只说明本地模式；
-vLLM 的探针与 Parquet 批量流程见 `docs/流水线改进/构造kimi-audio识别流水线.md`。
+vLLM 的探针与 Parquet 批量流程见 `docs/07-操作手册/Kimi-Audio-vLLM识别流水线.md`。
 
 ## 安装与配置
 

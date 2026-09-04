@@ -1,37 +1,85 @@
-# Audio Data Engine Documentation
+# Audio Data Engine 文档
 
-## Architecture
+> **`01-项目架构/`、`02-规范规则/`、`03-流水线/` 共同描述项目当前真实状态。**
+>
+> **`04-改进需求/` 中的设计不能默认认为已经实现。**
+>
+> **`99-历史归档/` 中的内容不得作为当前开发依据。**
 
-系统整体设计：
+本目录是项目中文文档体系入口，供人与 Cursor / Codex 等 AI Coding Agent 首先阅读以定位上下文。
 
-- [Architecture Overview](architecture/overview.md)
-- [Repository Structure](architecture/repository-structure.md)
-- [Data Flow](architecture/data-flow.md)
+---
 
-## Specifications
+## 项目架构
 
-当前有效规则：
+系统目前怎么组成：
 
-- [Data Classification](specs/data-classification.md)
-- [Dataset Schema](specs/dataset-schema.md)
-- [CER Definition](specs/cer-definition.md)
+- [工序总览](01-项目架构/工序总览.md) — 工序①–⑤ 与现行 CLI 对齐的总览（优先阅读）
+- [Manifest 驱动数据引擎架构](01-项目架构/Manifest驱动数据引擎架构.md) — 分层 / Operator / Manifest 总蓝图（含部分未落地愿景，见文内说明）
 
-## Pipelines
+## 规范规则
 
-当前生产流水线：
+系统目前必须遵守的规则（Single Source of Truth）：
 
-- [Data Cleaning](pipelines/data-cleaning.md)
-- [Multi ASR](pipelines/multi-asr-aggregate.md)
-- [Data Selection](pipelines/data-selection.md)
-- [Evaluation](pipelines/evaluation.md)
+- [数据源登记规范](02-规范规则/数据源登记规范.md) — `resources/manifest.yaml` 字段与登记约定
+- [数据挑选规则](02-规范规则/数据挑选规则.md) — 与 `configs/selection/zh_asr_v1.yaml` 一致的现行分拣规则
 
-## Active Proposals
+## 流水线
 
-当前开发需求：
+当前已确定或已投入使用的流水线：
 
-- [RFC-001 Data Selection](proposals/active/RFC-001-data-selection.md)
-- [RFC-002 CER Refactor](proposals/active/RFC-002-cer-refactor.md)
+- [数据源落入流水线](03-流水线/数据源落入流水线.md)
+- [数据清洗流水线](03-流水线/数据清洗流水线.md)
+- [评测流水线](03-流水线/评测流水线.md)
 
-## Architecture Decisions
+多模型 ASR / 聚合 / 字准的现行说明见 [工序总览](01-项目架构/工序总览.md) 工序②；操作细节见下方操作手册。
 
-- [ADR-001 ...](decisions/ADR-001-xxx.md)
+## 进行中的改进需求
+
+- [002-全自动训练评测闭环](04-改进需求/进行中/002-全自动训练评测闭环.md)
+- [003-挑选规则完善草案](04-改进需求/进行中/003-挑选规则完善草案.md)（已过时，见已完成 010）
+- [004-数据标注流水线草案](04-改进需求/进行中/004-数据标注流水线草案.md)
+- [005-指标引擎统一重构](04-改进需求/进行中/005-指标引擎统一重构.md)
+
+目录说明与需求模板：[04-改进需求/README](04-改进需求/README.md)、[需求文档模板](04-改进需求/需求文档模板.md)
+
+## 已完成的改进需求
+
+- [001-数据清洗并发改进](04-改进需求/已完成/001-数据清洗并发改进.md)
+- [002-工序②ASR聚合解耦](04-改进需求/已完成/002-工序②ASR聚合解耦.md)
+- [003–009](04-改进需求/已完成/) — source-name、同源多 ASR、金标导出、评测解耦、Qwen vLLM 等
+- [010-挑选规则重构](04-改进需求/已完成/010-挑选规则重构.md) — consensus 引擎 / medoid / 8 类分桶
+
+## 设计决策
+
+- [设计决策索引](05-设计决策/README.md) — 正式 ADR 待抽离；决策线索见该页
+
+## 变更记录
+
+- [2026-08](06-变更记录/2026-08.md)
+- [2026-09](06-变更记录/2026-09.md)
+
+## 操作手册
+
+- [流水线构建-AI执行手册](07-操作手册/流水线构建-AI执行手册.md)
+- [Qwen-ASR识别流水线](07-操作手册/Qwen-ASR识别流水线.md)
+- [SenseVoice识别流水线](07-操作手册/SenseVoice识别流水线.md)
+- [Kimi-Audio-vLLM识别流水线](07-操作手册/Kimi-Audio-vLLM识别流水线.md)
+- [Kimi-Audio-本地识别流水线](07-操作手册/Kimi-Audio-本地识别流水线.md)
+- [外源基线字准率脚本](07-操作手册/外源基线字准率脚本.md)
+- [豆包ASR-API参考](07-操作手册/豆包ASR-API参考.md)
+
+仓库根目录另有 `全自动训练评测闭环执行手册-local.txt` / `-dev.txt`、`单条流水线执行命令.txt` 等运维命令汇集，与本文档互补。
+
+## 历史归档
+
+- [归档说明](99-历史归档/README.md)
+
+---
+
+## Agent 阅读建议
+
+1. 先读本 README，再读 [工序总览](01-项目架构/工序总览.md)
+2. 改规则前查 `02-规范规则/`；改流水线前查 `03-流水线/` 与 `07-操作手册/`
+3. 实施新需求时只信任 `04-改进需求/进行中/` 中明确标注的目标，并与配置 / 代码交叉验证
+4. 忽略 `99-历史归档/` 的规范效力

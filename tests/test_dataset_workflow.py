@@ -59,10 +59,6 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
                 "sensevoice": {"text": "<|withitn|>。"},
                 "doubao": {"text": ""},
             },
-            quality={
-                "max_vs_base_agreement_cer": 0.0,
-                "vs_base_hypothesis_count": 2,
-            },
         ),
         Sample(
             id="voicemail",
@@ -72,10 +68,6 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
                 "qwen": {"text": "您好，这里是语音信箱，请留言"},
                 "sensevoice": {"text": "您好这里是语音信箱请留言"},
             },
-            quality={
-                "max_vs_base_agreement_cer": 0.0,
-                "vs_base_hypothesis_count": 1,
-            },
         ),
         Sample(
             id="gold_empty",
@@ -84,10 +76,6 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
             transcripts={
                 "qwen": {"text": ""},
                 "sensevoice": {"text": "<|zh|>还有字"},
-            },
-            quality={
-                "max_vs_base_agreement_cer": 2.0,
-                "vs_base_hypothesis_count": 1,
             },
         ),
         Sample(
@@ -99,10 +87,6 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
                 "sensevoice": {"text": "<|zh|><|NEUTRAL|>你好世界。"},
                 "doubao": {"text": "你好世界"},
             },
-            quality={
-                "max_vs_base_agreement_cer": 0.0,
-                "vs_base_hypothesis_count": 2,
-            },
         ),
         Sample(
             id="near_agree",
@@ -111,10 +95,6 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
             transcripts={
                 "qwen": {"text": "不需要贷款"},
                 "sensevoice": {"text": "不需要贷"},
-            },
-            quality={
-                "max_vs_base_agreement_cer": 0.05,
-                "vs_base_hypothesis_count": 1,
             },
         ),
         Sample(
@@ -125,10 +105,6 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
                 "qwen": {"text": "不需要"},
                 "sensevoice": {"text": "需要"},
             },
-            quality={
-                "max_vs_base_agreement_cer": 1.0 / 3.0,
-                "vs_base_hypothesis_count": 1,
-            },
         ),
         Sample(
             id="hard",
@@ -138,19 +114,22 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
                 "qwen": {"text": "今天天气很好"},
                 "sensevoice": {"text": "明天不用来了"},
             },
-            quality={
-                "max_vs_base_agreement_cer": 0.8,
-                "vs_base_hypothesis_count": 1,
-            },
         ),
         Sample(
             id="no_hyp",
             source_path="solo.wav",
             duration=2.0,
             transcripts={"qwen": {"text": "只有base"}},
-            quality={
-                "max_vs_base_agreement_cer": None,
-                "vs_base_hypothesis_count": 0,
+        ),
+        Sample(
+            id="consensus",
+            source_path="cg.wav",
+            duration=2.0,
+            transcripts={
+                "qwen1": {"text": "不需要"},
+                "qwen2": {"text": "不需要"},
+                "sensevoice1": {"text": "不需要"},
+                "sensevoice2": {"text": "不需要办理这个"},
             },
         ),
     ]
@@ -161,21 +140,19 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
     by_id = {sample.id: sample for sample in result}
     assert by_id["both_empty"].labels["classification_bucket"] == "noise"
     assert by_id["both_empty"].labels["type"] == "noise"
+    assert by_id["both_empty"].labels["decision"] == "auto_empty"
     assert by_id["both_empty"].labels["classification_reason_codes"] == [
         "empty_asr_transcripts"
     ]
     assert by_id["voicemail"].labels["classification_bucket"] == "voicemail"
     assert by_id["voicemail"].labels["type"] == "voicemail"
-    assert by_id["voicemail"].labels["classification_reason_codes"] == [
-        "voicemail_or_phone_assistant"
-    ]
-    assert by_id["gold_empty"].labels["classification_bucket"] == "review_queue"
-    assert by_id["gold_empty"].labels["type"] == "review_queue"
-    assert by_id["gold_empty"].labels["classification_reason_codes"] == [
-        "empty_gold_source_transcript"
-    ]
+    assert by_id["voicemail"].labels["decision"] == "auto_accept"
+    assert by_id["gold_empty"].labels["classification_bucket"] == "qwen_missing"
+    assert by_id["gold_empty"].labels["type"] == "qwen_missing"
+    assert by_id["gold_empty"].labels["decision"] == "model_review"
     assert by_id["agree"].labels["classification_bucket"] == "auto_gold"
     assert by_id["agree"].labels["type"] == "auto_gold"
+    assert by_id["agree"].labels["decision"] == "auto_accept"
     assert by_id["agree"].labels["gold_text"] == "你好世界"
     assert by_id["agree"].labels["label"] == "你好世界"
     assert by_id["agree"].labels["gold_source"] in {"qwen", "sensevoice", "doubao"}
@@ -184,16 +161,14 @@ def test_classify_zh_asr_v1_excludes_empty_and_keeps_plain_text():
     assert by_id["agree"].transcripts["sensevoice"]["extra"]["raw_text"] == (
         "<|zh|><|NEUTRAL|>你好世界。"
     )
-    assert by_id["near_agree"].labels["classification_bucket"] == "auto_gold"
-    assert by_id["near_agree"].labels["gold_text"] in {"不需要贷款", "不需要贷"}
-    assert by_id["near_agree"].labels["gold_source"] in {"qwen", "sensevoice"}
-    assert by_id["one_char_diff"].labels["classification_bucket"] == "hardcase"
-    assert by_id["one_char_diff"].labels["type"] == "hardcase"
+    # similarity≈0.8 < 0.90 → hardcase（不再因 CER≤0.10 进 auto_gold）
+    assert by_id["near_agree"].labels["classification_bucket"] == "hardcase"
+    assert by_id["one_char_diff"].labels["classification_bucket"] == "semantic_inversion"
+    assert by_id["one_char_diff"].labels["type"] == "semantic_inversion"
     assert by_id["hard"].labels["classification_bucket"] == "hardcase"
-    assert by_id["no_hyp"].labels["classification_bucket"] == "review_queue"
-    assert by_id["no_hyp"].labels["classification_reason_codes"] == [
-        "missing_agreement_hypotheses"
-    ]
+    assert by_id["no_hyp"].labels["classification_bucket"] == "hardcase"
+    assert by_id["consensus"].labels["classification_bucket"] == "consensus_gold"
+    assert by_id["consensus"].labels["label"] == "不需要"
 
 
 def test_export_summary_writes_type_and_splits_xlsx(tmp_path, monkeypatch):

@@ -54,7 +54,7 @@ def main() -> None:
         "src/audio_engine/cli/main.py",
         ".gitignore",
         "tests/test_dataset_workflow.py",
-        "docs/流水线改进/全自动训练与评测闭环改造方案.md",
+        "docs/04-改进需求/进行中/002-全自动训练评测闭环.md",
     ]
     for rel in files:
         text = load_text(root, rel)
