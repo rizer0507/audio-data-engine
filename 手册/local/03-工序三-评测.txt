@@ -4,17 +4,20 @@
 # 详解：手册/local/00-总详细手册.txt · docs/03-流水线/评测流水线.md
 # 已落地：docs/04-改进需求/已完成/005-评测流水线改进需求.md
 #         docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
+#
+# 注意：先 export BATCH / EVAL_NAME，再写依赖它们的变量（EVAL_SOURCE 等）
 
 cd D:/Work/audio-data-engine
 # source .venv/bin/activate
 
-export BATCH=local_test
-export QWEN_ASR_API_KEY=dummy
+export BATCH=mt3000
 export EVAL_NAME="eval_${BATCH}"
+export QWEN_ASR_API_KEY=dummy
 
 # ---------------------------------------------------------------------------
 # 场景 1：工序一金标（summary_ / classified_ / gold_）→ 正式评测
 # ---------------------------------------------------------------------------
+# 本场景会再按 --eval-name 跑批，产物为 {alias}_asr_${EVAL_NAME}.parquet
 export EVAL_SOURCE="datasets/manifests/summary_${BATCH}.parquet"
 # export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
 # export EVAL_SOURCE="datasets/manifests/gold_${BATCH}.parquet"
@@ -22,7 +25,6 @@ export EVAL_SOURCE="datasets/manifests/summary_${BATCH}.parquet"
 audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
 audio-data eval check "$EVAL_NAME"
 
-# 同 family：base + SFT 各端口独立跑批（summary 已有 base 文本时可跳过 qwen）
 export QWEN_ASR_API_BASE=http://127.0.0.1:5561
 audio-data pipeline run pipelines/qwen_asr_batch.yaml \
   --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch10
@@ -45,19 +47,44 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 # ---------------------------------------------------------------------------
 # 场景 2：外源 xlsx → classify_external_gold → classified_ → 正式评测
 # ---------------------------------------------------------------------------
-# 前置：工序一已清洗 + 同 family ASR（--asr-run 与 --aggregate-base 一致）
-
-# audio-data pipeline run pipelines/classify_external_gold.yaml \
-#   --source-name "$BATCH" \
-#   --aggregate-base qwen3-asr \
-#   --external-gold path/to/外源金标.xlsx \
-#   --label-col label_text_raw \
-#   --force
+# 前置：工序一已清洗 + 同 family ASR，已有例如：
+#   qwen3-asr_asr_${BATCH}.parquet
+#   qwen3-asr-sft-e10_asr_${BATCH}.parquet
+#   qwen3-asr-sft-e100_asr_${BATCH}.parquet
 #
-# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
-# audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
-# audio-data eval check "$EVAL_NAME"
-# 其后同场景 1
+# 要点：工序一 ASR 在 --source-name 下；eval_aggregate 默认按 --eval-name
+# 找 {alias}_asr_eval_*.parquet。复用工序一产物时必须写「alias=显式路径」。
+# classified_ 里通常已有 base（aggregate-base）转写，不要再 join 同名 base。
+
+audio-data pipeline run pipelines/classify_external_gold.yaml \
+  --source-name "$BATCH" \
+  --aggregate-base qwen3-asr \
+  --external-gold "D:/Work/audio-data-engine/tmp/0904/AI面谈提示词原版测试字准率.xlsx" \
+  --label-col label_text_raw \
+  --force
+
+export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
+audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME" --force
+audio-data eval check "$EVAL_NAME"
+
+# 复用工序一已有 SFT 识别（显式路径；勿写裸 alias）
+audio-data pipeline run pipelines/eval_aggregate.yaml \
+  --eval-name "$EVAL_NAME" \
+  --join-manifest "qwen3-asr-sft-e10=datasets/manifests/qwen3-asr-sft-e10_asr_${BATCH}.parquet" \
+  --join-manifest "qwen3-asr-sft-e100=datasets/manifests/qwen3-asr-sft-e100_asr_${BATCH}.parquet" \
+  --force
+
+# base=qwen3-asr 已在 classified_/eval 集上；再加 SFT 两路做字准
+audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+  --eval-name "$EVAL_NAME" \
+  --eval-model qwen3-asr \
+  --eval-model qwen3-asr-sft-e10 \
+  --eval-model qwen3-asr-sft-e100 \
+  --force
+
+# 可选：若坚持场景1式「评测集上再跑批」，则先：
+#   audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run qwen3-asr-sft-e10
+# 再裸写 --join-manifest qwen3-asr-sft-e10（会找 *_asr_eval_mt3000.parquet）
 
 # 过渡旁路（不推荐，启动会 WARN）：scripts/run_eval_from_label_xlsx.py
 # 更薄只算 CER：scripts/eval_external_baseline_cer.py

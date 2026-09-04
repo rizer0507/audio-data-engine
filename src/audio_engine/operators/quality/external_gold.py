@@ -191,16 +191,12 @@ class ExternalClassification:
 
 
 def pick_compare_model(sample: Sample, preferred: str | None) -> str:
+    """Resolve compare-model key; missing transcript is treated as empty ASR (noise OK)."""
     key = str(preferred or "").strip()
     if key:
-        if key not in sample.transcripts:
-            raise ValueError(
-                f"sample {sample.id}: compare_model {key!r} missing from transcripts "
-                f"{sorted(sample.transcripts)}"
-            )
         return key
     if not sample.transcripts:
-        raise ValueError(f"sample {sample.id}: no transcripts for external classify")
+        return ""
     # Stable pick: prefer names starting with qwen, else lexicographic.
     names = sorted(sample.transcripts)
     for name in names:
@@ -217,7 +213,11 @@ def classify_external_sample(
     voicemail_pattern: re.Pattern[str] | None,
     preassigned_type: str | None = None,
 ) -> ExternalClassification:
-    """Bucket one sample using external gold vs one ASR hypothesis."""
+    """Bucket one sample using external gold vs one ASR hypothesis.
+
+    Missing / empty compare-model transcript is normal (e.g. noise not recognized)
+    and is treated as an empty hypothesis for bucketing.
+    """
     raw_gold = str(
         sample.labels.get("label_text_raw")
         or sample.labels.get("gold_text")
@@ -232,7 +232,7 @@ def classify_external_sample(
         decision = "auto_accept" if bucket in {"auto_gold", "voicemail", "noise"} else "model_review"
         if bucket == "noise":
             decision = "auto_empty"
-        model = pick_compare_model(sample, compare_model) if sample.transcripts else ""
+        model = pick_compare_model(sample, compare_model)
         hyp_plain = blank_exact(str(sample.get_transcript_text(model) or ""), hotwords) if model else ""
         return ExternalClassification(
             type=bucket,
@@ -245,7 +245,8 @@ def classify_external_sample(
         )
 
     model = pick_compare_model(sample, compare_model)
-    hyp_raw = str(sample.get_transcript_text(model) or "")
+    asr_missing = bool(model) and model not in sample.transcripts
+    hyp_raw = str(sample.get_transcript_text(model) or "") if model else ""
     gold_plain = blank_exact(raw_gold, hotwords)
     hyp_plain = blank_exact(hyp_raw, hotwords)
 
@@ -269,7 +270,7 @@ def classify_external_sample(
             type="noise",
             decision="auto_empty",
             label=EMPTY_GOLD_MARKER,
-            reason="empty_both_after_clean",
+            reason="missing_asr_transcript" if asr_missing else "empty_both_after_clean",
             compare_model=model,
             gold_plain=gold_plain,
             hyp_plain=hyp_plain,
@@ -299,7 +300,7 @@ def classify_external_sample(
         type="hardcase",
         decision="model_review",
         label=gold_plain,
-        reason="external_label_mismatch",
+        reason="gold_present_asr_missing" if asr_missing else "external_label_mismatch",
         compare_model=model,
         gold_plain=gold_plain,
         hyp_plain=hyp_plain,

@@ -48,16 +48,15 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
 # 3) 聚合 + 字准 + 分拣 + 汇总
 audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
   --source-name "$BATCH" \
-  --aggregate-base qwen1 \
-  --join-manifest qwen2 \
-  --join-manifest sensevoice1 \
-  --join-manifest sensevoice2 \
+  --aggregate-base qwen3-asr \
+  --join-manifest qwen3-asr-sft-e10 \
+  --join-manifest qwen3-asr-sft-e100 \
   --force
 # 有 doubao1 时再加：--join-manifest doubao1
 
 audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
   --source-name "$BATCH" \
-  --agreement-base qwen1 \
+  --agreement-base qwen3-asr \
   --force
 
 audio-data pipeline run pipelines/classify_dataset.yaml \

@@ -56,7 +56,10 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 # ---------------------------------------------------------------------------
 # 场景 2：外源 xlsx → classify_external_gold → classified_ → 正式评测
 # ---------------------------------------------------------------------------
-# 前置：工序一已清洗 + 同 family ASR（--asr-run 与 --aggregate-base 一致）
+# 前置：工序一已清洗 + 同 family ASR（产物在 *_asr_${BATCH}.parquet）
+# 复用工序一 ASR 时：--join-manifest 必须写 alias=显式路径
+# （裸 alias 会去找 *_asr_${EVAL_NAME}.parquet，通常不存在）
+# classified_ 已含 aggregate-base 转写，不要再 join 同名 base。
 
 # audio-data pipeline run pipelines/classify_external_gold.yaml \
 #   --source-name "$BATCH" \
@@ -66,9 +69,21 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 #   --force
 #
 # export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
-# audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
+# audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME" --force
 # audio-data eval check "$EVAL_NAME"
-# 其后同场景 1（可用已有 {alias}_asr_* 做 --join-manifest，或再 --eval-name 跑批）
+#
+# audio-data pipeline run pipelines/eval_aggregate.yaml \
+#   --eval-name "$EVAL_NAME" \
+#   --join-manifest "qwen3-asr-sft-e10=datasets/manifests/qwen3-asr-sft-e10_asr_${BATCH}.parquet" \
+#   --join-manifest "qwen3-asr-sft-e100=datasets/manifests/qwen3-asr-sft-e100_asr_${BATCH}.parquet" \
+#   --force
+#
+# audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+#   --eval-name "$EVAL_NAME" \
+#   --eval-model qwen3-asr \
+#   --eval-model qwen3-asr-sft-e10 \
+#   --eval-model qwen3-asr-sft-e100 \
+#   --force
 
 # 过渡旁路（不推荐，启动会 WARN）：scripts/run_eval_from_label_xlsx.py
 

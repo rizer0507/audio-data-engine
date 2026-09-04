@@ -160,6 +160,41 @@ def test_classify_external_sample_helper_voicemail():
     assert out.label  # non-empty preserved
 
 
+def test_missing_asr_transcript_treated_as_empty_hyp():
+    """No ASR text is normal (e.g. noise); do not raise."""
+    noise = Sample(
+        id="n",
+        source_path="n.wav",
+        labels={"gold_text": "", "label": "", "gold_mode": "external"},
+        transcripts={},
+    )
+    out = classify_external_sample(
+        noise,
+        compare_model="qwen3-asr",
+        hotwords=frozenset(),
+        voicemail_pattern=None,
+    )
+    assert out.type == "noise"
+    assert out.reason == "missing_asr_transcript"
+    assert out.label == EMPTY_GOLD_MARKER
+
+    hard = Sample(
+        id="h",
+        source_path="h.wav",
+        labels={"gold_text": "不需要", "label": "不需要", "gold_mode": "external"},
+        transcripts={},
+    )
+    out2 = classify_external_sample(
+        hard,
+        compare_model="qwen3-asr",
+        hotwords=frozenset(),
+        voicemail_pattern=None,
+    )
+    assert out2.type == "hardcase"
+    assert out2.reason == "gold_present_asr_missing"
+    assert out2.label == "不需要"
+
+
 def test_external_gold_e2e_to_eval_metric(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """xlsx → inject → classify → eval register/check → aggregate → text_metrics."""
     from typer.testing import CliRunner
