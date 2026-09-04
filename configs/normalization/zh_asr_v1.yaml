@@ -1,6 +1,8 @@
 name: zh_asr_v1
 version: 1
 unicode: {normalize: true, form: NFKC}
+# 人工标注里的【听不清】等整段去掉（含括号内文字），不参与字准
+annotation_brackets: {remove: true}
 punctuation: {remove: true}
 whitespace: {remove: true}
 english: {lowercase: true}

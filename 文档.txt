@@ -2,8 +2,10 @@
 export PIP_INDEX_URL=http://maven.paic.com.cn/repository/pypi/simple/
 export PIP_TRUSTED_HOST=maven.paic.com.cn
 audio-data pipeline run pipelines/data_cleaning_source_A.yaml
-
+pip install -e /data2/data-cp/lizi/Kimi-Audio --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
 audio-data pipeline run pipelines/data_cleaning_source_A.yaml --workers 8
+
+source /data2/data-cp/zk/env_hub/miniconda312/_qw3tts/bin/activate
 
 $env:OMP_NUM_THREADS = "1"
 $env:MKL_NUM_THREADS = "1"
@@ -403,3 +405,6 @@ python scripts/run_eval_from_summary.py \
   --eval-model qwen-sft-e10 \
   --eval-model qwen-sft-e100 \
   --force
+
+
+贷款审批、单位名称、住址、手机号、联系人关系

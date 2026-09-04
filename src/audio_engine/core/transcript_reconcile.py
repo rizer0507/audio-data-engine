@@ -28,6 +28,7 @@ _SENSEVOICE_COLUMNS = (
 # Prefer the same profile as MetricRunner when the file exists.
 _ZH_ASR_V1 = {
     "unicode": {"normalize": True, "form": "NFKC"},
+    "annotation_brackets": {"remove": True},
     "punctuation": {"remove": True},
     "whitespace": {"remove": True},
     "english": {"lowercase": True},

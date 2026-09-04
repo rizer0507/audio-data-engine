@@ -199,9 +199,14 @@ def _add_sample_metrics(bucket: dict[str, float | int], sample: Sample, prefix: 
 
 def _overall_acc(bucket: dict[str, float | int]) -> float | None:
     ref_len = int(bucket["ref_len"])
-    if ref_len <= 0:
+    dis = int(bucket["dis"])
+    n = int(bucket["n"])
+    if n <= 0:
         return None
-    return round(max(0.0, 1.0 - int(bucket["dis"]) / ref_len), 6)
+    # 空参考（如【无声音输出】幻觉）：无基准字时，有编辑则总体字准为 0，否则为 1
+    if ref_len <= 0:
+        return 0.0 if dis > 0 else 1.0
+    return round(max(0.0, 1.0 - dis / ref_len), 6)
 
 
 def _mean_acc(bucket: dict[str, float | int]) -> float | None:
@@ -253,12 +258,69 @@ def _summary_rows(
     return rows
 
 
+def _acc_delta(value: Any, base: Any) -> float | None:
+    if value is None or base is None:
+        return None
+    try:
+        return round(float(value) - float(base), 6)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_xlsx_base_prefix(config: OperatorConfig, prefixes: list[str]) -> str | None:
+    """Base model for xlsx delta columns: base_prefix > baseline_prefix > first prefix."""
+    for key in ("base_prefix", "baseline_prefix"):
+        raw = config.params.get(key)
+        if raw is None:
+            continue
+        name = str(raw).strip()
+        if name and name in prefixes:
+            return name
+    return prefixes[0] if prefixes else None
+
+
+def _annotate_relative_base_deltas(
+    rows: list[dict[str, Any]],
+    *,
+    base_prefix: str | None,
+    group_by: str = "type",
+) -> list[dict[str, Any]]:
+    """Append vs-base char-acc deltas for every non-base model / type row."""
+    overall_key = "相对base总体字准率"
+    mean_key = "相对base平均字准率"
+    if not rows:
+        return rows
+    if not base_prefix:
+        for row in rows:
+            row[overall_key] = None
+            row[mean_key] = None
+        return rows
+    base_name = f"{base_prefix}_text ← label"
+    base_by_group = {
+        row.get(group_by): row for row in rows if row.get("对比") == base_name
+    }
+    for row in rows:
+        if row.get("对比") == base_name:
+            row[overall_key] = None
+            row[mean_key] = None
+            continue
+        base_row = base_by_group.get(row.get(group_by))
+        if base_row is None:
+            row[overall_key] = None
+            row[mean_key] = None
+            continue
+        row[overall_key] = _acc_delta(row.get("总体字准率"), base_row.get("总体字准率"))
+        row[mean_key] = _acc_delta(row.get("平均字准率"), base_row.get("平均字准率"))
+    return rows
+
+
 def _build_xlsx_summaries(
     samples: list[Sample],
     scored_by_prefix: dict[str, set[str]],
     *,
     prefixes: list[str],
     bucket_key: str,
+    base_prefix: str | None = None,
 ) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     for prefix in prefixes:
@@ -276,7 +338,11 @@ def _build_xlsx_summaries(
             _add_sample_metrics(group, sample, prefix)
         name = f"{prefix}_text ← label"
         summaries.extend(_summary_rows(name, totals, group_by="type"))
-    return summaries
+    return _annotate_relative_base_deltas(
+        summaries,
+        base_prefix=base_prefix if base_prefix is not None else (prefixes[0] if prefixes else None),
+        group_by="type",
+    )
 
 
 def _write_xlsx(
@@ -286,6 +352,7 @@ def _write_xlsx(
     *,
     prefixes: list[str],
     bucket_key: str,
+    base_prefix: str | None = None,
 ) -> None:
     rows = []
     for sample in samples:
@@ -305,6 +372,7 @@ def _write_xlsx(
         scored_by_prefix,
         prefixes=prefixes,
         bucket_key=bucket_key,
+        base_prefix=base_prefix,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
@@ -319,7 +387,7 @@ class EvaluationReportOperator(ManifestOperator):
     """Aggregate multi-model sample metrics vs gold; optional pairwise regression gates."""
 
     name = "evaluation_report"
-    version = "1.2.0"
+    version = "1.3.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -481,21 +549,25 @@ class EvaluationReportOperator(ManifestOperator):
         else:
             xlsx_path = Path(str(export_xlsx))
         if xlsx_path is not None:
+            xlsx_base = _resolve_xlsx_base_prefix(config, prefixes)
             _write_xlsx(
                 xlsx_path,
                 samples,
                 scored_by_prefix,
                 prefixes=prefixes,
                 bucket_key=bucket_key,
+                base_prefix=xlsx_base,
             )
             report["export_xlsx"] = str(xlsx_path)
+            report["xlsx_base_prefix"] = xlsx_base
             atomic_write_json(report_path, report)
             logger.info(
-                "evaluation xlsx written path={} scored={} missing_gold={} models={}",
+                "evaluation xlsx written path={} scored={} missing_gold={} models={} base={}",
                 xlsx_path,
                 len(any_scored_ids),
                 len(missing),
                 prefixes,
+                xlsx_base,
             )
 
         if missing:

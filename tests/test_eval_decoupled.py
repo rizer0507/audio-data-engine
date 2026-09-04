@@ -240,6 +240,13 @@ def test_evaluation_report_multi_model_by_type(tmp_path: Path):
     )
     assert "qwen_text ← label" in set(frame["对比"])
     assert "qwen-sft-epoch10_text ← label" in set(frame["对比"])
+    assert "相对base总体字准率" in frame.columns
+    assert "相对base平均字准率" in frame.columns
+    base_rows = frame[frame["对比"] == "qwen_text ← label"]
+    assert base_rows["相对base总体字准率"].isna().all()
+    sft = frame[(frame["对比"] == "qwen-sft-epoch10_text ← label") & (frame["type"] == "总计")].iloc[0]
+    assert sft["相对base总体字准率"] == pytest.approx(0.2)  # 1.0 - 0.8
+    assert sft["相对base平均字准率"] == pytest.approx(1.0 / 6.0, abs=1e-6)
 
 
 def test_eval_register_and_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

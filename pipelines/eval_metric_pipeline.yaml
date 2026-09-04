@@ -5,6 +5,8 @@
 #     --eval-model qwen --eval-model qwen-sft-epoch10 --eval-model qwen-sft-epoch100
 #
 # 不传 --eval-model 时，对样本上全部 transcript key（除 gold）算字准。
+# xlsx「按type统计」末两列：非 base 模型相对 base 的总体/平均字准率差值；
+# base 默认为第一个 --eval-model（也可用 evaluation_report.params.base_prefix 指定）。
 # 与训练 / Model Registry 无依赖。
 
 name: eval_metric_pipeline
@@ -17,7 +19,7 @@ pipeline:
     operator: quality.normalize_transcripts
     params:
       keep_raw: true
-      blank_exact_hotwords_path: configs/normalization/blank_exact_eval_v1.yaml
+      blank_exact_hotwords_path: configs/normalization/blank_exact_eval_interview_v1.yaml
   - name: evaluation_metrics
     operator: quality.text_metrics
     params:

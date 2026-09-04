@@ -1,0 +1,9 @@
+# 面谈评测：整句精确命中则清空（与去标点同一阶段；models: ["*"] 对全部 transcript key）。
+blank_exact_hotwords:
+  models: ["*"]
+  hotwords:
+    - 贷款审批
+    - 单位名称
+    - 住址
+    - 手机号
+    - 联系人关系

@@ -5,6 +5,8 @@ import unicodedata
 from typing import Any
 
 _CONTROL_TAG = re.compile(r"<\|.*?\|>")
+# Human annotation markers: drop 「【…】」 including inner text (before punctuation strip).
+_ANNOTATION_BRACKET_RE = re.compile(r"【[^】]*】")
 
 
 def normalize_text(value: Any, config: dict[str, Any] | None = None) -> str:
@@ -15,6 +17,8 @@ def normalize_text(value: Any, config: dict[str, Any] | None = None) -> str:
     unicode_cfg = config.get("unicode", {})
     if unicode_cfg.get("normalize", True):
         text = unicodedata.normalize(unicode_cfg.get("form", "NFKC"), text)
+    if config.get("annotation_brackets", {}).get("remove", False):
+        text = _ANNOTATION_BRACKET_RE.sub("", text)
     if config.get("english", {}).get("lowercase", True):
         text = text.casefold()
     if config.get("punctuation", {}).get("remove", True):

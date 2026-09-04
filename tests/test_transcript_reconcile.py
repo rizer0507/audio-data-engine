@@ -19,6 +19,8 @@ def test_clean_and_character_similarity():
     assert clean_control_tags("<|zh|><|EMO_UNKNOW|><|within|>你 好！") == "你 好！"
     assert clean_control_tags("<EMO_UNKNOW>|你好") == "你好"
     assert plain_transcript_text("<|zh|><|EMO_UNKNOW|>你好，世界！") == "你好世界"
+    assert plain_transcript_text("【前面听不清】十五年") == "十五年"
+    assert plain_transcript_text("【无声音输出】") == ""
     assert character_similarity("你好。", "<|zh|>你 好") == 1.0
     assert character_similarity("你好", "你们好") == pytest.approx(0.6667)
 
