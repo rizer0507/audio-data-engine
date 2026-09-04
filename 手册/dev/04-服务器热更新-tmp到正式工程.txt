@@ -3,6 +3,7 @@
 用途：
   U 盘内容已拷到服务器 tmp 后，用本脚本把代码/配置/手册热更新进正式工程。
   不碰资产与运行产物，保证服务器环境「只增加/覆盖，不减少」。
+  docs/ 仅本机保留，本脚本不同步 docs。
 
 路径：
   tmp 打包目录：  /data2/data-cp/lizi/tmp/audio-data-engine
@@ -12,9 +13,10 @@
   - 目录同步：有 rsync 用 rsync -a（不加 --delete）；无 rsync 用 cp -a
   - 仅覆盖白名单同名路径；DST 多出来的文件/目录一律保留
   - resources/manifest.yaml 含正式机 source path，默认不同步
+  - docs/ 不同步（本机专属）
 
 白名单目录（与 scripts/sync_to_usb.bat 一致）：
-  src  docs  pipelines  configs  tests  scripts  tasks  手册
+  src  pipelines  configs  tests  scripts  tasks  手册
 
 白名单根文件：
   pyproject.toml  README.md  .gitignore  .env.example
@@ -24,7 +26,7 @@
   目录.txt
 
 明确不覆盖：
-  data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/  .env
+  docs/  data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/  .env
 
 --------------------------------------------------------------------------------
 一键执行（Bash，在服务器上跑）
@@ -33,8 +35,8 @@
 SRC=/data2/data-cp/lizi/tmp/audio-data-engine
 DST=/data2/data-cp/lizi/audio-data-engine
 
-# 1) 代码与配置目录（增量覆盖，不 --delete）
-for d in src docs pipelines configs tests scripts tasks 手册; do
+# 1) 代码与配置目录（增量覆盖，不 --delete；不含 docs）
+for d in src pipelines configs tests scripts tasks 手册; do
   mkdir -p "$DST/$d"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --exclude '__pycache__/' --exclude '*.pyc' \
@@ -44,7 +46,7 @@ for d in src docs pipelines configs tests scripts tasks 手册; do
   fi
 done
 
-# 2) 工程元数据 + 重要文档（显式白名单）
+# 2) 工程元数据 + 重要手册/台账（显式白名单）
 for f in \
   pyproject.toml \
   README.md \
@@ -78,3 +80,4 @@ cd "$DST" && pip install -e .
 本机 → scripts/sync_to_usb.bat → U 盘 F:\audio-data-engine
   → 拷到服务器 tmp → 本脚本 → 正式工程
   → pip install -e .
+（docs/ 全程不同步，仅本机）

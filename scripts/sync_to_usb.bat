@@ -2,17 +2,18 @@
 setlocal EnableDelayedExpansion
 
 :: =============================================================================
-:: 同步「需要上服务器」的代码/配置/文档 → U 盘（增量，只加/覆盖，不删）
+:: 同步「需要上服务器」的代码/配置/手册 → U 盘（增量，只加/覆盖，不删）
 ::
 :: 原则（保护服务器环境）：
 ::   1. 不删除 U 盘上的目标目录，也不使用 /MIR /PURGE（目标多出来的文件一律保留）
 ::   2. 只拷贝下方白名单；服务器独有资产永不通过本脚本带走/覆盖：
 ::        data/  datasets/  runs/  数据集/  .venv/  .env  resources/  *.parquet
-::   3. 同名文件会用本机版本覆盖（加/更新）；不会减少目标侧文件
+::   3. docs/ 仅本机保留，不同步到 U 盘 / 服务器
+::   4. 同名文件会用本机版本覆盖（加/更新）；不会减少目标侧文件
 ::
 :: 用法：双击运行，或在项目根目录执行  scripts\sync_to_usb.bat
 :: U 盘拷到服务器后，执行 手册/dev/04-服务器热更新-tmp到正式工程.txt
-::   落到 /data2/data-cp/lizi/audio-data-engine（同样只覆盖白名单，不碰资产）
+::   落到 /data2/data-cp/lizi/audio-data-engine（同样只覆盖白名单，不碰资产/docs）
 :: =============================================================================
 
 chcp 65001 >nul 2>&1
@@ -57,7 +58,7 @@ echo   日志   : %LOG%
 echo ============================================
 echo.
 echo 白名单目录:
-echo   src  docs  pipelines  configs  tests  scripts  tasks  手册
+echo   src  pipelines  configs  tests  scripts  tasks  手册
 echo 白名单根文件:
 echo   pyproject.toml  README.md  .gitignore  .env.example
 echo   文档.txt  单条流水线执行命令.txt  三条流水线执行手册.txt
@@ -65,9 +66,9 @@ echo   全自动训练评测闭环执行手册-dev.txt
 echo   全自动训练评测闭环执行手册-local.txt
 echo   目录.txt
 echo.
-echo 明确不同步（保护服务器）:
-echo   data  datasets  runs  数据集  .venv  .env  resources  *.parquet
-echo   （不删除 U 盘已有内容，不 purge）
+echo 明确不同步（保护服务器 / 本机专属）:
+echo   docs  data  datasets  runs  数据集  .venv  .env  resources  *.parquet
+echo   （docs 仅本机；不删除 U 盘已有内容，不 purge）
 echo.
 echo 开始增量拷贝...
 echo.
@@ -81,8 +82,8 @@ echo. >> "%LOG%"
 
 :: ---------- 1) 白名单目录（robocopy /E，无 /PURGE /MIR = 不删目标多出文件）----------
 :: /XO 不加：允许用本机较新代码覆盖同名文件
+:: docs/ 不同步（仅本机）
 call :sync_dir "src"
-call :sync_dir "docs"
 call :sync_dir "pipelines"
 call :sync_dir "configs"
 call :sync_dir "tests"
@@ -117,7 +118,7 @@ echo.
 echo 下一步（服务器）:
 echo   1. 将 U 盘内容拷到 /data2/data-cp/lizi/tmp/audio-data-engine
 echo   2. 执行 手册/dev/04-服务器热更新-tmp到正式工程.txt
-echo      （与本脚本白名单一致：只覆盖代码/配置/手册，不碰 data/datasets/runs/.venv）
+echo      （与本脚本白名单一致：只覆盖代码/配置/手册，不碰 data/datasets/runs/.venv/docs）
 echo.
 pause
 if "!FAIL!"=="0" (exit /b 0) else (exit /b 1)
