@@ -14,7 +14,15 @@ from audio_engine.core.artifacts import atomic_write_json
 from audio_engine.core.operator import ManifestOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
+from audio_engine.core.selection_v2.types import EMPTY_GOLD_TYPES
 from audio_engine.core.source_naming import evaluation_report_dir
+
+# Types whose empty reference must not pollute the primary CER table.
+_EMPTY_REF_TYPES = frozenset(EMPTY_GOLD_TYPES) | {
+    "noise",
+    "true_silence",
+    "invalid_audio",
+}
 
 
 def _resolve_authoritative_report_dir(config: OperatorConfig) -> Path:
@@ -82,11 +90,30 @@ def _has_metric(sample: Sample, prefix: str) -> bool:
 
 def _bucket_value(sample: Sample, bucket_key: str) -> str:
     labels = sample.labels or {}
-    for key in (bucket_key, "type", "classification_bucket"):
+    for key in (bucket_key, "type", "classification_bucket", "subtype"):
         value = labels.get(key)
         if value is not None and str(value).strip():
             return str(value).strip()
     return "unclassified"
+
+
+def _effective_bucket(sample: Sample, bucket_key: str) -> str:
+    """Prefer subtype when present (v1 type + v2 subtype transition)."""
+    labels = sample.labels or {}
+    subtype = str(labels.get("subtype") or "").strip()
+    primary = _bucket_value(sample, bucket_key)
+    if subtype and subtype != primary:
+        return f"{primary}/{subtype}" if bucket_key != "subtype" else subtype
+    return primary
+
+
+def _is_empty_ref_type(sample: Sample, bucket_key: str) -> bool:
+    labels = sample.labels or {}
+    for key in (bucket_key, "type", "classification_bucket", "subtype"):
+        value = str(labels.get(key) or "").strip()
+        if value in _EMPTY_REF_TYPES:
+            return True
+    return False
 
 
 def _gold_text(sample: Sample) -> str:
@@ -405,7 +432,7 @@ class EvaluationReportOperator(ManifestOperator):
     """Aggregate multi-model sample metrics vs gold; optional pairwise regression gates."""
 
     name = "evaluation_report"
-    version = "1.4.0"
+    version = "1.5.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -450,13 +477,47 @@ class EvaluationReportOperator(ManifestOperator):
             )
 
         overall = {
-            prefix: _corpus([s for s in samples if s.id in scored_by_prefix[prefix]], prefix)
+            prefix: _corpus(
+                [
+                    s
+                    for s in samples
+                    if s.id in scored_by_prefix[prefix]
+                    and not _is_empty_ref_type(s, bucket_key)
+                ],
+                prefix,
+            )
+            for prefix in prefixes
+        }
+        empty_ref_overall = {
+            prefix: _corpus(
+                [
+                    s
+                    for s in samples
+                    if s.id in scored_by_prefix[prefix] and _is_empty_ref_type(s, bucket_key)
+                ],
+                prefix,
+            )
             for prefix in prefixes
         }
         report: dict[str, Any] = {
             "model_prefixes": prefixes,
             "baseline_prefix": baseline,
             "candidate_prefix": candidate,
+            "eval_release": str(
+                config.params.get("eval_release")
+                or config.params.get("eval_name")
+                or ""
+            ),
+            "eval_trust": str(
+                next(
+                    (
+                        s.labels.get("eval_trust")
+                        for s in samples
+                        if s.labels.get("eval_trust")
+                    ),
+                    config.params.get("eval_trust") or "unknown",
+                )
+            ),
             "gold_coverage": {
                 "total": len(samples),
                 "scored": len(any_scored_ids),
@@ -466,15 +527,20 @@ class EvaluationReportOperator(ManifestOperator):
                 "scored_by_model": {
                     prefix: len(scored_by_prefix[prefix]) for prefix in prefixes
                 },
+                "empty_ref_excluded_from_main_cer": {
+                    prefix: int(empty_ref_overall[prefix].get("samples") or 0)
+                    for prefix in prefixes
+                },
             },
             "overall": overall,
+            "empty_ref_slice": empty_ref_overall,
             "buckets": {},
         }
         buckets: dict[str, list[Sample]] = defaultdict(list)
         for sample in samples:
             if sample.id not in any_scored_ids:
                 continue
-            buckets[_bucket_value(sample, bucket_key)].append(sample)
+            buckets[_effective_bucket(sample, bucket_key)].append(sample)
         for name, members in sorted(buckets.items()):
             report["buckets"][name] = {
                 prefix: _corpus(

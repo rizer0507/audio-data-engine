@@ -15,15 +15,20 @@ export EVAL_NAME="eval_${BATCH}"
 export QWEN_ASR_API_KEY=dummy
 
 # ---------------------------------------------------------------------------
-# 场景 1：工序一金标（summary_ / classified_ / gold_）→ 正式评测
+# 场景 1：正式评测（人审 / 外源 / 冻结 eval Release）
 # ---------------------------------------------------------------------------
-# 本场景会再按 --eval-name 跑批，产物为 {alias}_asr_${EVAL_NAME}.parquet
-export EVAL_SOURCE="datasets/stage1/derived/summary_${BATCH}.parquet"
-# export EVAL_SOURCE="datasets/stage1/derived/classified_${BATCH}.parquet"
-# export EVAL_SOURCE="datasets/stage1/derived/gold_${BATCH}.parquet"
+# 禁止：把 export-gold 的 auto_gold / consensus_gold / pseudo_gold_* 直接当正式真值
+# 调试连通性请加：--allow-pseudo-gold（报告视为 eval_trust=pseudo_debug）
+# 过渡旧 summary：--legacy
+#
+# 推荐输入：reviewed_*（人审）或冻结 eval_core_vNNN / eval_random_vNNN
+export EVAL_SOURCE="datasets/stage1/derived/reviewed_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/stage1/derived/classified_${BATCH}.parquet"  # 外源金标路径
+# export EVAL_NAME="eval_core_v001"
 
 audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
-audio-data eval check "$EVAL_NAME"
+audio-data eval check "$EVAL_NAME" --formal
+# 可选防泄漏：audio-data eval check "$EVAL_NAME" --formal --train-dataset "train_${BATCH}"
 
 export QWEN_ASR_API_BASE=http://127.0.0.1:5561
 audio-data pipeline run pipelines/qwen_asr_batch.yaml \

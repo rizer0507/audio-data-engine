@@ -14,6 +14,10 @@ from audio_engine.core.selection_engine import (
     SelectionConfig,
     classify_sample,
 )
+from audio_engine.core.selection_v2 import (
+    SelectionV2Config,
+    classify_sample as classify_sample_v2,
+)
 from audio_engine.core.transcript_reconcile import (
     plain_transcript_text,
     rewrite_plain_transcript_entry,
@@ -214,12 +218,24 @@ def _apply_consensus_engine(
     voicemail_pattern: re.Pattern[str] | None,
     operator_name: str,
     operator_version: str,
+    engine: str = "consensus_v1",
 ) -> list[Sample]:
-    selection = SelectionConfig.from_params(params)
+    use_v2 = engine in {"consensus_v2", "selection_v2.0", "selection_v2"}
+    selection_v1 = None if use_v2 else SelectionConfig.from_params(params)
+    selection_v2 = SelectionV2Config.from_params(params) if use_v2 else None
     for index, sample in enumerate(updated):
         if "label_broken" in frame.columns:
             sample.labels["label_broken"] = bool(frame.loc[index, "label_broken"])
-        result = classify_sample(sample, selection, voicemail_pattern=voicemail_pattern)
+        if use_v2:
+            assert selection_v2 is not None
+            result = classify_sample_v2(
+                sample, selection_v2, voicemail_pattern=voicemail_pattern
+            )
+        else:
+            assert selection_v1 is not None
+            result = classify_sample(
+                sample, selection_v1, voicemail_pattern=voicemail_pattern
+            )
         sample.labels.update(result.to_labels(policy_version))
         sample.mark_completed(operator_name)
         sample.add_lineage(
@@ -228,6 +244,7 @@ def _apply_consensus_engine(
             {
                 "policy_version": policy_version,
                 "rule_version": result.rule_version,
+                "engine": engine,
                 "bucket": result.type,
                 "decision": result.decision,
                 "reason_codes": [result.reason],
@@ -296,7 +313,7 @@ class ClassifyOperator(ManifestOperator):
     """
 
     name = "classify"
-    version = "2.1.0"
+    version = "2.2.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -312,9 +329,16 @@ class ClassifyOperator(ManifestOperator):
         gold_mode = str(params.get("gold_mode") or "").strip().lower()
         use_external = gold_mode == "external" or engine in {"external", "external_v1"}
         rules = params.get("rules") or []
+        consensus_engines = {
+            "consensus",
+            "consensus_v1",
+            "selection_v1.1",
+            "consensus_v2",
+            "selection_v2.0",
+            "selection_v2",
+        }
         use_consensus = (not use_external) and (
-            engine in {"consensus", "consensus_v1", "selection_v1.1"}
-            or (not rules and engine != "expr")
+            engine in consensus_engines or (not rules and engine != "expr")
         )
         if not use_consensus and not use_external:
             if not isinstance(rules, list) or not rules:
@@ -347,6 +371,9 @@ class ClassifyOperator(ManifestOperator):
             )
 
         if use_consensus:
+            resolved_engine = engine or "consensus_v1"
+            if resolved_engine in {"consensus", ""}:
+                resolved_engine = "consensus_v1"
             return _apply_consensus_engine(
                 updated,
                 frame,
@@ -355,6 +382,7 @@ class ClassifyOperator(ManifestOperator):
                 voicemail_pattern=voicemail_pattern,
                 operator_name=self.full_name,
                 operator_version=self.version,
+                engine=resolved_engine,
             )
 
         return _apply_expr_rules(

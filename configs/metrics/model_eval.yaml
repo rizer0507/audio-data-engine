@@ -2,9 +2,18 @@
 # hypotheses 缺省 = 样本上除 gold 外的全部 transcript keys（由 quality.text_metrics 展开）。
 # CLI：audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 #        --eval-name eval_local_test --eval-model qwen --eval-model qwen-sft-epoch10
+#
+# 分组维度：evaluation_report 默认按 type；若存在 subtype 则导出 type/subtype。
+# 空标桶（true_silence / invalid_audio / noise）从主 CER 剔除，单独记入 empty_ref_slice。
 
 vs_gold:
   reference_field: gold_text
   purpose: model_evaluation
   metrics: [cer]
   # hypotheses: [qwen, qwen-sft-epoch10, qwen-sft-epoch100]  # 可选；省略则自动发现
+
+# 可选报告扩展点（由 evaluation_report / 后续业务指标消费）
+group_by:
+  - type
+  - subtype
+  - semantic_class

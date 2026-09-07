@@ -15,14 +15,16 @@ unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY QWEN_ASR_API_BASES
 export QWEN_ASR_API_KEY=dummy
 
 # ---------------------------------------------------------------------------
-# 场景 1：工序一金标 → 正式评测（推荐；与训练 / Registry 无依赖）
+# 场景 1：正式评测（人审 / 外源 / 冻结 eval Release）
 # ---------------------------------------------------------------------------
-export EVAL_SOURCE="datasets/stage1/derived/summary_${BATCH}.parquet"
-# export EVAL_SOURCE="datasets/stage1/derived/classified_${BATCH}.parquet"
-# export EVAL_SOURCE="datasets/stage1/derived/gold_${BATCH}.parquet"
+# 禁止：把 export-gold 的 auto_gold / consensus_gold / pseudo_gold_* 直接当正式真值
+# 调试连通性请加：--allow-pseudo-gold；过渡旧 summary：--legacy
+export EVAL_SOURCE="datasets/stage1/derived/reviewed_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/stage1/derived/classified_${BATCH}.parquet"  # 外源金标
+# export EVAL_NAME="eval_core_v001"
 
 audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
-audio-data eval check "$EVAL_NAME"
+audio-data eval check "$EVAL_NAME" --formal
 
 # 同 family：base + SFT 分端口（summary 已有 base 时可跳过）
 export QWEN_ASR_API_BASE=http://127.0.0.1:5560

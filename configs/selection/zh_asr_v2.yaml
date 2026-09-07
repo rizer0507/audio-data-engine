@@ -1,0 +1,59 @@
+# 工序③分拣策略：selection_v2.0 / consensus_v2
+# 与 zh_asr_v1 并行；默认生产仍指向 v1，验收通过后再切换。
+# 规则原文：docs/02-规范规则/数据挑选规则_v2.0.md
+policy_version: selection_zh_asr_v2_0
+engine: consensus_v2
+rule_version: selection_v2.0
+
+similarity:
+  strict_threshold: 0.95
+  consensus_threshold: 0.90
+  dominant_cluster_ratio: 0.75
+
+short_utterance:
+  max_audio_sec: 2.0
+  max_text_chars: 6
+
+silence:
+  max_speech_ratio: 0.05
+
+empty_ratio_for_hallucination: 0.75
+
+consensus:
+  min_family_count: 2
+
+risk_gate:
+  semantic_inversion_auto_accept: false
+  critical_token_conflict_auto_accept: false
+  vad_miss_auto_empty: false
+
+primary_family: qwen
+secondary_family: sensevoice
+
+model_families:
+  qwen:
+    - qwen
+    - qwen1
+    - qwen2
+  sensevoice:
+    - sensevoice
+    - sensevoice1
+    - sensevoice2
+  doubao:
+    - doubao
+    - doubao1
+    - doubao2
+  kimi:
+    - kimi
+    - kimi1
+    - kimi2
+
+semantic_lexicon_path: configs/selection/semantic_lexicon_zh_v2.yaml
+voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml
+
+# 兼容过渡：同时写 v1 大类到 subtype 映射字段见引擎实现
+compat:
+  write_v1_subtype: true
+
+defaults:
+  label_broken: false

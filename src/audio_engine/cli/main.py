@@ -96,10 +96,24 @@ def _review_queue_id(dataset_path: Path, buckets: list[str], revision: str) -> s
 
 _DEFAULT_REVIEW_BUCKETS = [
     "qwen_missing",
+    "model_missing",
     "hardcase",
     "hallucination",
     "semantic_inversion",
+    "critical_token_conflict",
+    "semantic_sanitization",
+    "short_utterance_risk",
+    "possible_vad_miss",
+    "overlap_crosstalk",
+    "family_internal_conflict",
+    "pseudo_gold_medium",
     "review_queue",
+]
+
+_DEFAULT_GOLD_BUCKETS = [
+    "auto_gold",
+    "consensus_gold",
+    "pseudo_gold_high",
 ]
 
 
@@ -1270,7 +1284,7 @@ def review_export(
         "--bucket",
         help=(
             "Bucket to review; repeatable "
-            "(default: qwen_missing/hardcase/hallucination/semantic_inversion/review_queue)"
+            "(default: model_missing/hardcase/semantic_* / possible_vad_miss/...)"
         ),
     ),
     revision: str = typer.Option(..., "--revision"),
@@ -1319,14 +1333,18 @@ def review_export_gold(
     bucket: Optional[list[str]] = typer.Option(
         None,
         "--bucket",
-        help="Bucket to collect; repeatable (default: auto_gold + consensus_gold)",
+        help="Bucket to collect; repeatable (default: auto_gold + consensus_gold + pseudo_gold_high)",
     ),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
-    """Export auto-accepted gold (auto_gold / consensus_gold) with label column."""
+    """Export auto-accepted gold / pseudo-gold with label column.
+
+    Note: ``pseudo_gold_*`` is for training candidates / debug — formal eval
+    register rejects it unless ``--allow-pseudo-gold``.
+    """
     dataset_path = _resolve_dataset(dataset)
     manifest = Manifest.load(dataset_path)
-    buckets = bucket or ["auto_gold", "consensus_gold"]
+    buckets = bucket or list(_DEFAULT_GOLD_BUCKETS)
     gold_samples = []
     rows = []
     missing_gold: list[str] = []
@@ -1463,6 +1481,14 @@ def review_import(
         }
         if decision == "accepted":
             updates["label"] = gold_text
+            updates["label_source"] = "human"
+            updates["label_tier"] = "gold"
+            updates["is_human_verified"] = True
+            # Human gold upgrades the bucket for formal eval consumption.
+            if str(sample.labels.get("type") or "").startswith("pseudo_gold"):
+                updates["type"] = "human_gold"
+                updates["classification_bucket"] = "human_gold"
+                updates["subtype"] = str(sample.labels.get("type") or "")
         sample.labels.update(updates)
     result = Manifest([indexed[sample.id] for sample in manifest])
     result.save(output)
@@ -1631,15 +1657,34 @@ def eval_check(
         "--require-audio-key",
         help="评测推理所需音频键；空字符串表示不检查",
     ),
+    formal: bool = typer.Option(
+        False,
+        "--formal",
+        help="正式评测门禁：拒绝伪金标 / 未验证自动金标",
+    ),
+    allow_pseudo_gold: bool = typer.Option(
+        False,
+        "--allow-pseudo-gold",
+        help="调试：允许伪金标（报告头应视为 eval_trust=pseudo_debug）",
+    ),
+    train_dataset: Optional[str] = typer.Option(
+        None,
+        "--train-dataset",
+        help="可选：对照 train Release，检查 audio_id / duplicate_group_id 泄漏",
+    ),
 ) -> None:
     """检查 Manifest 是否满足进入评测流水线的条件（金标覆盖、id 唯一、音频键）。"""
     path = _resolve_dataset(dataset)
+    train_path = _resolve_dataset(train_dataset) if train_dataset else None
     report = inspect_eval_manifest(
         path,
         gold_field=gold_field,
         type_field=type_field,
         min_gold_ratio=min_gold_ratio,
         require_audio_key=require_audio_key,
+        require_formal_gold=formal and not allow_pseudo_gold,
+        allow_pseudo_gold=allow_pseudo_gold,
+        train_manifest=train_path,
     )
     if report.total == 0:
         raise typer.BadParameter(f"manifest is empty: {path}")
@@ -1657,6 +1702,8 @@ def eval_check(
     if report.duplicates:
         console.print(f"  duplicate_preview: {report.duplicates[:10]}")
     console.print(f"  empty_ids:      {report.empty_ids}")
+    console.print(f"  release_version:{report.release_version or '(无)'}")
+    console.print(f"  eval_trust:     {report.eval_trust}")
     if require_audio_key:
         console.print(f"  missing_audio[{require_audio_key}]: {len(report.missing_audio)}")
         if report.missing_audio:
@@ -1664,7 +1711,24 @@ def eval_check(
     console.print("  type / bucket counts:")
     for name in sorted(report.type_counts.keys(), key=lambda x: (x == "(空)", x)):
         console.print(f"    {name}: {report.type_counts[name]}")
+    if any(k != "(空)" for k in report.subtype_counts):
+        console.print("  subtype counts:")
+        for name in sorted(report.subtype_counts.keys(), key=lambda x: (x == "(空)", x)):
+            console.print(f"    {name}: {report.subtype_counts[name]}")
+    console.print("  label_tier counts:")
+    for name in sorted(report.label_tier_counts.keys(), key=lambda x: (x == "(空)", x)):
+        console.print(f"    {name}: {report.label_tier_counts[name]}")
+    console.print("  label_source counts:")
+    for name in sorted(report.label_source_counts.keys(), key=lambda x: (x == "(空)", x)):
+        console.print(f"    {name}: {report.label_source_counts[name]}")
+    if report.pseudo_gold_ids:
+        console.print(f"  pseudo_gold:    {len(report.pseudo_gold_ids)}")
+    if report.leak_audio_ids or report.leak_duplicate_groups:
+        console.print(f"  leak audio_ids: {len(report.leak_audio_ids)}")
+        console.print(f"  leak dup groups:{len(set(report.leak_duplicate_groups))}")
 
+    for item in report.warnings:
+        console.print(f"[yellow]WARN[/yellow] {item}")
     if report.errors:
         for item in report.errors:
             console.print(f"[red]FAIL[/red] {item}")
@@ -1679,14 +1743,14 @@ def eval_check(
 def eval_register(
     dataset: str = typer.Argument(
         ...,
-        help="评测源 Manifest（通常为 summary_ / gold_ / reviewed_，path / name / artifact id）",
+        help="评测源 Manifest（通常为冻结 eval Release / reviewed_ / classified_ 外源）",
     ),
     name: str = typer.Option(
         ...,
         "--name",
         help=(
             "评测集 stem，写入 datasets/stage3/eval_sets/<name>.parquet"
-            "（兼容读取 datasets/manifests/；如 eval_local_test）"
+            "（兼容读取 datasets/manifests/；如 eval_core_v001）"
         ),
     ),
     force: bool = typer.Option(False, "--force", help="覆盖已存在的同名评测集"),
@@ -1700,6 +1764,21 @@ def eval_register(
         "--require-audio-key",
         help="评测推理所需音频键；空字符串表示不检查",
     ),
+    formal: bool = typer.Option(
+        True,
+        "--formal/--legacy",
+        help="正式评测门禁（默认开启）；--legacy 跳过伪金标准入校验",
+    ),
+    allow_pseudo_gold: bool = typer.Option(
+        False,
+        "--allow-pseudo-gold",
+        help="调试：允许伪金标注册；产物不得冒充正式权威报告",
+    ),
+    train_dataset: Optional[str] = typer.Option(
+        None,
+        "--train-dataset",
+        help="可选：对照 train Release，检查 audio_id / duplicate_group_id 泄漏",
+    ),
     output: Optional[Path] = typer.Option(
         None,
         "--output",
@@ -1709,7 +1788,8 @@ def eval_register(
 ) -> None:
     """把 summary/gold Manifest 注册为评测集快照，供 --eval-name 使用。
 
-    与训练 / Model Registry 无依赖；后续只要推理结果 id 与评测集对齐即可算字准。
+    正式模式（默认）拒绝 pseudo_gold / auto_gold / consensus_gold；
+    外源金标或人审 human_accepted 可进正式评测。调试请显式 --allow-pseudo-gold。
     """
     try:
         eval_stem = validate_source_name(name)
@@ -1727,19 +1807,31 @@ def eval_register(
             f"eval set already exists: {dest} (pass --force to overwrite)"
         )
 
+    train_path = _resolve_dataset(train_dataset) if train_dataset else None
+    require_formal = bool(formal) and not allow_pseudo_gold
     report = inspect_eval_manifest(
         source_path,
         min_gold_ratio=min_gold_ratio,
         require_audio_key=require_audio_key,
+        require_formal_gold=require_formal,
+        allow_pseudo_gold=allow_pseudo_gold,
+        train_manifest=train_path,
     )
     if report.total == 0:
         raise typer.BadParameter(f"manifest is empty: {source_path}")
+    for item in report.warnings:
+        console.print(f"[yellow]WARN[/yellow] {item}")
     if report.errors:
         for item in report.errors:
             console.print(f"[red]FAIL[/red] {item}")
         raise typer.Exit(code=1)
 
     manifest = Manifest.load(source_path)
+    # Stamp eval trust metadata onto samples for downstream reports.
+    for sample in manifest:
+        sample.labels.setdefault("eval_trust", report.eval_trust)
+        if report.release_version:
+            sample.labels.setdefault("release_version", report.release_version)
     dest.parent.mkdir(parents=True, exist_ok=True)
     manifest.save(dest)
     manifest.save(dest.with_suffix(".jsonl"))
@@ -1756,6 +1848,9 @@ def eval_register(
     console.print(f"  Source:   [cyan]{source_path}[/cyan]")
     console.print(f"  Output:   [cyan]{dest}[/cyan]")
     console.print(f"  Samples:  {len(manifest)} (gold={len(report.with_gold)})")
+    console.print(f"  eval_trust: [cyan]{report.eval_trust}[/cyan]")
+    if report.release_version:
+        console.print(f"  release:  [cyan]{report.release_version}[/cyan]")
     console.print(f"  Artifact: [cyan]{artifact_id}[/cyan]")
     console.print(
         f"  Next: audio-data pipeline run pipelines/qwen_asr_batch.yaml "

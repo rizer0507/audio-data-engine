@@ -455,6 +455,21 @@ def main() -> int:
         key = str(sample.labels.get("type") or "unclassified")
         type_counts[key] = type_counts.get(key, 0) + 1
     print(f"[INFO] type 分布: {dict(sorted(type_counts.items()))}")
+    pseudo_types = {
+        "auto_gold",
+        "consensus_gold",
+        "pseudo_gold_high",
+        "pseudo_gold_medium",
+    }
+    pseudo_n = sum(type_counts.get(k, 0) for k in pseudo_types)
+    if pseudo_n:
+        print(
+            f"[WARN] summary 含伪金标桶 {pseudo_n} 条（{sorted(pseudo_types & set(type_counts))}）；"
+            "正式评测请改用冻结 eval Release（human/external gold），"
+            "本脚本产物视为调试路径（eval_trust=pseudo_debug）"
+        )
+        for sample in samples:
+            sample.labels.setdefault("eval_trust", "pseudo_debug")
 
     eval_path = ROOT / staged_manifest_path(eval_name)
     eval_path.parent.mkdir(parents=True, exist_ok=True)

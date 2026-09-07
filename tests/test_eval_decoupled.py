@@ -271,7 +271,7 @@ def test_eval_register_and_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["eval", "register", str(source), "--name", "eval_local_test"],
+        ["eval", "register", str(source), "--name", "eval_local_test", "--legacy"],
     )
     assert result.exit_code == 0, result.output
     dest = tmp_path / "datasets" / "stage3" / "eval_sets" / "eval_local_test.parquet"
