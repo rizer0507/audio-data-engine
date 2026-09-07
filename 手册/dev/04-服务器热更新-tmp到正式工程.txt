@@ -27,6 +27,11 @@
 
 明确不覆盖：
   docs/  data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/  .env
+  （datasets/ 含 stage1|stage3 全部产物；尤其 stage*/asr/ 识别结果本脚本绝不碰）
+
+说明（009 路径分层后）：
+  正式工程 parquet 落在 datasets/stage1|stage3/…；热更新只覆盖下方白名单代码/配置/手册，
+  不会同步、覆盖或清空服务器上的 ASR / 分拣 / 评测产物。
 
 --------------------------------------------------------------------------------
 一键执行（Bash，在服务器上跑）

@@ -8,8 +8,13 @@ setlocal EnableDelayedExpansion
 ::   1. 不删除 U 盘上的目标目录，也不使用 /MIR /PURGE（目标多出来的文件一律保留）
 ::   2. 只拷贝下方白名单；服务器独有资产永不通过本脚本带走/覆盖：
 ::        data/  datasets/  runs/  数据集/  .venv/  .env  resources/  *.parquet
+::        （含 datasets/stage1|stage3 下全部产物；尤其 stage*/asr/ 识别结果严禁经本脚本动）
 ::   3. docs/ 仅本机保留，不同步到 U 盘 / 服务器
 ::   4. 同名文件会用本机版本覆盖（加/更新）；不会减少目标侧文件
+::
+:: 说明（009 路径分层后）：
+::   本机/服务器正式工程的 parquet 落在 datasets/stage1|stage3/…；
+::   本脚本仍只同步代码/配置/手册，datasets 整树不同步——热更新不会覆盖或清空识别结果。
 ::
 :: 用法：双击运行，或在项目根目录执行  scripts\sync_to_usb.bat
 :: U 盘拷到服务器后，执行 手册/dev/04-服务器热更新-tmp到正式工程.txt
@@ -68,6 +73,7 @@ echo   目录.txt
 echo.
 echo 明确不同步（保护服务器 / 本机专属）:
 echo   docs  data  datasets  runs  数据集  .venv  .env  resources  *.parquet
+echo   （datasets 含 stage1/stage3；ASR 识别结果不经本脚本同步）
 echo   （docs 仅本机；不删除 U 盘已有内容，不 purge）
 echo.
 echo 开始增量拷贝...
