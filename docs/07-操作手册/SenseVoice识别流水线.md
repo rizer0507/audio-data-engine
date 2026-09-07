@@ -264,10 +264,10 @@ Qwen 阶段已有的数据不能被覆盖。SenseVoice 完成后，一条样本�
 name: sensevoice_asr_batch
 
 input:
-  manifest: datasets/manifests/qwen_asr_source_A.parquet
+  manifest: datasets/stage1/asr/qwen_asr_source_A.parquet
 
 output:
-  manifest: datasets/manifests/qwen_sensevoice_source_A.parquet
+  manifest: datasets/stage1/derived/qwen_sensevoice_source_A.parquet
 
 execution:
   executor: sequential
@@ -299,7 +299,7 @@ pipeline:
 以下以 4 个 worker 的保守起始配置为例。确认 Qwen 阶段已完成后执行：
 
 ```bash
-audio-data manifest shard datasets/manifests/qwen_asr_source_A.parquet \
+audio-data manifest shard datasets/stage1/asr/qwen_asr_source_A.parquet \
   --shards 4 \
   --strategy duration-balanced \
   --output-dir datasets/shards/sensevoice_source_A
@@ -312,7 +312,7 @@ audio-data pipeline run-shards pipelines/sensevoice_asr_batch.yaml \
   --run-root runs/sensevoice_source_A
 
 audio-data manifest merge "runs/sensevoice_source_A/shard-*.parquet" \
-  --output datasets/manifests/qwen_sensevoice_source_A.parquet \
+  --output datasets/stage1/derived/qwen_sensevoice_source_A.parquet \
   --expected-shards 4
 ```
 

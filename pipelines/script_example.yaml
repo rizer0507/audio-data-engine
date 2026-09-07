@@ -1,7 +1,7 @@
 name: script_example
 
 input:
-  manifest: datasets/manifests/raw_example.parquet
+  manifest: datasets/stage1/derived/raw_example.parquet
 
 execution:
   executor: process

@@ -6,7 +6,7 @@
 
 示例：
   CUDA_VISIBLE_DEVICES=4 PYTHONPATH=src python scripts/validate_sensevoice_pipeline.py \\
-    --manifest datasets/manifests/qwen_asr_source_A.parquet \\
+    --manifest datasets/stage1/asr/qwen_asr_source_A.parquet \\
     --model-path /data/models/SenseVoiceSmall \\
     --samples 3 \\
     --batch-size 1

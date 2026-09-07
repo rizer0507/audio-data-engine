@@ -21,10 +21,10 @@
 name: kimi_asr_batch
 
 input:
-  manifest: datasets/manifests/cleaned_source_A.parquet
+  manifest: datasets/stage1/cleaned/cleaned_source_A.parquet
 
 output:
-  manifest: datasets/manifests/kimi_asr_source_A.parquet
+  manifest: datasets/stage1/asr/kimi_asr_source_A.parquet
 
 execution:
   executor: thread

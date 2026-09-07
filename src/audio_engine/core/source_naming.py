@@ -1,18 +1,19 @@
-"""Unified dataset naming driven by CLI ``--source-name``.
+"""Unified dataset naming driven by CLI ``--source-name`` / ``--eval-name``.
 
-Convention (source_name=mt3000):
-  datasets/manifests/cleaned_mt3000.parquet
-  datasets/manifests/qwen_asr_mt3000.parquet          # default ASR stem
-  datasets/manifests/qwen1_asr_mt3000.parquet         # --asr-run qwen1
-  datasets/manifests/sensevoice_asr_mt3000.parquet
-  datasets/manifests/multi_asr_aggregate_mt3000.parquet
-  datasets/manifests/multi_asr_metrics_mt3000.parquet
+Stem convention is unchanged; directory roots are staged by process (009 Phase A):
 
-Eval convention (--eval-name eval_mt3000):
-  datasets/manifests/eval_mt3000.parquet              # registered eval set
-  datasets/manifests/{alias}_asr_eval_mt3000.parquet  # --asr-run on eval set
-  datasets/manifests/eval_aggregate_eval_mt3000.parquet
-  datasets/manifests/eval_metrics_eval_mt3000.parquet
+  datasets/stage1/cleaned/cleaned_{source}.parquet
+  datasets/stage1/asr/{alias}_asr_{source}.parquet          # expensive
+  datasets/stage1/derived/multi_asr_aggregate_{source}.parquet
+  datasets/stage1/derived/multi_asr_metrics_{source}.parquet
+  datasets/stage1/derived/classified_{source}.parquet
+  datasets/stage3/eval_sets/eval_{batch}.parquet
+  datasets/stage3/asr/{alias}_asr_eval_{batch}.parquet      # expensive
+  datasets/stage3/derived/eval_aggregate_eval_{batch}.parquet
+  datasets/stage3/derived/eval_metrics_eval_{batch}.parquet
+  datasets/stage3/reports/{eval_name}/evaluation.{json,xlsx}
+
+Legacy flat ``datasets/manifests/`` remains readable via ``resolve_existing_manifest``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,19 @@ import re
 from pathlib import Path
 from typing import Any
 
-DEFAULT_MANIFESTS_DIR = Path("datasets/manifests")
+DATASETS_ROOT = Path("datasets")
+LEGACY_MANIFESTS_DIR = DATASETS_ROOT / "manifests"
+# Kept as alias for callers / resolve fallback search.
+DEFAULT_MANIFESTS_DIR = LEGACY_MANIFESTS_DIR
+
+STAGE1_CLEANED_DIR = DATASETS_ROOT / "stage1" / "cleaned"
+STAGE1_ASR_DIR = DATASETS_ROOT / "stage1" / "asr"
+STAGE1_DERIVED_DIR = DATASETS_ROOT / "stage1" / "derived"
+STAGE3_EVAL_SETS_DIR = DATASETS_ROOT / "stage3" / "eval_sets"
+STAGE3_ASR_DIR = DATASETS_ROOT / "stage3" / "asr"
+STAGE3_DERIVED_DIR = DATASETS_ROOT / "stage3" / "derived"
+STAGE3_REPORTS_DIR = DATASETS_ROOT / "stage3" / "reports"
+
 _SOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 # kimi_asr_batch / qwen_asr / sensevoice_asr_batch → model stem before _asr
 _ASR_PIPELINE_RE = re.compile(r"^(.+)_asr(?:_batch)?$")
@@ -76,14 +89,63 @@ def _posix(path: Path | str) -> str:
     return Path(path).as_posix()
 
 
+def manifest_dir_for_stem(stem: str) -> Path:
+    """Map a manifest basename (no extension) to its staged directory root."""
+    text = str(stem or "").strip()
+    if not text:
+        raise ValueError("manifest stem must be non-empty")
+    # Strip accidental suffixes if callers pass a filename.
+    if text.lower().endswith((".parquet", ".jsonl")):
+        text = Path(text).stem
+
+    if text.startswith("cleaned_"):
+        return STAGE1_CLEANED_DIR
+    if text.startswith("multi_asr_") or text.startswith("classified_"):
+        return STAGE1_DERIVED_DIR
+    if text.startswith("eval_aggregate_") or text.startswith("eval_metrics_"):
+        return STAGE3_DERIVED_DIR
+    # Eval-set ASR before generic ``_asr_`` / ``eval_`` rules.
+    if "_asr_eval_" in text:
+        return STAGE3_ASR_DIR
+    if text.startswith("eval_"):
+        return STAGE3_EVAL_SETS_DIR
+    if "_asr_" in text or text.endswith("_asr"):
+        return STAGE1_ASR_DIR
+    # Unknown stems (reviewed_*, gold_*, …): keep writable under stage1/derived.
+    return STAGE1_DERIVED_DIR
+
+
+def staged_manifest_path(stem: str, *, ext: str = ".parquet") -> Path:
+    """Canonical write path for a full stem under the staged layout."""
+    name = str(stem).strip()
+    if name.lower().endswith((".parquet", ".jsonl")):
+        ext = Path(name).suffix.lower()
+        name = Path(name).stem
+    return manifest_dir_for_stem(name) / f"{name}{ext}"
+
+
+def evaluation_report_dir(eval_name: str) -> Path:
+    """Authoritative evaluation report directory for an eval set name."""
+    name = validate_source_name(eval_name)
+    return STAGE3_REPORTS_DIR / name
+
+
 def manifest_path(
     kind: str,
     source_name: str,
     *,
-    manifests_dir: Path | str = DEFAULT_MANIFESTS_DIR,
+    manifests_dir: Path | str | None = None,
     ext: str = ".parquet",
 ) -> Path:
-    return Path(manifests_dir) / f"{manifest_stem(kind, source_name)}{ext}"
+    """Return the canonical parquet/jsonl path for ``{kind}_{source_name}``.
+
+    When ``manifests_dir`` is omitted, writes go to the staged process directory.
+    Passing ``manifests_dir`` explicitly forces that root (tests / overrides).
+    """
+    stem = manifest_stem(kind, source_name)
+    if manifests_dir is not None:
+        return Path(manifests_dir) / f"{stem}{ext}"
+    return staged_manifest_path(stem, ext=ext)
 
 
 def model_asr_kind(model: str) -> str:
@@ -96,6 +158,29 @@ def model_asr_kind(model: str) -> str:
     return f"{model}_asr"
 
 
+def _candidate_bases_for_stem(stem: str, manifests_dir: Path) -> list[Path]:
+    """Search order: staged root → legacy manifests → explicit manifests_dir."""
+    staged = manifest_dir_for_stem(stem)
+    bases: list[Path] = [staged, LEGACY_MANIFESTS_DIR]
+    manifests_dir = Path(manifests_dir)
+    if manifests_dir.resolve() != LEGACY_MANIFESTS_DIR.resolve():
+        bases.append(manifests_dir)
+    # Deduplicate while preserving order.
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    for base in bases:
+        key = base if base.is_absolute() else (Path.cwd() / base)
+        try:
+            key = key.resolve()
+        except OSError:
+            pass
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(base)
+    return ordered
+
+
 def resolve_existing_manifest(
     stem_or_path: str,
     *,
@@ -106,8 +191,9 @@ def resolve_existing_manifest(
     Accepts:
       - cleaned_mt3000
       - datasets/manifests/cleaned_mt3000
-      - datasets/manifests/cleaned_mt3000.parquet
-    Prefers ``.parquet`` over ``.jsonl`` when both exist.
+      - datasets/stage1/cleaned/cleaned_mt3000.parquet
+    Prefers staged locations over legacy ``datasets/manifests/``, and
+    ``.parquet`` over ``.jsonl`` when both exist in the same root.
     """
     text = str(stem_or_path).strip()
     if not text:
@@ -118,18 +204,24 @@ def resolve_existing_manifest(
     candidates: list[Path] = []
 
     if raw.suffix.lower() in {".parquet", ".jsonl"}:
+        stem = raw.stem
         candidates.append(raw)
         if not raw.is_absolute():
             candidates.append(Path.cwd() / raw)
-            candidates.append(manifests_dir / raw.name)
+        for base in _candidate_bases_for_stem(stem, manifests_dir):
+            candidates.append(base / raw.name)
+            # Prefer parquet sibling when caller pointed at missing jsonl path.
+            if raw.suffix.lower() == ".jsonl":
+                candidates.append(base / f"{stem}.parquet")
+            else:
+                candidates.append(base / f"{stem}.jsonl")
     else:
-        # Prefer parquet then jsonl under manifests_dir and CWD.
+        stem = raw.name
         for base in (
-            manifests_dir,
+            *_candidate_bases_for_stem(stem, manifests_dir),
             Path.cwd(),
             raw.parent if raw.parent != Path(".") else Path.cwd(),
         ):
-            stem = raw.name
             candidates.append(base / f"{stem}.parquet")
             candidates.append(base / f"{stem}.jsonl")
             candidates.append(base / stem)
@@ -138,7 +230,10 @@ def resolve_existing_manifest(
     ordered: list[Path] = []
     for candidate in candidates:
         resolved = candidate if candidate.is_absolute() else (Path.cwd() / candidate)
-        key = resolved.resolve() if resolved.exists() else resolved
+        try:
+            key = resolved.resolve() if resolved.exists() else resolved
+        except OSError:
+            key = resolved
         if key in seen:
             continue
         seen.add(key)
@@ -148,22 +243,24 @@ def resolve_existing_manifest(
         if candidate.is_file():
             return candidate.resolve()
 
-    searched = ", ".join(str(p) for p in ordered[:8])
+    searched = ", ".join(str(p) for p in ordered[:12])
     raise FileNotFoundError(
         f"Manifest '{stem_or_path}' not found (tried parquet/jsonl). Searched: {searched}"
     )
 
 
 def _as_output_parquet(formatted: str) -> str:
-    """Normalize a layout output template to a ``.parquet`` path under manifests."""
+    """Normalize a layout output template to a staged ``.parquet`` path."""
     text = formatted.strip()
     path = Path(text)
     if path.suffix.lower() in {".parquet", ".jsonl"}:
-        return _posix(path.with_suffix(".parquet"))
+        if "/" in text or "\\" in text:
+            return _posix(path.with_suffix(".parquet"))
+        return _posix(staged_manifest_path(path.stem, ext=".parquet"))
     if "/" in text or "\\" in text:
         out = Path(text).with_suffix(".parquet") if Path(text).suffix else Path(f"{text}.parquet")
         return _posix(out)
-    return _posix(DEFAULT_MANIFESTS_DIR / f"{path.name}.parquet")
+    return _posix(staged_manifest_path(path.name, ext=".parquet"))
 
 
 def expand_layout_templates(
@@ -173,7 +270,7 @@ def expand_layout_templates(
     """Expand ``{source_name}`` templates into (input_stem, output_parquet) pairs.
 
     ``input`` stays a stem/path for ``resolve_existing_manifest``.
-    ``output`` becomes ``datasets/manifests/<stem>.parquet``.
+    ``output`` becomes the staged parquet path for that stem.
     """
     name = validate_source_name(source_name)
     rows = layout if layout else DEFAULT_MULTI_ASR_LAYOUT
@@ -269,7 +366,7 @@ def parse_join_manifest_arg(raw: str, source_name: str | None = None) -> dict[st
     """Parse ``sensevoice`` or ``kimi=/path/to.parquet`` into `{model, path}`.
 
     When only a model name is given, ``source_name`` is required and the path becomes
-    ``datasets/manifests/{model}_asr_{source_name}.parquet``.
+    the staged ``{model}_asr_{source_name}.parquet``.
     """
     text = (raw or "").strip()
     if not text:

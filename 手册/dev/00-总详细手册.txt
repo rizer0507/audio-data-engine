@@ -164,7 +164,7 @@ curl -fsS "${QWEN_ASR_API_BASE%/}/v1/models" | python -m json.tool
 -------------------------------------------------------
 1. 清洗、落库
 -------------------------------------------------------
-# 输出：datasets/manifests/cleaned_${BATCH}.parquet|jsonl
+# 输出：datasets/stage1/cleaned/cleaned_${BATCH}.parquet|jsonl
 # YAML: pipelines/data_cleaning_source_A.yaml
 
 audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
@@ -185,8 +185,8 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 -------------------------------------------------------
 2. Qwen 全量识别
 -------------------------------------------------------
-# 输出：datasets/manifests/qwen_asr_${BATCH}.parquet
-# 或带 --asr-run <alias>：datasets/manifests/{alias}_asr_${BATCH}.parquet
+# 输出：datasets/stage1/asr/qwen_asr_${BATCH}.parquet
+# 或带 --asr-run <alias>：datasets/stage1/asr/{alias}_asr_${BATCH}.parquet
 #
 # 前置：每卡一个 vLLM（不要用 CUDA_VISIBLE_DEVICES=4,5 + tp=1 指望双卡）
 # 流水线对 api_bases 做 round-robin（失败自动切下一实例）
@@ -270,7 +270,7 @@ audio-data pipeline run pipelines/qwen_asr_batch.yaml \
 3. SenseVoice 全量识别
 -------------------------------------------------------
 # SenseVoice 与 Qwen 独立运行，不依赖 Qwen 的 Manifest。
-# 输出：datasets/manifests/sensevoice_asr_${BATCH}.parquet
+# 输出：datasets/stage1/asr/sensevoice_asr_${BATCH}.parquet
 # 当前 sharding：GPU 4、5，每卡 4 实例，共 8 并行 shard
 
 export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
@@ -362,11 +362,11 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 
 # 该流水线先做：zh_asr_v1 去标点 + qwen 精确短语清空（configs/normalization/blank_exact_qwen_v1.yaml），
 # 全部改写完成后再计算 agreement CER。
-# 输出：datasets/manifests/multi_asr_metrics_${BATCH}.parquet
+# 输出：datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet
 
 # （可选）导出 xlsx：
 # python scripts/export_multi_asr_xlsx.py \
-#   --manifest datasets/manifests/multi_asr_aggregate_${BATCH}.parquet \
+#   --manifest datasets/stage1/derived/multi_asr_aggregate_${BATCH}.parquet \
 #   --output datasets/exports/multi_asr_aggregate_${BATCH}.xlsx \
 #   --models qwen,sensevoice
 
@@ -384,8 +384,8 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 # auto_gold 会自动记录 gold_text、gold_source、annotation_revision。
 
 audio-data pipeline run pipelines/classify_dataset.yaml \
-  --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
-  --output-manifest "datasets/manifests/classified_${BATCH}.parquet" \
+  --input-manifest "datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet" \
+  --output-manifest "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --force
 
 # 注意：agreement CER 只是模型间一致程度，不是真实准确率。
@@ -398,7 +398,7 @@ audio-data pipeline run pipelines/classify_dataset.yaml \
 export REVIEW_REV=review_${BATCH}_v1
 export REVIEW_XLSX="data/exports/review_${BATCH}_${REVIEW_REV}.xlsx"
 
-audio-data review export "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review export "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --output "$REVIEW_XLSX" \
   --revision "$REVIEW_REV" \
   --bucket review_queue \
@@ -416,9 +416,9 @@ audio-data review export "datasets/manifests/classified_${BATCH}.parquet" \
 -------------------------------------------------------
 7. 导入审核结果
 -------------------------------------------------------
-audio-data review import "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review import "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --input "$REVIEW_XLSX" \
-  --output "datasets/manifests/reviewed_${BATCH}.parquet" \
+  --output "datasets/stage1/derived/reviewed_${BATCH}.parquet" \
   --revision "$REVIEW_REV" \
   --bucket review_queue \
   --bucket hardcase
@@ -435,7 +435,7 @@ export RELEASE_ID=ds_${BATCH}_v1
 # 同一 group 永远不会跨 train/dev/test；classification_bucket 用于分层。
 # noise/rejected 自动排除；未审核的 review_queue/hardcase 会阻止 Release 创建。
 
-audio-data release build "datasets/manifests/reviewed_${BATCH}.parquet" \
+audio-data release build "datasets/stage1/derived/reviewed_${BATCH}.parquet" \
   --id "$RELEASE_ID" \
   --policy-version selection_zh_asr_v1_1 \
   --normalization-version zh_asr_v1 \
@@ -555,7 +555,7 @@ audio-data pipeline run pipelines/evaluate_registered_models.yaml
 
 输出：
   $EVAL_OUTPUT                         样本级结果 Manifest
-  runs/<本次评测_run>/reports/evaluation.json
+  datasets/stage3/reports/eval_${BATCH}/evaluation.json（权威；runs/ 仅副本）
 
 若门禁失败：
   流水线返回失败，但 evaluation.json 会保留；先检查 delta_cer、各 bucket 和 badcase，
@@ -725,7 +725,7 @@ audio-data model show <model_id>
 [ ] EVAL_OUTPUT
 
 通常不需要修改：
-  datasets/manifests 内的中间文件路径
+  datasets/stage1|stage3 内的中间文件路径（旧 manifests/ 仍可读）
   Artifact Catalog JSON
   CER 实现
   train/dev/test 随机拆分逻辑

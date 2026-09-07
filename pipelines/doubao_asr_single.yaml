@@ -20,7 +20,7 @@ input:
   source_dir: "D:/Work/asr数据/0902_test/"
 
 output:
-  manifest: datasets/manifests/doubao_asr_single.parquet
+  manifest: datasets/stage1/asr/doubao_asr_single.parquet
 
 execution:
   executor: sequential

@@ -157,7 +157,7 @@ curl -fsS "${QWEN_ASR_API_BASE%/}/v1/models" | python -m json.tool
 -------------------------------------------------------
 1. 清洗、落库
 -------------------------------------------------------
-# 输出：datasets/manifests/cleaned_${BATCH}.parquet|jsonl
+# 输出：datasets/stage1/cleaned/cleaned_${BATCH}.parquet|jsonl
 
 audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
   --source-name "$BATCH" \
@@ -177,7 +177,7 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 -------------------------------------------------------
 # 同一 --source-name（$BATCH）共用 cleaned_${BATCH}。
 # 每次识别用 --asr-run <alias> 区分产物：
-#   datasets/manifests/{alias}_asr_${BATCH}.parquet
+#   datasets/stage1/asr/{alias}_asr_${BATCH}.parquet
 #   transcripts.{alias}.text
 # 例：qwen1 / qwen2 / sensevoice1 / doubao1 … 可按需增减，不绑死模型清单。
 # 同权重双 vLLM 端口只是其中一种用法（见 2.1）；不同模型、同模型不同批次同样适用。
@@ -282,7 +282,7 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
   --source-name "$BATCH" \
   --agreement-base qwen1
 
-# 输出：datasets/manifests/multi_asr_metrics_${BATCH}.parquet
+# 输出：datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet
 # 后续 classify 仅当 max_vs_base_agreement_cer == 0（完全一致）才进 auto_gold，
 # 金标文本取 base（qwen1）；有一字差进 hardcase / review_queue，不自动填金标列。
 
@@ -302,8 +302,8 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
 # voicemail：转写命中 configs/selection/voicemail_patterns_v1.yaml 正则（电话助手/语音信箱等）。
 
 audio-data pipeline run pipelines/classify_dataset.yaml \
-  --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
-  --output-manifest "datasets/manifests/classified_${BATCH}.parquet"
+  --input-manifest "datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet" \
+  --output-manifest "datasets/stage1/derived/classified_${BATCH}.parquet"
 
 # 注意：agreement CER 只是模型间一致程度，不是真实准确率。
 # 修改分拣策略前必须升级 policy_version。
@@ -317,9 +317,9 @@ audio-data pipeline run pipelines/classify_dataset.yaml \
 # 不一致样本（review_queue / hardcase）可先搁置，不阻塞金标评测。
 
 export GOLD_XLSX="D:/Work/audio-data-engine/data/exports/auto_gold_${BATCH}.xlsx"
-export GOLD_MANIFEST="datasets/manifests/gold_${BATCH}.parquet"
+export GOLD_MANIFEST="datasets/stage1/derived/gold_${BATCH}.parquet"
 
-audio-data review export-gold "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review export-gold "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --output "$GOLD_XLSX" \
   --output-manifest "$GOLD_MANIFEST" \
   --bucket auto_gold
@@ -337,7 +337,7 @@ audio-data review export-gold "datasets/manifests/classified_${BATCH}.parquet" \
 export REVIEW_REV=review_${BATCH}_v1
 export REVIEW_XLSX="D:/Work/audio-data-engine/data/exports/review_${BATCH}_${REVIEW_REV}.xlsx"
 
-audio-data review export "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review export "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --output "$REVIEW_XLSX" \
   --revision "$REVIEW_REV" \
   --bucket review_queue \
@@ -355,9 +355,9 @@ audio-data review export "datasets/manifests/classified_${BATCH}.parquet" \
 -------------------------------------------------------
 8. 导入审核结果
 -------------------------------------------------------
-audio-data review import "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review import "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --input "$REVIEW_XLSX" \
-  --output "datasets/manifests/reviewed_${BATCH}.parquet" \
+  --output "datasets/stage1/derived/reviewed_${BATCH}.parquet" \
   --revision "$REVIEW_REV" \
   --bucket review_queue \
   --bucket hardcase
@@ -375,18 +375,18 @@ audio-data review import "datasets/manifests/classified_${BATCH}.parquet" \
 # 人审若搁置：把下面的 reviewed_ 换成 classified_ 亦可。
 
 export SUMMARY_XLSX="D:/Work/audio-data-engine/data/exports/summary_${BATCH}.xlsx"
-export SUMMARY_MANIFEST="datasets/manifests/summary_${BATCH}.parquet"
+export SUMMARY_MANIFEST="datasets/stage1/derived/summary_${BATCH}.parquet"
 
-audio-data review export-summary "datasets/manifests/reviewed_${BATCH}.parquet" \
+audio-data review export-summary "datasets/stage1/derived/reviewed_${BATCH}.parquet" \
   --output "$SUMMARY_XLSX" \
   --output-manifest "$SUMMARY_MANIFEST" \
   --max-rows 20000
-audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review export-summary "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --output "$SUMMARY_XLSX" \
   --output-manifest "$SUMMARY_MANIFEST" \
   --max-rows 20000
 # 人审未完成时：
-# audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+# audio-data review export-summary "datasets/stage1/derived/classified_${BATCH}.parquet" \
 #   --output "$SUMMARY_XLSX" --output-manifest "$SUMMARY_MANIFEST" --max-rows 20000
 
 
@@ -415,7 +415,7 @@ audio-data release build "$GOLD_MANIFEST" \
 # 路径 B：人审完成后，用 reviewed Manifest 全量冻结
 # 未审核的 review_queue/hardcase 默认会阻止创建；若仍要先用已有金标：
 #   加 --allow-unresolved-review（只纳入 auto_accepted / human_accepted）。
-audio-data release build "datasets/manifests/reviewed_${BATCH}.parquet" \
+audio-data release build "datasets/stage1/derived/reviewed_${BATCH}.parquet" \
   --id "$RELEASE_ID" \
   --policy-version selection_zh_asr_v1_2 \
   --normalization-version zh_asr_v1 \
@@ -529,11 +529,11 @@ audio-data model show "$BASELINE_MODEL_ID"
 # 优先：工序③ export-summary 全量总表（含 type）；也可用 gold_ / reviewed_ / Release test。
 
 export EVAL_NAME="eval_${BATCH}"
-export EVAL_SOURCE="datasets/manifests/summary_${BATCH}.parquet"
+export EVAL_SOURCE="datasets/stage1/derived/summary_${BATCH}.parquet"
 # 人审未完成时也可用 classified_；只要金标/type 合理：
-# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/stage1/derived/classified_${BATCH}.parquet"
 # 仅 auto_gold：
-# export EVAL_SOURCE="datasets/manifests/gold_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/stage1/derived/gold_${BATCH}.parquet"
 
 audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
 # 覆盖已存在：加 --force
@@ -583,7 +583,7 @@ curl -fsS http://127.0.0.1:5562/v1/models | python -m json.tool
 audio-data pipeline run pipelines/qwen_asr_batch.yaml \
   --eval-name "$EVAL_NAME" --asr-run qwen-sft-epoch100
 
-# 输出：datasets/manifests/{alias}_asr_eval_${BATCH}.parquet
+# 输出：datasets/stage3/asr/{alias}_asr_eval_${BATCH}.parquet
 # transcript 键 = --asr-run 别名
 
 
@@ -599,9 +599,9 @@ audio-data pipeline run pipelines/eval_aggregate.yaml \
   --join-manifest qwen-sft-epoch100
 # 若单独跑了原模型：再加 --join-manifest qwen
 # 若要复用工序②全量 ASR：显式路径亦可
-#   --join-manifest "qwen1=datasets/manifests/qwen1_asr_${BATCH}.parquet"
+#   --join-manifest "qwen1=datasets/stage1/asr/qwen1_asr_${BATCH}.parquet"
 
-# 输出：datasets/manifests/eval_aggregate_eval_${BATCH}.parquet
+# 输出：datasets/stage3/derived/eval_aggregate_eval_${BATCH}.parquet
 
 
 -------------------------------------------------------
@@ -618,9 +618,10 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 # 若原模型在评测集里叫 qwen1：把上面的 qwen 改成 qwen1
 
 # 输出：
-#   datasets/manifests/eval_metrics_eval_${BATCH}.parquet
-#   runs/<本次评测_run>/reports/evaluation.json
-#   runs/<本次评测_run>/reports/evaluation.xlsx
+#   datasets/stage3/derived/eval_metrics_eval_${BATCH}.parquet
+#   datasets/stage3/reports/eval_${BATCH}/evaluation.json（权威）
+#   datasets/stage3/reports/eval_${BATCH}/evaluation.xlsx
+#   runs/.../reports/ 仅副本
 #     工作表：结果 / 统计摘要 / 按type统计（每个 --eval-model 一块字准率）
 
 
@@ -786,7 +787,7 @@ audio-data model show <model_id>
 [ ] multi_asr_aggregate 的 --join-manifest（kimi 或 kimi_audio）
 [ ] （仅 Qwen 本地回退）QWEN_ASR_MODEL_PATH=D:/Work/Qwen3-ASR-main/models/qwen3-asr-0.6b
 [ ] REVIEW_REV
-[ ] GOLD_MANIFEST（datasets/manifests/gold_${BATCH}.parquet）
+[ ] GOLD_MANIFEST（datasets/stage1/derived/gold_${BATCH}.parquet）
 [ ] EVAL_NAME（eval_${BATCH}）/ EVAL_SOURCE（summary_ 或 gold_）
 [ ] RELEASE_ID
 [ ] group-key（conversation_id 或 speaker_id）
@@ -797,7 +798,7 @@ audio-data model show <model_id>
 [ ] --eval-model 列表（与报告维度一致）
 
 通常不需要修改：
-  datasets/manifests 内的中间文件路径
+  datasets/stage1|stage3 内的中间文件路径（旧 manifests/ 仍可读）
   Artifact Catalog JSON
   CER 实现
   train/dev/test 随机拆分逻辑
@@ -866,7 +867,7 @@ wav/pcm（D:/Work/FunASR-main/data/wavfile）
 #   --run-root runs/cleaning_<BATCH>_shards
 # 4. 合并
 # audio-data manifest merge "runs/cleaning_<BATCH>_shards/shard-*.parquet" \
-#   --output datasets/manifests/cleaned_<BATCH>.parquet --expected-shards N
+#   --output datasets/stage1/cleaned/cleaned_<BATCH>.parquet --expected-shards N
 
 【A.2 聚合 + 分拣 + 汇总（文档.txt 简表）】
 # export BATCH=<BATCH>
@@ -877,13 +878,13 @@ wav/pcm（D:/Work/FunASR-main/data/wavfile）
 # audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
 #   --source-name "$BATCH" --agreement-base qwen1 --force
 # audio-data pipeline run pipelines/classify_dataset.yaml \
-#   --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
-#   --output-manifest "datasets/manifests/classified_${BATCH}.parquet" --force
-# audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+#   --input-manifest "datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet" \
+#   --output-manifest "datasets/stage1/derived/classified_${BATCH}.parquet" --force
+# audio-data review export-summary "datasets/stage1/derived/classified_${BATCH}.parquet" \
 #   --output "data/exports/summary_${BATCH}.xlsx" --max-rows 20000
 
 【A.3 评测简表（文档.txt）】
-# audio-data eval register "datasets/manifests/summary_${BATCH}.parquet" --name "eval_${BATCH}"
+# audio-data eval register "datasets/stage1/derived/summary_${BATCH}.parquet" --name "eval_${BATCH}"
 # audio-data eval check "eval_${BATCH}"
 # export QWEN_ASR_API_BASE=http://127.0.0.1:5561
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch10
@@ -897,7 +898,7 @@ wav/pcm（D:/Work/FunASR-main/data/wavfile）
 【A.4 从 summary xlsx 一键评测（文档.txt）】
 # python scripts/run_eval_from_summary.py \
 #   --summary data/exports/summary_<BATCH>.xlsx \
-#   --model qwen-sft-e10=datasets/manifests/qwen-sft-e10_asr_sft-ep10.parquet \
-#   --model qwen-sft-e100=datasets/manifests/qwen-sft-e100_asr_sft-ep100.parquet \
+#   --model qwen-sft-e10=datasets/stage1/asr/qwen-sft-e10_asr_sft-ep10.parquet \
+#   --model qwen-sft-e100=datasets/stage1/asr/qwen-sft-e100_asr_sft-ep100.parquet \
 #   --eval-name eval_<BATCH> \
 #   --eval-model qwen1 --eval-model qwen-sft-e10 --eval-model qwen-sft-e100 --force

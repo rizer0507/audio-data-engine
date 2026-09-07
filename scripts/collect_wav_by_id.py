@@ -22,13 +22,13 @@ Usage
 python scripts/collect_wav_by_id.py ids.xlsx
 
 # 提供 manifest，优先走快速路径（可传多个，按顺序合并，后者不覆盖已命中 id）
-python scripts/collect_wav_by_id.py ids.xlsx --manifest datasets/manifests/cleaned_source_A.parquet
+python scripts/collect_wav_by_id.py ids.xlsx --manifest datasets/stage1/cleaned/cleaned_source_A.parquet
 python scripts/collect_wav_by_id.py ids.xlsx \\
-    --manifest datasets/manifests/a.parquet datasets/manifests/b.parquet
+    --manifest datasets/stage1/derived/a.parquet datasets/stage1/derived/b.parquet
 
 # 完整参数
 python scripts/collect_wav_by_id.py ids.xlsx \\
-    --manifest datasets/manifests/cleaned_source_A.parquet \\
+    --manifest datasets/stage1/cleaned/cleaned_source_A.parquet \\
     --derived-dir data/derived/resample_16k \\
     --output-dir test_wav \\
     --id-column id \\

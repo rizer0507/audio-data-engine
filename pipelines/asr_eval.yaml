@@ -9,9 +9,9 @@
 
 name: asr_eval
 input:
-  manifest: datasets/manifests/asr_eval_source_A.parquet
+  manifest: datasets/stage1/derived/asr_eval_source_A.parquet
 output:
-  manifest: datasets/manifests/asr_eval_metrics_source_A.parquet
+  manifest: datasets/stage1/derived/asr_eval_metrics_source_A.parquet
 pipeline:
   - name: normalize_transcripts
     operator: quality.normalize_transcripts

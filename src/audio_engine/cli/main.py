@@ -42,6 +42,8 @@ from audio_engine.core.source_naming import (
     apply_source_name_to_single_pipeline,
     parse_join_manifest_arg,
     pipeline_run_name,
+    resolve_existing_manifest,
+    staged_manifest_path,
     validate_asr_run,
     validate_source_name,
 )
@@ -207,13 +209,24 @@ def _apply_eval_models(cfg: PipelineConfig, models: list[str]) -> None:
         )
 
 
+def _apply_eval_report_name(cfg: PipelineConfig, eval_name: str) -> None:
+    """Inject eval_name so evaluation_report writes to datasets/stage3/reports/."""
+    name = validate_source_name(eval_name)
+    for step in cfg.steps:
+        if step.operator == "quality.evaluation_report":
+            step.params = {**step.params, "eval_name": name}
+
+
 def _resolve_dataset(name: str) -> Path:
     if name.startswith("manifest_"):
         try:
             return Path(ArtifactCatalog(CATALOG_DIR).get(name, verify=True).uri)
         except (KeyError, FileNotFoundError, ValueError) as exc:
             raise typer.BadParameter(str(exc)) from exc
-    return Manifest.resolve_path(name, MANIFESTS_DIR)
+    try:
+        return resolve_existing_manifest(name)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _execution_override(
@@ -510,9 +523,10 @@ def pipeline_run(
         None,
         "--eval-name",
         help=(
-            "Registered evaluation-set stem under datasets/manifests/ "
-            "(e.g. eval_local_test). Decouples eval from training: ASR reads "
-            "the eval set, eval_aggregate joins by id, eval_metric scores vs gold."
+            "Registered evaluation-set stem (e.g. eval_local_test). "
+            "Resolved from datasets/stage3/eval_sets/ or legacy datasets/manifests/. "
+            "ASR / aggregate / metric paths are staged under datasets/stage3/; "
+            "evaluation reports write to datasets/stage3/reports/<eval-name>/."
         ),
     ),
     eval_model: Optional[list[str]] = typer.Option(
@@ -560,13 +574,15 @@ def pipeline_run(
     When the YAML defines ``sharding:``, splits the input, runs shard workers
     in parallel, and merges into ``output.manifest``.
 
-    ``--source-name`` sets unified dataset names under datasets/manifests/.
+    ``--source-name`` writes staged dataset paths under ``datasets/stage1/``
+    (stem unchanged; legacy ``datasets/manifests/`` remains readable).
     Cleaning also needs ``--source-dir``. ASR / aggregate / metric only need
     the name (each result alias writes ``{alias}_asr_<name>.parquet``).
 
     ``--eval-name`` is the evaluation-set counterpart (no training dependency):
     ASR reads the registered eval Manifest; aggregate joins by id; metric
-    scores vs ``gold_text``.
+    scores vs ``gold_text`` and writes reports to
+    ``datasets/stage3/reports/<eval-name>/``.
     """
     if source_dir is not None and source_name is None:
         raise typer.BadParameter("--source-dir requires --source-name")
@@ -655,8 +671,6 @@ def pipeline_run(
     cli_joins: list[dict] | None = None
     if join_manifest:
         try:
-            from audio_engine.core.source_naming import resolve_existing_manifest
-
             name_for_join = source_name or eval_name
             cli_joins = []
             for item in join_manifest:
@@ -691,6 +705,7 @@ def pipeline_run(
             )
         else:
             cfg.name = pipeline_run_name(cfg.name, eval_name)
+        _apply_eval_report_name(cfg, eval_name)
         console.print(f"  Eval name:   [cyan]{eval_name}[/cyan]")
         if overrides.get("asr_run"):
             console.print(f"  ASR run:     [cyan]{overrides['asr_run']}[/cyan]")
@@ -1669,7 +1684,10 @@ def eval_register(
     name: str = typer.Option(
         ...,
         "--name",
-        help="评测集 stem，写入 datasets/manifests/<name>.parquet（如 eval_local_test）",
+        help=(
+            "评测集 stem，写入 datasets/stage3/eval_sets/<name>.parquet"
+            "（兼容读取 datasets/manifests/；如 eval_local_test）"
+        ),
     ),
     force: bool = typer.Option(False, "--force", help="覆盖已存在的同名评测集"),
     min_gold_ratio: float = typer.Option(
@@ -1685,7 +1703,7 @@ def eval_register(
     output: Optional[Path] = typer.Option(
         None,
         "--output",
-        help="覆盖默认输出路径 datasets/manifests/<name>.parquet",
+        help="覆盖默认输出路径 datasets/stage3/eval_sets/<name>.parquet",
     ),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
@@ -1699,7 +1717,11 @@ def eval_register(
         raise typer.BadParameter(str(exc)) from exc
 
     source_path = _resolve_dataset(dataset)
-    dest = Path(output) if output is not None else MANIFESTS_DIR / f"{eval_stem}.parquet"
+    dest = (
+        Path(output)
+        if output is not None
+        else staged_manifest_path(eval_stem, ext=".parquet")
+    )
     if dest.exists() and not force:
         raise typer.BadParameter(
             f"eval set already exists: {dest} (pass --force to overwrite)"

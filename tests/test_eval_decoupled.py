@@ -73,7 +73,9 @@ def test_apply_eval_name_asr_aggregate_metric(tmp_path: Path, monkeypatch: pytes
         asr_run="qwen-sft-epoch10",
     )
     assert asr["input_manifest"].endswith("eval_local_test.parquet")
-    assert asr["output_manifest"].endswith("qwen-sft-epoch10_asr_eval_local_test.parquet")
+    assert Path(asr["output_manifest"]).as_posix() == (
+        "datasets/stage3/asr/qwen-sft-epoch10_asr_eval_local_test.parquet"
+    )
     assert asr["asr_run"] == "qwen-sft-epoch10"
 
     aggregate = apply_eval_name_to_single_pipeline(
@@ -88,7 +90,9 @@ def test_apply_eval_name_asr_aggregate_metric(tmp_path: Path, monkeypatch: pytes
         ],
     )
     assert aggregate["input_manifest"].endswith("eval_local_test.parquet")
-    assert aggregate["output_manifest"].endswith("eval_aggregate_eval_local_test.parquet")
+    assert Path(aggregate["output_manifest"]).as_posix() == (
+        "datasets/stage3/derived/eval_aggregate_eval_local_test.parquet"
+    )
     assert aggregate["aggregate_manifests"][0]["model"] == "qwen-sft-epoch10"
 
     metric = apply_eval_name_to_single_pipeline(
@@ -97,7 +101,9 @@ def test_apply_eval_name_asr_aggregate_metric(tmp_path: Path, monkeypatch: pytes
         eval_name="eval_local_test",
     )
     assert metric["input_manifest"].endswith("eval_aggregate_eval_local_test.parquet")
-    assert metric["output_manifest"].endswith("eval_metrics_eval_local_test.parquet")
+    assert Path(metric["output_manifest"]).as_posix() == (
+        "datasets/stage3/derived/eval_metrics_eval_local_test.parquet"
+    )
 
 
 def test_aggregate_left_allows_extra_ids(tmp_path: Path):
@@ -268,7 +274,7 @@ def test_eval_register_and_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ["eval", "register", str(source), "--name", "eval_local_test"],
     )
     assert result.exit_code == 0, result.output
-    dest = tmp_path / "datasets" / "manifests" / "eval_local_test.parquet"
+    dest = tmp_path / "datasets" / "stage3" / "eval_sets" / "eval_local_test.parquet"
     assert dest.exists()
     check = runner.invoke(app, ["eval", "check", "eval_local_test"])
     assert check.exit_code == 0, check.output

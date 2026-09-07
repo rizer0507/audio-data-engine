@@ -15,13 +15,13 @@ Rules:
 Example:
   # 已聚合的单文件（兼容旧用法）
   python scripts/export_multi_asr_xlsx.py \\
-    --manifest datasets/manifests/multi_asr_aggregate_mt3000.parquet \\
+    --manifest datasets/stage1/derived/multi_asr_aggregate_mt3000.parquet \\
     --output datasets/exports/multi_asr_aggregate_mt3000.xlsx
 
   # 多个独立识别结果按 id 对齐
   python scripts/export_multi_asr_xlsx.py \\
-    --model qwen=datasets/manifests/qwen_asr_mt3000.parquet \\
-    --model sensevoice=datasets/manifests/sensevoice_asr_mt3000.parquet \\
+    --model qwen=datasets/stage1/asr/qwen_asr_mt3000.parquet \\
+    --model sensevoice=datasets/stage1/asr/sensevoice_asr_mt3000.parquet \\
     --output datasets/exports/asr_mt3000.xlsx
 
   # 多个 manifest + 模型名列表（按文件顺序对应 models）
@@ -411,7 +411,7 @@ def main() -> int:
 
     if not sources:
         # Backward-compatible default single file.
-        default = Path("datasets/manifests/multi_asr_aggregate_source_A.parquet")
+        default = Path("datasets/stage1/derived/multi_asr_aggregate_source_A.parquet")
         sources.append((None, default))
 
     for _, path in sources:

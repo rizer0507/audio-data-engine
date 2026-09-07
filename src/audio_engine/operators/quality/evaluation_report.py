@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import random
+import shutil
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,22 @@ from audio_engine.core.artifacts import atomic_write_json
 from audio_engine.core.operator import ManifestOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
+from audio_engine.core.source_naming import evaluation_report_dir
+
+
+def _resolve_authoritative_report_dir(config: OperatorConfig) -> Path:
+    """Prefer staged ``datasets/stage3/reports/{eval_name}``; else run_dir/reports."""
+    report_dir = config.params.get("report_dir")
+    if report_dir is not None and str(report_dir).strip():
+        return Path(str(report_dir).strip())
+    eval_name = config.params.get("eval_name") or config.params.get("report_name")
+    if eval_name is not None and str(eval_name).strip():
+        return evaluation_report_dir(str(eval_name).strip())
+    if config.run_dir is None:
+        raise ValueError(
+            "evaluation_report requires run_dir, or params.eval_name / params.report_dir"
+        )
+    return Path(config.run_dir) / "reports"
 
 
 def _corpus(samples: list[Sample], prefix: str) -> dict[str, float | int | None]:
@@ -387,7 +405,7 @@ class EvaluationReportOperator(ManifestOperator):
     """Aggregate multi-model sample metrics vs gold; optional pairwise regression gates."""
 
     name = "evaluation_report"
-    version = "1.3.0"
+    version = "1.4.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -536,14 +554,20 @@ class EvaluationReportOperator(ManifestOperator):
             report["gates"] = []
             report["passed"] = True
 
-        if config.run_dir is None:
-            raise ValueError("evaluation_report requires a pipeline run directory")
-        report_path = Path(config.run_dir) / "reports" / "evaluation.json"
+        auth_dir = _resolve_authoritative_report_dir(config)
+        auth_dir.mkdir(parents=True, exist_ok=True)
+        run_reports = (
+            Path(config.run_dir) / "reports" if config.run_dir is not None else None
+        )
+        report_path = auth_dir / "evaluation.json"
+        report["report_dir"] = Path(auth_dir).as_posix()
+        report["run_id"] = Path(config.run_dir).name if config.run_dir is not None else None
+        report["generated_at"] = datetime.now(timezone.utc).isoformat()
         atomic_write_json(report_path, report)
 
         export_xlsx = config.params.get("export_xlsx")
         if export_xlsx is None or export_xlsx is True:
-            xlsx_path = Path(config.run_dir) / "reports" / "evaluation.xlsx"
+            xlsx_path = auth_dir / "evaluation.xlsx"
         elif export_xlsx in (False, "", "false", "0"):
             xlsx_path = None
         else:
@@ -558,7 +582,7 @@ class EvaluationReportOperator(ManifestOperator):
                 bucket_key=bucket_key,
                 base_prefix=xlsx_base,
             )
-            report["export_xlsx"] = str(xlsx_path)
+            report["export_xlsx"] = Path(xlsx_path).as_posix()
             report["xlsx_base_prefix"] = xlsx_base
             atomic_write_json(report_path, report)
             logger.info(
@@ -569,6 +593,18 @@ class EvaluationReportOperator(ManifestOperator):
                 prefixes,
                 xlsx_base,
             )
+
+        # Keep a run-local copy so existing tooling / tests that look under runs/ still work.
+        if run_reports is not None:
+            try:
+                same_dir = run_reports.resolve() == auth_dir.resolve()
+            except OSError:
+                same_dir = False
+            if not same_dir:
+                run_reports.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(run_reports / "evaluation.json", report)
+                if xlsx_path is not None and xlsx_path.is_file():
+                    shutil.copy2(xlsx_path, run_reports / "evaluation.xlsx")
 
         if missing:
             logger.warning(

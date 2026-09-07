@@ -1,4 +1,4 @@
-> **文档定位（治理说明）**：本文保留 Manifest / Operator / Pipeline 分层等架构蓝图。其中「物理批次入库到 `data/batches/`、`datasets/batches/`」等段落属于早期愿景，**与现行「工程不持有物理音频、仅登记 `resources/manifest.yaml`」不一致**。涉及数据源登记时，以 [数据源登记规范](../02-规范规则/数据源登记规范.md) 与 [数据源落入流水线](../03-流水线/数据源落入流水线.md) 为准。现行工序见 [工序总览](./工序总览.md)。
+> **文档定位（治理说明）**：本文保留 Manifest / Operator / Pipeline 分层等架构蓝图。其中「物理批次入库到 `data/batches/`、`datasets/batches/`」等段落属于早期愿景，**与现行「工程不持有物理音频、仅登记 `resources/manifest.yaml`」不一致**。涉及数据源登记时，以 [数据源登记规范](../02-规范规则/数据源登记规范.md) 与 [数据源落入流水线](../03-流水线/数据源落入流水线.md) 为准。现行工序见 [工序总览](./工序总览.md)。`datasets/` 按工序 `stage1|stage3` 分层与评测报告权威落点见 [009-datasets模块改造需求](../04-改进需求/进行中/009-datasets模块改造需求.md)（**Phase A+B 已落地**；旧文中 `datasets/manifests/` 示例视为历史写法）。
 
 可以。对于你这种场景，我建议不要继续发展成：
 

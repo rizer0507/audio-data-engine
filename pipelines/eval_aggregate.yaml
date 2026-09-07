@@ -11,9 +11,9 @@
 
 name: eval_aggregate
 input:
-  manifest: datasets/manifests/eval_source_A.parquet
+  manifest: datasets/stage3/eval_sets/eval_source_A.parquet
 output:
-  manifest: datasets/manifests/eval_aggregate_source_A.parquet
+  manifest: datasets/stage3/derived/eval_aggregate_source_A.parquet
 execution:
   executor: sequential
   workers: 1

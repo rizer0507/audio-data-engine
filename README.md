@@ -77,7 +77,7 @@ audio-data stats manifest_<内容摘要>_<记录摘要>
 audio-data pipeline run pipelines/classify_dataset.yaml
 audio-data review export classified_source_A --output review.xlsx --revision review_v1
 audio-data review import classified_source_A --input review.xlsx \
-  --output datasets/manifests/reviewed_source_A.parquet --revision review_v1
+  --output datasets/stage1/derived/reviewed_source_A.parquet --revision review_v1
 ```
 
 审核完成后按说话人或会话分组拆分并冻结不可变 release。命令会校验每条数据都有 accepted Gold，
@@ -174,14 +174,21 @@ audio-data-engine/
 ├── configs/          # Operator 默认配置
 ├── pipelines/        # Pipeline YAML 定义
 ├── src/audio_engine/ # 核心代码
-├── datasets/manifests/
+├── datasets/
+│   ├── stage1/       # 工序一：cleaned / asr / derived
+│   ├── stage3/       # 工序三：eval_sets / asr / derived / reports
+│   └── manifests/    # 旧扁平路径（只读兼容）
 ├── data/
 │   ├── raw/          # 原始音频（只读）
 │   ├── derived/      # 处理产物
 │   ├── cache/        # 可删缓存
-│   └── exports/      # 最终交付
-└── runs/             # 每次运行的日志和产物
+│   └── exports/      # 金标/汇总等 xlsx 交付
+└── runs/             # 单次运行的日志 / checkpoint（非业务真相源）
 ```
+
+`datasets/` 与 `runs/` 的职责边界见
+[009-datasets模块改造需求](docs/04-改进需求/进行中/009-datasets模块改造需求.md)
+与 [datasets/README](datasets/README.md)。
 
 ## 已注册 Operator
 

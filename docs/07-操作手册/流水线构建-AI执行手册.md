@@ -26,7 +26,8 @@
 |--------------|----------|
 | 短名 | 根据中文目标生成 snake_case，开工前用一句话告知用户 |
 | 输入 | 优先衔接现有数据链（如 cleaned → qwen）；路径不明则问 |
-| 输出路径 | `datasets/manifests/<短名>.parquet` |
+| 输出路径 | 按工序写入 staged 路径（stem 不变，见 [009](../04-改进需求/进行中/009-datasets模块改造需求.md)）：清洗 → `datasets/stage1/cleaned/`；ASR → `datasets/stage1/asr/` 或 `stage3/asr/`；派生表 → `*/derived/`；评测集 → `stage3/eval_sets/`；评测报告权威落点 → `datasets/stage3/reports/<eval_name>/`（勿再把报告只写进 `runs/`） |
+
 | 并发 | 数据量大或涉及 ASR/GPU → YAML `sharding`；小数据可不分片 |
 | 失败样本 | 记入 status/errors，不伪造结果；除非用户要求丢弃 |
 | 日志 | 新脚本必须 `context.log` |
@@ -104,9 +105,9 @@
 ```yaml
 name: <短名>
 input:
-  manifest: datasets/manifests/<上游>.parquet
+  manifest: datasets/stage1/cleaned/<上游>.parquet   # 或 stage1/asr|derived、stage3/...
 output:
-  manifest: datasets/manifests/<短名产物>.parquet
+  manifest: datasets/stage1/asr/<短名产物>.parquet   # 按产物类型选 stage 子目录；勿再写扁平 manifests/
 execution:
   executor: thread
   workers: 4

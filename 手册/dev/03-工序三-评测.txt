@@ -17,9 +17,9 @@ export QWEN_ASR_API_KEY=dummy
 # ---------------------------------------------------------------------------
 # 场景 1：工序一金标 → 正式评测（推荐；与训练 / Registry 无依赖）
 # ---------------------------------------------------------------------------
-export EVAL_SOURCE="datasets/manifests/summary_${BATCH}.parquet"
-# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
-# export EVAL_SOURCE="datasets/manifests/gold_${BATCH}.parquet"
+export EVAL_SOURCE="datasets/stage1/derived/summary_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/stage1/derived/classified_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/stage1/derived/gold_${BATCH}.parquet"
 
 audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
 audio-data eval check "$EVAL_NAME"
@@ -50,8 +50,10 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
   --eval-model qwen-sft-epoch100
 
 # 输出：
-#   datasets/manifests/eval_* / {alias}_asr_eval_* / eval_aggregate_* / eval_metrics_*
-#   runs/<本次评测_run>/reports/evaluation.json + evaluation.xlsx
+#   datasets/stage3/eval_sets/eval_* 
+#   datasets/stage3/asr/{alias}_asr_eval_*
+#   datasets/stage3/derived/eval_aggregate_* / eval_metrics_*
+#   datasets/stage3/reports/eval_${BATCH}/evaluation.json + evaluation.xlsx（权威；runs/ 仅副本）
 
 # ---------------------------------------------------------------------------
 # 场景 2：外源 xlsx → classify_external_gold → classified_ → 正式评测
@@ -68,14 +70,14 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 #   --label-col label_text_raw \
 #   --force
 #
-# export EVAL_SOURCE="datasets/manifests/classified_${BATCH}.parquet"
+# export EVAL_SOURCE="datasets/stage1/derived/classified_${BATCH}.parquet"
 # audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME" --force
 # audio-data eval check "$EVAL_NAME"
 #
 # audio-data pipeline run pipelines/eval_aggregate.yaml \
 #   --eval-name "$EVAL_NAME" \
-#   --join-manifest "qwen3-asr-sft-e10=datasets/manifests/qwen3-asr-sft-e10_asr_${BATCH}.parquet" \
-#   --join-manifest "qwen3-asr-sft-e100=datasets/manifests/qwen3-asr-sft-e100_asr_${BATCH}.parquet" \
+#   --join-manifest "qwen3-asr-sft-e10=datasets/stage1/asr/qwen3-asr-sft-e10_asr_${BATCH}.parquet" \
+#   --join-manifest "qwen3-asr-sft-e100=datasets/stage1/asr/qwen3-asr-sft-e100_asr_${BATCH}.parquet" \
 #   --force
 #
 # audio-data pipeline run pipelines/eval_metric_pipeline.yaml \

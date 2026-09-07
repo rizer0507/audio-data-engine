@@ -278,17 +278,13 @@ class Manifest:
         return cls(unique), report
 
     def resolve_path(name: str, manifests_dir: Path = Path("datasets/manifests")) -> Path:
-        """Resolve dataset name to manifest path (with or without extension)."""
-        manifests_dir = Path(manifests_dir)
-        candidates = [
-            manifests_dir / name,
-            manifests_dir / f"{name}.parquet",
-            manifests_dir / f"{name}.jsonl",
-            Path(name),
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-        raise FileNotFoundError(
-            f"Dataset '{name}' not found. Searched: {[str(c) for c in candidates]}"
-        )
+        """Resolve dataset name to manifest path (with or without extension).
+
+        Prefers staged ``datasets/stage*/`` roots, then legacy ``datasets/manifests/``.
+        """
+        from audio_engine.core.source_naming import resolve_existing_manifest
+
+        try:
+            return resolve_existing_manifest(name, manifests_dir=manifests_dir)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(str(exc)) from exc

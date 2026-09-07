@@ -4,7 +4,7 @@
 #   audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 #     --source-name mt3000 \
 #     --source-dir /path/to/wav_or_pcm
-#   → datasets/manifests/cleaned_mt3000.parquet|.jsonl
+#   → datasets/stage1/cleaned/cleaned_mt3000.parquet|.jsonl
 #
 # 兼容旧用法：不传 --source-name 时，仍读下方 input.source / output.manifest
 #   （input.source 见 resources/manifest.yaml）
@@ -15,7 +15,7 @@ input:
   source: source_A
 
 output:
-  manifest: datasets/manifests/cleaned_source_A.parquet
+  manifest: datasets/stage1/cleaned/cleaned_source_A.parquet
 
 # 步骤内样本级并发（子进程内生效；ManifestOperator 始终串行）
 # 开了 sharding 时，子进程实际以 sharding.workers 为准

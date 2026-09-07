@@ -46,26 +46,26 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
 
 # 6) 分拣
 audio-data pipeline run pipelines/classify_dataset.yaml \
-  --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
-  --output-manifest "datasets/manifests/classified_${BATCH}.parquet" \
+  --input-manifest "datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet" \
+  --output-manifest "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --force
 
 # 7) 导出汇总（可先搁置人审）
-audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review export-summary "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --output "data/exports/summary_${BATCH}.xlsx" \
   --max-rows 20000
 
 # 8) 可选：人审 → 导入 → 冻结 Release（详解见总手册）
 # export REVIEW_REV=review_${BATCH}_v1
-# audio-data review export "datasets/manifests/classified_${BATCH}.parquet" \
+# audio-data review export "datasets/stage1/derived/classified_${BATCH}.parquet" \
 #   --output "data/exports/review_${BATCH}_${REVIEW_REV}.xlsx" \
 #   --revision "$REVIEW_REV" --bucket review_queue --bucket hardcase
 # # …人工填 decision/gold_text 后：
-# audio-data review import "datasets/manifests/classified_${BATCH}.parquet" \
+# audio-data review import "datasets/stage1/derived/classified_${BATCH}.parquet" \
 #   --input "data/exports/review_${BATCH}_${REVIEW_REV}.xlsx" \
-#   --output "datasets/manifests/reviewed_${BATCH}.parquet" \
+#   --output "datasets/stage1/derived/reviewed_${BATCH}.parquet" \
 #   --revision "$REVIEW_REV" --bucket review_queue --bucket hardcase
-# audio-data release build "datasets/manifests/reviewed_${BATCH}.parquet" \
+# audio-data release build "datasets/stage1/derived/reviewed_${BATCH}.parquet" \
 #   --id "ds_${BATCH}_v1" \
 #   --policy-version selection_zh_asr_v1_1 \
 #   --normalization-version zh_asr_v1 \

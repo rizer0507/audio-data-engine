@@ -10,9 +10,9 @@
 
 name: asr_metric_pipeline
 input:
-  manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet
+  manifest: datasets/stage1/derived/multi_asr_aggregate_source_A.parquet
 output:
-  manifest: datasets/manifests/multi_asr_metrics_source_A.parquet
+  manifest: datasets/stage1/derived/multi_asr_metrics_source_A.parquet
 pipeline:
   - name: normalize_transcripts
     operator: quality.normalize_transcripts

@@ -11,9 +11,9 @@
 
 name: eval_metric_pipeline
 input:
-  manifest: datasets/manifests/eval_aggregate_source_A.parquet
+  manifest: datasets/stage3/derived/eval_aggregate_source_A.parquet
 output:
-  manifest: datasets/manifests/eval_metrics_source_A.parquet
+  manifest: datasets/stage3/derived/eval_metrics_source_A.parquet
 pipeline:
   - name: normalize_transcripts
     operator: quality.normalize_transcripts

@@ -166,6 +166,35 @@ def test_evaluation_report_skips_missing_gold_and_notes_coverage(tmp_path: Path)
     assert bool(frame.loc[frame["id"] == "b", "eval_scored"].iloc[0]) is False
 
 
+def test_evaluation_report_writes_staged_dir_with_eval_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    operator = OperatorRegistry.get("quality.evaluation_report")
+    operator.run(
+        [_evaluated_sample("a", 1, 0, "normal")],
+        OperatorConfig(
+            run_dir=tmp_path / "run",
+            params={
+                "eval_name": "eval_mt3000",
+                "baseline_prefix": "old",
+                "candidate_prefix": "new",
+                "fail_on_regression": False,
+            },
+        ),
+    )
+    auth = tmp_path / "datasets/stage3/reports/eval_mt3000/evaluation.json"
+    assert auth.is_file()
+    report = json.loads(auth.read_text(encoding="utf-8"))
+    assert report["report_dir"].endswith("datasets/stage3/reports/eval_mt3000")
+    assert report["run_id"] == "run"
+    assert "generated_at" in report
+    assert (tmp_path / "datasets/stage3/reports/eval_mt3000/evaluation.xlsx").is_file()
+    # Run-local copy retained for tooling / cleanup-safe dual write.
+    assert (tmp_path / "run/reports/evaluation.json").is_file()
+    assert (tmp_path / "run/reports/evaluation.xlsx").is_file()
+
+
 def test_text_metrics_skip_missing_reference():
     operator = OperatorRegistry.get("quality.text_metrics")
     sample = Sample(

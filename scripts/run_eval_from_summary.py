@@ -13,15 +13,15 @@ Example（本仓库当前本地产物）::
 
   python scripts/run_eval_from_summary.py \\
     --summary data/exports/summary_local_test.xlsx \\
-    --model qwen-sft-e10=datasets/manifests/qwen-sft-e10_asr_sft-ep10.parquet \\
-    --model qwen-sft-e100=datasets/manifests/qwen-sft-e100_asr_sft-ep100.parquet \\
+    --model qwen-sft-e10=datasets/stage1/asr/qwen-sft-e10_asr_sft-ep10.parquet \\
+    --model qwen-sft-e100=datasets/stage1/asr/qwen-sft-e100_asr_sft-ep100.parquet \\
     --eval-name eval_local_test \\
     --eval-model qwen1 \\
     --eval-model qwen-sft-e10 \\
     --eval-model qwen-sft-e100
 
 流程：
-  1) summary.xlsx → datasets/manifests/<eval-name>.parquet（label→gold_text，带 type）
+  1) summary.xlsx → datasets/stage3/eval_sets/<eval-name>.parquet（label→gold_text，带 type）
   2) 用任一推理 parquet 补齐 resampled_16k / sha256（方便 eval check）
   3) eval_aggregate（评测集底表 + 按 id 左连接各模型）
   4) eval_metric_pipeline（vs gold + 按 type 导出 evaluation.xlsx）
@@ -44,7 +44,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from audio_engine.core.manifest import Manifest  # noqa: E402
 from audio_engine.core.sample import Sample  # noqa: E402
-from audio_engine.core.source_naming import validate_asr_run, validate_source_name  # noqa: E402
+from audio_engine.core.source_naming import (  # noqa: E402
+    evaluation_report_dir,
+    staged_manifest_path,
+    validate_asr_run,
+    validate_source_name,
+)
 
 _SKIP_TEXT_COLS = {
     "gold_text",
@@ -90,7 +95,7 @@ def _parse_model_arg(raw: str) -> tuple[str, Path]:
     if "=" not in text:
         raise SystemExit(
             f"[ERROR] --model 格式应为 alias=path.parquet，收到: {raw!r}\n"
-            f"        例: --model qwen-sft-e10=datasets/manifests/qwen-sft-e10_asr_sft-ep10.parquet"
+            f"        例: --model qwen-sft-e10=datasets/stage1/asr/qwen-sft-e10_asr_sft-ep10.parquet"
         )
     alias, _, path = text.partition("=")
     alias = validate_asr_run(alias.strip())
@@ -451,9 +456,8 @@ def main() -> int:
         type_counts[key] = type_counts.get(key, 0) + 1
     print(f"[INFO] type 分布: {dict(sorted(type_counts.items()))}")
 
-    manifests_dir = ROOT / "datasets" / "manifests"
-    manifests_dir.mkdir(parents=True, exist_ok=True)
-    eval_path = manifests_dir / f"{eval_name}.parquet"
+    eval_path = ROOT / staged_manifest_path(eval_name)
+    eval_path.parent.mkdir(parents=True, exist_ok=True)
     if eval_path.exists() and not args.force:
         raise SystemExit(f"[ERROR] 评测集已存在: {eval_path}（加 --force 覆盖）")
     Manifest(samples).save(eval_path)
@@ -512,7 +516,7 @@ def main() -> int:
     run_cli(aggregate_cmd)
 
     # join 后：noise +「空 label 已占位」的 review_queue，转写统一写成占位符
-    agg_path = manifests_dir / f"eval_aggregate_{eval_name}.parquet"
+    agg_path = ROOT / staged_manifest_path(f"eval_aggregate_{eval_name}")
     agg = Manifest.load(agg_path)
     marked_agg = apply_placeholder_markers(agg.samples)
     Manifest(agg.samples).save(agg_path)
@@ -539,12 +543,13 @@ def main() -> int:
         metric_cmd.append("--force")
     run_cli(metric_cmd)
 
-    metrics_path = manifests_dir / f"eval_metrics_{eval_name}.parquet"
+    metrics_path = ROOT / staged_manifest_path(f"eval_metrics_{eval_name}")
+    report_dir = ROOT / evaluation_report_dir(eval_name)
     print("\n[OK] 评测完成")
     print(f"  eval set:  {eval_path}")
-    print(f"  aggregate: {manifests_dir / f'eval_aggregate_{eval_name}.parquet'}")
+    print(f"  aggregate: {agg_path}")
     print(f"  metrics:   {metrics_path}")
-    print("  报告:      见上方 pipeline run 打印的 Run dir → reports/evaluation.xlsx")
+    print(f"  报告:      {report_dir / 'evaluation.xlsx'}（权威；runs/ 仅副本）")
     print(
         json.dumps(
             {

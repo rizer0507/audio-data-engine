@@ -13,14 +13,14 @@ Example:
   python scripts/eval_external_baseline_cer.py \\
     --baseline 数据集/标注A.xlsx \\
     --baseline-text-col label_text_raw \\
-    --model qwen=datasets/manifests/qwen_asr_mt3000.parquet \\
-    --model sensevoice=datasets/manifests/sensevoice_asr_mt3000.parquet \\
+    --model qwen=datasets/stage1/asr/qwen_asr_mt3000.parquet \\
+    --model sensevoice=datasets/stage1/asr/sensevoice_asr_mt3000.parquet \\
     --output datasets/exports/external_baseline_cer_mt3000.parquet
 
   # 或对已聚合的 multi_asr_aggregate 一次算多个模型：
   python scripts/eval_external_baseline_cer.py \\
     --baseline 数据集/标注A.xlsx \\
-    --manifest datasets/manifests/multi_asr_aggregate_mt3000.parquet \\
+    --manifest datasets/stage1/derived/multi_asr_aggregate_mt3000.parquet \\
     --models qwen,sensevoice \\
     --output datasets/exports/external_baseline_cer_mt3000.xlsx
 """

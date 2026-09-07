@@ -60,19 +60,19 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
   --force
 
 audio-data pipeline run pipelines/classify_dataset.yaml \
-  --input-manifest "datasets/manifests/multi_asr_metrics_${BATCH}.parquet" \
-  --output-manifest "datasets/manifests/classified_${BATCH}.parquet" \
+  --input-manifest "datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet" \
+  --output-manifest "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --force
 
-audio-data review export-summary "datasets/manifests/classified_${BATCH}.parquet" \
+audio-data review export-summary "datasets/stage1/derived/classified_${BATCH}.parquet" \
   --output "data/exports/summary_${BATCH}.xlsx" \
   --max-rows 20000
 
 # 4) 可选：导出金标 / 人审 / Release（详解见总手册）
-# audio-data review export-gold "datasets/manifests/classified_${BATCH}.parquet" \
+# audio-data review export-gold "datasets/stage1/derived/classified_${BATCH}.parquet" \
 #   --output "data/exports/auto_gold_${BATCH}.xlsx" \
-#   --output-manifest "datasets/manifests/gold_${BATCH}.parquet"
-# audio-data release build "datasets/manifests/gold_${BATCH}.parquet" \
+#   --output-manifest "datasets/stage1/derived/gold_${BATCH}.parquet"
+# audio-data release build "datasets/stage1/derived/gold_${BATCH}.parquet" \
 #   --id "ds_${BATCH}_v1_auto_gold" \
 #   --policy-version selection_zh_asr_v1_2 \
 #   --normalization-version zh_asr_v1 \

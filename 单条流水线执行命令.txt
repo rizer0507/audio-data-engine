@@ -19,7 +19,7 @@ export MKL_NUM_THREADS=1
 1. 数据切片落库
 -------------------------------------------------------
 # YAML: pipelines/data_cleaning_source_A.yaml
-# 产物: datasets/manifests/cleaned_<source-name>.parquet|.jsonl
+# 产物: datasets/stage1/cleaned/cleaned_<source-name>.parquet|.jsonl
 
 audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
   --source-name test_local \
@@ -144,7 +144,7 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name test_lo
 2f. 导出 xlsx（parquet/jsonl 全量保留后按需转换）
 -------------------------------------------------------
 python scripts/export_multi_asr_xlsx.py \
-  --manifest datasets/manifests/multi_asr_aggregate_test_local.parquet \
+  --manifest datasets/stage1/derived/multi_asr_aggregate_test_local.parquet \
   --output datasets/exports/multi_asr_aggregate_test_local.xlsx \
   --baseline qwen \
   --models qwen,sensevoice,kimi
@@ -187,7 +187,7 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 
 # --aggregate-base 须与 ASR 别名/transcript key 一致（例 qwen3-asr）
 # 可选: --compare-model / --id-col
-# 之后: audio-data eval register datasets/manifests/classified_<name>.parquet --name eval_<name>
+# 之后: audio-data eval register datasets/stage1/derived/classified_<name>.parquet --name eval_<name>
 
 
 -------------------------------------------------------
@@ -200,8 +200,8 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 # python scripts/eval_external_baseline_cer.py \
 #   --baseline 数据集/标注A.xlsx \
 #   --baseline-text-col label_text_raw \
-#   --model qwen=datasets/manifests/qwen_asr_mt3000.parquet \
-#   --model sensevoice=datasets/manifests/sensevoice_asr_mt3000.parquet \
+#   --model qwen=datasets/stage1/asr/qwen_asr_mt3000.parquet \
+#   --model sensevoice=datasets/stage1/asr/sensevoice_asr_mt3000.parquet \
 #   --output datasets/exports/external_baseline_cer_mt3000.parquet
 
 
@@ -223,5 +223,5 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 可选：单独指定路径（排障）
 -------------------------------------------------------
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-#   --input-manifest datasets/manifests/cleaned_mt3000.parquet \
-#   --output-manifest datasets/manifests/qwen_asr_mt3000.parquet
+#   --input-manifest datasets/stage1/cleaned/cleaned_mt3000.parquet \
+#   --output-manifest datasets/stage1/asr/qwen_asr_mt3000.parquet

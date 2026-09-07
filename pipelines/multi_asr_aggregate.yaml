@@ -13,9 +13,9 @@
 
 name: multi_asr_aggregate
 input:
-  manifest: datasets/manifests/qwen_asr_source_A.parquet
+  manifest: datasets/stage1/asr/qwen_asr_source_A.parquet
 output:
-  manifest: datasets/manifests/multi_asr_aggregate_source_A.parquet
+  manifest: datasets/stage1/derived/multi_asr_aggregate_source_A.parquet
 execution:
   executor: sequential
   workers: 1
@@ -26,5 +26,5 @@ pipeline:
     params:
       manifests:
         - model: sensevoice
-          path: datasets/manifests/sensevoice_asr_source_A.parquet
+          path: datasets/stage1/asr/sensevoice_asr_source_A.parquet
       overwrite: false

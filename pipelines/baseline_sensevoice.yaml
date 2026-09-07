@@ -1,7 +1,7 @@
 name: baseline_sensevoice
 
 input:
-  manifest: datasets/manifests/raw_20260820.parquet
+  manifest: datasets/stage1/derived/raw_20260820.parquet
 
 pipeline:
   - name: resample

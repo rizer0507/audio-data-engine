@@ -15,12 +15,12 @@ Usage
 -----
 # 最简：parquet 与 xlsx 同目录/路径均使用默认值
 python scripts/merge_qwen_results.py \\
-    --parquet  datasets/manifests/qwen_asr_source_A.parquet \\
+    --parquet  datasets/stage1/asr/qwen_asr_source_A.parquet \\
     --xlsx     test0923_new.xlsx
 
 # 自定义输出路径
 python scripts/merge_qwen_results.py \\
-    --parquet  datasets/manifests/qwen_asr_source_A.parquet \\
+    --parquet  datasets/stage1/asr/qwen_asr_source_A.parquet \\
     --xlsx     test0923_new.xlsx \\
     --output   test0923_labeled.xlsx \\
     --transcript-key qwen          # parquet transcripts 里的 key（默认 qwen）

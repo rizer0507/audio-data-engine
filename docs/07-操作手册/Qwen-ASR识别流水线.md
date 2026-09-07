@@ -240,7 +240,7 @@ pip install -e ".[asr]"
 进程只加载一次模型：
 
 ```bash
-audio-data manifest shard datasets/manifests/cleaned_source_A.parquet \
+audio-data manifest shard datasets/stage1/cleaned/cleaned_source_A.parquet \
   --shards 8 \
   --strategy duration-balanced \
   --output-dir datasets/shards/qwen_source_A
@@ -253,7 +253,7 @@ audio-data pipeline run-shards pipelines/qwen_asr_batch.yaml \
   --run-root runs/qwen_source_A
 
 audio-data manifest merge "runs/qwen_source_A/shard-*.parquet" \
-  --output datasets/manifests/qwen_asr_source_A.parquet \
+  --output datasets/stage1/asr/qwen_asr_source_A.parquet \
   --expected-shards 8
 ```
 
