@@ -1,27 +1,11 @@
 @echo off
+chcp 65001 >nul 2>&1
 setlocal EnableDelayedExpansion
 
-:: =============================================================================
-:: 同步「需要上服务器」的代码/配置/手册 → U 盘（增量，只加/覆盖，不删）
-::
-:: 原则（保护服务器环境）：
-::   1. 不删除 U 盘上的目标目录，也不使用 /MIR /PURGE（目标多出来的文件一律保留）
-::   2. 只拷贝下方白名单；服务器独有资产永不通过本脚本带走/覆盖：
-::        data/  datasets/  runs/  数据集/  .venv/  .env  resources/  *.parquet
-::        （含 datasets/stage1|stage3 下全部产物；尤其 stage*/asr/ 识别结果严禁经本脚本动）
-::   3. docs/ 仅本机保留，不同步到 U 盘 / 服务器
-::   4. 同名文件会用本机版本覆盖（加/更新）；不会减少目标侧文件
-::
-:: 说明（009 路径分层后）：
-::   本机/服务器正式工程的 parquet 落在 datasets/stage1|stage3/…；
-::   本脚本仍只同步代码/配置/手册，datasets 整树不同步——热更新不会覆盖或清空识别结果。
-::
-:: 用法：双击运行，或在项目根目录执行  scripts\sync_to_usb.bat
-:: U 盘拷到服务器后，执行 手册/dev/04-服务器热更新-tmp到正式工程.txt
-::   落到 /data2/data-cp/lizi/audio-data-engine（同样只覆盖白名单，不碰资产/docs）
-:: =============================================================================
-
-chcp 65001 >nul 2>&1
+REM Sync code/config/handbook to USB stick. Additive only: copy/overwrite, never delete.
+REM Does NOT sync: docs data datasets runs .venv .env resources *.parquet
+REM Usage: run from project root, or double-click this script.
+REM Dest fixed to F:\audio-data-engine
 
 set "SRC=%~dp0.."
 for %%I in ("%SRC%") do set "SRC=%%~fI"
@@ -30,65 +14,57 @@ set "DEST=F:\audio-data-engine"
 set "LOG=%TEMP%\audio-data-engine-usb-sync.log"
 set "FAIL=0"
 
-:: ---------- 检查 U 盘 ----------
+REM ---------- check USB ----------
 if not exist "F:\" (
     echo.
-    echo [错误] 未检测到 F: 盘，请先插入 U 盘后重试。
+    echo [ERROR] Drive F: not found. Insert USB and retry.
     echo.
     pause
     exit /b 1
 )
 
-:: 安全校验：仅允许写到固定目标路径
+REM safety: only allow fixed dest
 if /I not "%DEST%"=="F:\audio-data-engine" (
     echo.
-    echo [错误] 目标路径异常，已中止: %DEST%
+    echo [ERROR] Unexpected DEST, abort: %DEST%
     echo.
     pause
     exit /b 1
 )
 
 if not exist "%DEST%" (
-    echo 目标目录不存在，正在创建: %DEST%
+    echo Dest missing, creating: %DEST%
     mkdir "%DEST%"
 )
 
 echo.
 echo ============================================
-echo   增量同步到 U 盘（只加/覆盖，不删）
+echo   USB additive sync [copy/overwrite, no delete]
 echo ============================================
-echo   源目录 : %SRC%
-echo   目标   : %DEST%
-echo   日志   : %LOG%
+echo   SRC : %SRC%
+echo   DEST: %DEST%
+echo   LOG : %LOG%
 echo ============================================
 echo.
-echo 白名单目录:
-echo   src  pipelines  configs  tests  scripts  tasks  手册
-echo 白名单根文件:
+echo Whitelist dirs:
+echo   src  pipelines  configs  tests  scripts  tasks  handbook-dir
+echo Whitelist root files:
 echo   pyproject.toml  README.md  .gitignore  .env.example
-echo   文档.txt  单条流水线执行命令.txt  三条流水线执行手册.txt
-echo   全自动训练评测闭环执行手册-dev.txt
-echo   全自动训练评测闭环执行手册-local.txt
-echo   目录.txt
+echo   and local *.txt handbooks at repo root
 echo.
-echo 明确不同步（保护服务器 / 本机专属）:
-echo   docs  data  datasets  runs  数据集  .venv  .env  resources  *.parquet
-echo   （datasets 含 stage1/stage3；ASR 识别结果不经本脚本同步）
-echo   （docs 仅本机；不删除 U 盘已有内容，不 purge）
+echo Never synced:
+echo   docs  data  datasets  runs  .venv  .env  resources  *.parquet
 echo.
-echo 开始增量拷贝...
+echo Starting...
 echo.
 
-:: 清空旧日志
 if exist "%LOG%" del /f /q "%LOG%" >nul 2>&1
 echo audio-data-engine USB additive sync > "%LOG%"
 echo SRC=%SRC% >> "%LOG%"
 echo DEST=%DEST% >> "%LOG%"
 echo. >> "%LOG%"
 
-:: ---------- 1) 白名单目录（robocopy /E，无 /PURGE /MIR = 不删目标多出文件）----------
-:: /XO 不加：允许用本机较新代码覆盖同名文件
-:: docs/ 不同步（仅本机）
+REM ---------- 1) whitelist dirs ----------
 call :sync_dir "src"
 call :sync_dir "pipelines"
 call :sync_dir "configs"
@@ -97,7 +73,7 @@ call :sync_dir "scripts"
 call :sync_dir "tasks"
 call :sync_dir "手册"
 
-:: ---------- 2) 白名单根文件 ----------
+REM ---------- 2) whitelist root files ----------
 call :sync_file "pyproject.toml"
 call :sync_file "README.md"
 call :sync_file ".gitignore"
@@ -109,48 +85,44 @@ call :sync_file "全自动训练评测闭环执行手册-dev.txt"
 call :sync_file "全自动训练评测闭环执行手册-local.txt"
 call :sync_file "目录.txt"
 
-:: ---------- 可选：resources（默认关闭；含正式机 source path，确认后再开）----------
-:: call :sync_dir "resources"
+REM optional resources - keep disabled by default
+REM call :sync_dir "resources"
 
 echo.
 if "!FAIL!"=="0" (
-    echo [完成] 增量同步成功（只加/覆盖，未删除目标文件）。
+    echo [OK] Additive sync finished. No files deleted on DEST.
 ) else (
-    echo [警告] 同步结束，但有 !FAIL! 项失败，详见: %LOG%
+    echo [WARN] Finished with !FAIL! failures. See: %LOG%
 )
-echo 目标路径: %DEST%
-echo 详细日志: %LOG%
+echo DEST: %DEST%
+echo LOG : %LOG%
 echo.
-echo 下一步（服务器）:
-echo   1. 将 U 盘内容拷到 /data2/data-cp/lizi/tmp/audio-data-engine
-echo   2. 执行 手册/dev/04-服务器热更新-tmp到正式工程.txt
-echo      （与本脚本白名单一致：只覆盖代码/配置/手册，不碰 data/datasets/runs/.venv/docs）
+echo Next on server:
+echo   1. Copy USB tree to /data2/data-cp/lizi/tmp/audio-data-engine
+echo   2. Run handbook under 手册/dev for server hot update
 echo.
 pause
 if "!FAIL!"=="0" (exit /b 0) else (exit /b 1)
 
 
-:: =============================================================================
-:: 子例程
-:: =============================================================================
+REM ========== subroutines ==========
 
 :sync_dir
 set "REL=%~1"
 if not exist "%SRC%\%REL%" (
-    echo   [跳过] 目录不存在: %REL%
+    echo   [skip] dir missing: %REL%
     echo SKIP DIR %REL% >> "%LOG%"
     exit /b 0
 )
-echo   [目录] %REL%
+echo   [dir] %REL%
 if not exist "%DEST%\%REL%" mkdir "%DEST%\%REL%"
-:: /E 含子目录；排除缓存；绝不加 /PURGE /MIR
 robocopy "%SRC%\%REL%" "%DEST%\%REL%" /E /MT:8 /R:2 /W:3 ^
     /XD "__pycache__" ".pytest_cache" ".ruff_cache" ".mypy_cache" ".eggs" "htmlcov" "dist" "build" ^
     /XF "*.pyc" "*.pyo" "*.pyd" "*.parquet" "*.log" "*.bak" "*.bak_*" "Thumbs.db" ".DS_Store" ".coverage" ^
     /NFL /NDL /NP /LOG+:"%LOG%"
 set "RC=!ERRORLEVEL!"
 if !RC! GEQ 8 (
-    echo   [错误] 目录同步失败: %REL%  robocopy=!RC!
+    echo   [ERROR] dir sync failed: %REL%  robocopy=!RC!
     set /a FAIL+=1
 )
 exit /b 0
@@ -158,14 +130,14 @@ exit /b 0
 :sync_file
 set "REL=%~1"
 if not exist "%SRC%\%REL%" (
-    echo   [跳过] 文件不存在: %REL%
+    echo   [skip] file missing: %REL%
     echo SKIP FILE %REL% >> "%LOG%"
     exit /b 0
 )
-echo   [文件] %REL%
+echo   [file] %REL%
 copy /Y "%SRC%\%REL%" "%DEST%\%REL%" >nul
 if errorlevel 1 (
-    echo   [错误] 文件拷贝失败: %REL%
+    echo   [ERROR] file copy failed: %REL%
     echo FAIL FILE %REL% >> "%LOG%"
     set /a FAIL+=1
 ) else (

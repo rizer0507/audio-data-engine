@@ -74,3 +74,10 @@ error.log
 
 #tmp
 tmp/*
+
+# 第三方源码：仅本地拷贝到服务器，不要嵌进本仓库
+GLM-4-Voice/
+
+# Windows 保留设备名；误创建后 git add 会失败
+scripts/nul
+scripts/NUL
