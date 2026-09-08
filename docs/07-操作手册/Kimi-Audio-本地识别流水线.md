@@ -54,6 +54,8 @@ python scripts/probe_kimi_audio.py /path/to/short.wav \
 探针退出码：`0`=全部非空，`1`=输入/模型/推理错误，`2`=至少一条空转写。
 单文件和文件夹探针都为 0 后，才跑整个 `cleaned_<source>.parquet`。
 
+若探针或流水线报 `cannot import name 'PytorchGELUTanh'`，是当前环境 `transformers>=4.57` 去掉了旧符号。加载前会自动把 `GELUTanh` 补回别名；热更新代码后再跑探针。仍失败时再考虑 `pip install 'transformers>=4.49,<4.57'`（先确认不会影响同环境 Qwen/vLLM）。
+
 ## 执行命令
 
 ```bash

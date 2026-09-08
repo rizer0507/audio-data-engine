@@ -86,8 +86,37 @@ def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorC
     return config.model_copy(update={"params": params})
 
 
+def _ensure_transformers_gelu_compat(activations_module: Any | None = None) -> None:
+    """Restore ``PytorchGELUTanh`` for kimia_infer on transformers>=4.57.
+
+    Hugging Face renamed the class to ``GELUTanh`` and dropped the old export.
+    Kimi-Audio custom modeling (and autoawq) still ``import PytorchGELUTanh``,
+    which aborts ``kimi_audio_asr`` on the first sample under ``fail_fast``.
+    """
+    if activations_module is None:
+        try:
+            from transformers import activations as activations_module
+        except ImportError:
+            return
+    if getattr(activations_module, "PytorchGELUTanh", None) is not None:
+        return
+    gelu_tanh = getattr(activations_module, "GELUTanh", None)
+    if gelu_tanh is None:
+        logger.warning(
+            "transformers.activations 缺少 PytorchGELUTanh / GELUTanh。"
+            "Kimi-Audio 需要 transformers>=4.49,<4.57，或仍导出该别名的版本。"
+        )
+        return
+    activations_module.PytorchGELUTanh = gelu_tanh
+    logger.info(
+        "Patched transformers.activations.PytorchGELUTanh = GELUTanh "
+        "(transformers>=4.57 compatibility for Kimi-Audio)"
+    )
+
+
 def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    _ensure_transformers_gelu_compat()
     model_path = str(settings["model_path"])
     device = _resolve_runtime_device(settings)
     path = Path(model_path).expanduser()

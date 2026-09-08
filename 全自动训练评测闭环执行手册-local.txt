@@ -694,6 +694,9 @@ audio-data model show <model_id>
 4. 常见错误
   ImportError kimia_infer：未安装 [kimi-audio] extra。
   FileNotFoundError 本地模型目录：检查 KIMI_AUDIO_MODEL_PATH。
+  cannot import name 'PytorchGELUTanh'：transformers>=4.57 去掉了该符号。
+    代码会在加载前把 GELUTanh 补回旧别名。热更新后重跑探针。
+    若仍失败：pip install 'transformers>=4.49,<4.57'
   CUDA OOM：确认每卡只有 1 个进程。
   空 text：先用 scripts/probe_kimi_audio.py 对同一条 wav 复现。
   sharding 校验失败：parallel_shards 不能大于 GPU 槽位数（单卡却留着默认 2 shard 会直接失败）。

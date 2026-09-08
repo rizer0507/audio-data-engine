@@ -157,6 +157,27 @@ def test_visible_single_gpu_rewrites_device_to_cuda0(monkeypatch):
     assert settings["device"] == "cuda:0"
 
 
+def test_gelu_compat_aliases_removed_pytorch_symbol():
+    gelu = type("GELUTanh", (), {})
+    activations = type("Activations", (), {})()
+    activations.GELUTanh = gelu
+
+    kimi_audio_module._ensure_transformers_gelu_compat(activations)
+
+    assert activations.PytorchGELUTanh is gelu
+
+
+def test_gelu_compat_keeps_existing_pytorch_symbol():
+    existing = object()
+    activations = type("Activations", (), {})()
+    activations.PytorchGELUTanh = existing
+    activations.GELUTanh = object()
+
+    kimi_audio_module._ensure_transformers_gelu_compat(activations)
+
+    assert activations.PytorchGELUTanh is existing
+
+
 def test_missing_absolute_model_path_fails_before_kimia_import(tmp_path: Path):
     missing = tmp_path / "missing-model"
 

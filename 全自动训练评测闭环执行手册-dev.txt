@@ -634,6 +634,11 @@ audio-data model show <model_id>
 4. 常见错误
   ImportError kimia_infer：未安装 [kimi-audio] extra。
   FileNotFoundError：检查 KIMI_AUDIO_MODEL_PATH。
+  cannot import name 'PytorchGELUTanh'：当前环境 transformers>=4.57 去掉了该符号。
+    先确认版本：python -c "import transformers; print(transformers.__version__)"
+    代码会在加载前把 GELUTanh 补回旧别名。热更新后重跑探针。
+    若仍失败（且不影响同环境 Qwen/vLLM）：
+      pip install 'transformers>=4.49,<4.57' --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
   CUDA OOM：确认每卡只有 1 个进程。
   sharding 校验失败：parallel_shards 不能大于 GPU 槽位数。
 
