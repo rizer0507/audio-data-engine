@@ -35,11 +35,11 @@ execution:
   checkpoint_every: 500
 
 sharding:
-  shards: 2
+  shards: 4
   strategy: duration-balanced
-  parallel_shards: 2
-  gpus: [0, 1]
-  instances_per_gpu: 1
+  parallel_shards: 4
+  gpus: [4, 5]
+  instances_per_gpu: 2
   workers: 1
   executor: sequential
 

@@ -56,6 +56,8 @@ python scripts/probe_kimi_audio.py /path/to/short.wav \
 
 若探针或流水线报 `cannot import name 'PytorchGELUTanh'`，是当前环境 `transformers>=4.57` 去掉了旧符号。加载前会自动把 `GELUTanh` 补回别名；热更新代码后再跑探针。仍失败时再考虑 `pip install 'transformers>=4.49,<4.57'`（先确认不会影响同环境 Qwen/vLLM）。
 
+若报 `'KimiVLConfig' has no attribute 'kimi_mimo_audiodelaytokens'`，不是流水线误选了 VL。`kimia_infer` 对 `KIMI_AUDIO_MODEL_PATH` 做 `AutoModelForCausalLM.from_pretrained`，架构完全由该目录的 `config.json` 决定。`load_detokenizer: false` 只关闭语音合成解码器。正确 ASR 权重应是 `MoonshotKimiaForCausalLM` + `configuration_moonshot_kimia.py` + `kimia_mimo_audiodelaytokens`；若 `model_type=kimi_vl` 或存在 `configuration_kimi_vl.py`，说明目录里是 Kimi-VL，需要换成 `Kimi-Audio-7B-Instruct`。
+
 ## 执行命令
 
 ```bash

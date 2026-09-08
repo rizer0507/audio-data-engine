@@ -114,6 +114,83 @@ def _ensure_transformers_gelu_compat(activations_module: Any | None = None) -> N
     )
 
 
+def _read_checkpoint_config(model_path: Path) -> dict[str, Any]:
+    config_file = model_path / "config.json"
+    if not config_file.is_file():
+        raise FileNotFoundError(
+            f"Kimi-Audio 模型目录缺少 config.json: {config_file}. "
+            "KIMI_AUDIO_MODEL_PATH 必须指向 Kimi-Audio-7B-Instruct 权重根目录"
+        )
+    loaded = json.loads(config_file.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise RuntimeError(f"无法解析 Kimi-Audio config.json: {config_file}")
+    return loaded
+
+
+def _checkpoint_looks_like_kimi_vl(model_path: Path, config: dict[str, Any]) -> bool:
+    auto_map = config.get("auto_map") if isinstance(config.get("auto_map"), dict) else {}
+    auto_config = str(auto_map.get("AutoConfig") or "")
+    architectures = [str(item) for item in (config.get("architectures") or [])]
+    return (
+        str(config.get("model_type") or "") == "kimi_vl"
+        or any("KimiVL" in item for item in architectures)
+        or "configuration_kimi_vl" in auto_config
+        or (model_path / "configuration_kimi_vl.py").is_file()
+    )
+
+
+def _validate_kimi_audio_checkpoint(model_path: str) -> dict[str, Any]:
+    """Reject Kimi-VL / incomplete dumps before kimia_infer instantiates AutoModel.
+
+    ``KimiAudio`` always does ``AutoModelForCausalLM.from_pretrained(path)``.
+    Architecture is chosen from that directory's config.json, not from our ASR
+    prompt or ``load_detokenizer=false``. A VL checkpoint yields KimiVLConfig,
+    then kimia_infer crashes on ``config.kimi_mimo_audiodelaytokens``.
+    """
+    path = Path(model_path).expanduser()
+    if not path.is_dir():
+        return {}
+    config = _read_checkpoint_config(path)
+    auto_map = config.get("auto_map") if isinstance(config.get("auto_map"), dict) else {}
+    auto_config = str(auto_map.get("AutoConfig") or "")
+    architectures = [str(item) for item in (config.get("architectures") or [])]
+    model_type = str(config.get("model_type") or "")
+    has_audio_delay = "kimia_mimo_audiodelaytokens" in config
+    has_audio_config_py = (path / "configuration_moonshot_kimia.py").is_file()
+    looks_like_audio = (
+        "MoonshotKimiaForCausalLM" in architectures
+        or "KimiAudioConfig" in auto_config
+        or has_audio_delay
+    )
+    if _checkpoint_looks_like_kimi_vl(path, config) or not looks_like_audio:
+        raise RuntimeError(
+            "KIMI_AUDIO_MODEL_PATH 不是 Kimi-Audio-7B-Instruct ASR 权重。"
+            "流水线不会选择 VL；kimia_infer 按该目录 config.json 调用 "
+            "AutoModelForCausalLM.from_pretrained，因此会实例化 KimiVLConfig，"
+            "随后读取 ASR 专用字段 kimi_mimo_audiodelaytokens 失败。"
+            f" 目录={path}"
+            f" model_type={model_type!r}"
+            f" architectures={architectures}"
+            f" AutoConfig={auto_config!r}"
+            f" kimia_mimo_audiodelaytokens={config.get('kimia_mimo_audiodelaytokens')!r}"
+            f" configuration_moonshot_kimia.py={'yes' if has_audio_config_py else 'no'}。"
+            "正确目录的 config.json 应含 architectures: MoonshotKimiaForCausalLM、"
+            "auto_map.AutoConfig=configuration_moonshot_kimia.KimiAudioConfig、"
+            "以及 kimi_mimo_audiodelaytokens；并存在 configuration_moonshot_kimia.py。"
+            "load_detokenizer=false 只关闭语音合成解码器，不会把 VL 权重变成 ASR。"
+        )
+    logger.info(
+        "[DIAG][MODEL] Kimi-Audio checkpoint OK: path={} model_type={} "
+        "architectures={} AutoConfig={} delay_tokens={}",
+        path,
+        model_type or "(unset, expected via auto_map)",
+        architectures,
+        auto_config,
+        config.get("kimia_mimo_audiodelaytokens"),
+    )
+    return config
+
+
 def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     _ensure_transformers_gelu_compat()
@@ -125,6 +202,8 @@ def _load_kimi_audio_model(settings: dict[str, Any]) -> Any:
             f"Kimi-Audio 本地模型目录不存在: {path}. "
             "请检查 KIMI_AUDIO_MODEL_PATH 或 configs/asr/kimi_audio.yaml"
         )
+    if path.is_dir():
+        _validate_kimi_audio_checkpoint(str(path))
     model_kwargs = {
         "model_path": model_path,
         "load_detokenizer": bool(settings.get("load_detokenizer", False)),

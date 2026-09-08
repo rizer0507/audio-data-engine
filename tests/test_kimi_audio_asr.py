@@ -187,6 +187,33 @@ def test_missing_absolute_model_path_fails_before_kimia_import(tmp_path: Path):
         )
 
 
+def test_kimi_vl_checkpoint_is_rejected_before_model_load(tmp_path: Path):
+    model_dir = tmp_path / "kimi-vl"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        '{"model_type": "kimi_vl", "architectures": ["KimiVLForConditionalGeneration"]}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="不是 Kimi-Audio-7B-Instruct ASR 权重"):
+        kimi_audio_module._validate_kimi_audio_checkpoint(str(model_dir))
+
+
+def test_kimi_audio_checkpoint_with_mimo_fields_is_accepted(tmp_path: Path):
+    model_dir = tmp_path / "kimi-audio"
+    model_dir.mkdir()
+    (model_dir / "configuration_moonshot_kimia.py").write_text("# stub\n", encoding="utf-8")
+    (model_dir / "config.json").write_text(
+        '{"architectures": ["MoonshotKimiaForCausalLM"],'
+        ' "auto_map": {"AutoConfig": "configuration_moonshot_kimia.KimiAudioConfig"},'
+        ' "kimia_mimo_audiodelaytokens": 6}',
+        encoding="utf-8",
+    )
+
+    config = kimi_audio_module._validate_kimi_audio_checkpoint(str(model_dir))
+    assert config["kimia_mimo_audiodelaytokens"] == 6
+
+
 def test_kimi_audio_batch_runs_through_pipeline_with_metrics(tmp_path: Path):
     input_path = tmp_path / "input.parquet"
     Manifest(_samples(3)).save(input_path)

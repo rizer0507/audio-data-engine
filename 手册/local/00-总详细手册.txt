@@ -757,6 +757,9 @@ audio-data model show <model_id>
   cannot import name 'PytorchGELUTanh'：transformers>=4.57 去掉了该符号。
     代码会在加载前把 GELUTanh 补回旧别名。热更新后重跑探针。
     若仍失败：pip install 'transformers>=4.49,<4.57'
+  KimiVLConfig / kimi_mimo_audiodelaytokens：目录是 Kimi-VL 不是 Audio ASR。
+    正确 config.json：MoonshotKimiaForCausalLM + configuration_moonshot_kimia.KimiAudioConfig + kimi_mimo_audiodelaytokens。
+    换到 Kimi-Audio-7B-Instruct 权重；load_detokenizer=false 不会把 VL 变成 ASR。
   CUDA OOM：确认每卡只有 1 个进程。
   空 text：先用 scripts/probe_kimi_audio.py 对同一条 wav 复现。
   sharding 校验失败：parallel_shards 不能大于 GPU 槽位数（单卡却留着默认 2 shard 会直接失败）。
