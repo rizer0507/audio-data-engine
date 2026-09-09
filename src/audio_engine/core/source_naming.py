@@ -36,7 +36,7 @@ STAGE3_DERIVED_DIR = DATASETS_ROOT / "stage3" / "derived"
 STAGE3_REPORTS_DIR = DATASETS_ROOT / "stage3" / "reports"
 
 _SOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-# kimi_asr_batch / qwen_asr / sensevoice_asr_batch → model stem before _asr
+# glm_asr_batch / kimi_asr_batch / qwen_asr / sensevoice_asr_batch → model stem before _asr
 _ASR_PIPELINE_RE = re.compile(r"^(.+)_asr(?:_batch)?$")
 
 # Legacy staged orchestrator layout (optional YAML ``stages:`` + source_name_layout).
@@ -554,7 +554,7 @@ def apply_source_name_to_single_pipeline(
     if any(getattr(step, "operator", "").startswith("asr.") for step in steps):
         raise ValueError(
             f"--source-name on pipeline '{pipeline_name}' needs a name like "
-            f"qwen_asr_batch / sensevoice_asr_batch / kimi_asr_batch "
+            f"qwen_asr_batch / sensevoice_asr_batch / kimi_asr_batch / glm_asr_batch "
             f"(output becomes <model>_asr_{name}.parquet)"
         )
 
@@ -641,6 +641,6 @@ def apply_eval_name_to_single_pipeline(
 
     raise ValueError(
         f"--eval-name on pipeline '{pipeline_name}' is unsupported; "
-        "use qwen_asr_batch / eval_aggregate / eval_metric_pipeline "
+        "use qwen_asr_batch / glm_asr_batch / eval_aggregate / eval_metric_pipeline "
         "(or pass --input-manifest / --output-manifest)"
     )

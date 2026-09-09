@@ -288,6 +288,16 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
         "datasets/stage1/asr/kimi_asr_mt3000.parquet"
     )
 
+    glm = apply_source_name_to_single_pipeline(
+        pipeline_name="glm_asr_batch",
+        steps=[_Step("asr.glm_batch")],
+        source_name="mt3000",
+    )
+    assert glm["input_manifest"].endswith("cleaned_mt3000.parquet")
+    assert Path(glm["output_manifest"]).as_posix() == (
+        "datasets/stage1/asr/glm_asr_mt3000.parquet"
+    )
+
     kimi_local = apply_source_name_to_single_pipeline(
         pipeline_name="kimi_audio_asr_batch",
         steps=[_Step("asr.kimi_audio_batch")],

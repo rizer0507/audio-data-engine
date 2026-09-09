@@ -8,6 +8,8 @@ prompt: "请撰写这段语音："
 temperature: 0
 response_format: json
 # 单 shard 内并发 HTTP 请求数（对接 vLLM /v1/audio/transcriptions）。
-# 上线前先用 scripts/probe_kimi_vllm.py 做单文件和目录探针。
-concurrency: 4
-batch_size: 4
+# 无权限修改他人 vLLM 安装时：改成 1，并让 serve 使用 --max-num-seqs 1，避免混 T 打挂。
+# 两副本且已验证同桶并发后，再改回 4（parallel_shards × concurrency ≈ 各副本 --max-num-seqs 之和）。
+# 上线前先用 scripts/probe_kimi_vllm.py：短 WAV、长短混合 --pad、同一条 --repeat 2。
+concurrency: 1
+batch_size: 1

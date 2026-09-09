@@ -28,17 +28,33 @@ audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH"
 # 3) SenseVoice 识别
 audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATCH"
 
-# 4) 可选：Kimi 本地 / Doubao（按需取消注释）
-# export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+# 4) 可选：Kimi。两条流水线独立，不要跑错：
+#    vLLM（内部 pad，join 名 kimi）→ pipelines/kimi_asr_batch.yaml
+#    本地 kimia_infer（无 pad，join 名 kimi_audio）→ pipelines/kimi_audio_asr_batch.yaml
+# export KIMI_ASR_API_BASE=http://127.0.0.1:5554,http://127.0.0.1:5555
+# export KIMI_ASR_MODEL=kimi-audio
+# python scripts/probe_kimi_vllm.py "$PROBE_WAV"
+# 无权限改他人 conda 时不要打补丁：重启 vLLM（建议 --max-num-seqs 1）+ 探针 --concurrency 1
+# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --pad --concurrency 1
+# 单卡把 YAML shards/parallel_shards 改成 1；configs/asr/kimi.yaml 的 concurrency/batch_size 改成 1
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH"
+# export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
 # audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATCH"
 # audio-data pipeline run pipelines/doubao_asr_batch.yaml --source-name "$BATCH" --asr-run doubao1
+# 可选：GLM-ASR vLLM（无 pad，join 名 glm；端口不要和 Qwen/Kimi 冲突）
+# export GLM_ASR_API_BASE=http://127.0.0.1:5570
+# export GLM_ASR_MODEL=glm-asr
+# python scripts/probe_glm_vllm.py "$PROBE_WAV"
+# python scripts/probe_glm_vllm.py "$SOURCE_DIR" --concurrency 8
+# python scripts/probe_glm_vllm.py "$PROBE_WAV" --repeat 2
+# audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH"
 
 # 5) 聚合 + 字准
 audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
   --source-name "$BATCH" \
   --join-manifest sensevoice \
   --force
-# 若有更多模型：再加 --join-manifest doubao --join-manifest kimi_audio 等
+# 若有更多模型：再加 --join-manifest doubao --join-manifest kimi --join-manifest kimi_audio --join-manifest glm 等
 
 audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
   --source-name "$BATCH" \

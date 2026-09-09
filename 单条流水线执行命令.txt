@@ -56,15 +56,20 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name test_l
 
 
 -------------------------------------------------------
-2c. Kimi-Audio 全量识别（独立，vLLM HTTP；不依赖 Qwen/SenseVoice）
+2c. Kimi-Audio 全量识别（独立，vLLM HTTP；内部按时长桶 pad；不依赖 Qwen/SenseVoice）
 -------------------------------------------------------
-# 前置：先启动 vLLM 服务（另开终端，常驻）
-# YAML: pipelines/kimi_asr_batch.yaml
+# 前置：先启动 vLLM（另开终端，常驻）。两卡各起一份，不要 TP=2。
+# YAML: pipelines/kimi_asr_batch.yaml（pad + 识别一条命令跑完）
 # 产物: cleaned_<name> → kimi_asr_<name>.parquet
-# 并行：改 pipelines/kimi_asr_batch.yaml 的 sharding；
-#       改 configs/asr/kimi.yaml 的 concurrency（对接 vLLM --max-num-seqs）
+# 音频: 推理用 kimi_padded_16k；不改 resampled_16k / duration
+#       pad 文件不进 Release / 评测集真值
+# 并行：在途 HTTP ≈ 各副本 --max-num-seqs 之和
+#       默认 2 shard × concurrency 4 = 8 路（两副本 × seqs=4）
+# 单卡：把 sharding.shards / parallel_shards 改成 1，concurrency 对齐该副本 --max-num-seqs
+# 不要 8 shard × 4 去打一台 seq=2 的服务
+#       pad 且混合时长探针通过后，每卡 seqs 与 concurrency 可一起试到 8
 
-CUDA_VISIBLE_DEVICES=0 \
+CUDA_VISIBLE_DEVICES=4 \
 vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
   --host 0.0.0.0 \
   --port 5554 \
@@ -73,14 +78,39 @@ vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
   --trust-remote-code \
   --dtype bfloat16 \
   --max-model-len 4096 \
-  --max-num-seqs 2 \
+  --max-num-seqs 4 \
+  --gpu-memory-utilization 0.90 \
+  --no-enable-prefix-caching \
   --limit-mm-per-prompt '{"audio":1}'
 
+# 第二副本（GPU 5 → :5555）；单卡可省略
+# CUDA_VISIBLE_DEVICES=5 \
+# vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
+#   --host 0.0.0.0 --port 5555 --served-model-name kimi-audio \
+#   --tensor-parallel-size 1 --trust-remote-code --dtype bfloat16 \
+#   --max-model-len 4096 --max-num-seqs 4 \
+#   --gpu-memory-utilization 0.90 --no-enable-prefix-caching \
+#   --limit-mm-per-prompt '{"audio":1}'
+
 # 批跑（vLLM 就绪后）
-export KIMI_ASR_API_BASE=http://127.0.0.1:5554
+export KIMI_ASR_API_BASE=http://127.0.0.1:5554,http://127.0.0.1:5555
 export KIMI_ASR_MODEL=kimi-audio
 
+# 探针三档：短 WAV；长短混合 --pad；同一条 --repeat 2
+# python scripts/probe_kimi_vllm.py /path/to/short.wav
+# python scripts/probe_kimi_vllm.py /path/to/mixed_wavs --pad --concurrency 4
+# python scripts/probe_kimi_vllm.py /path/to/short.wav --repeat 2
+# python scripts/probe_kimi_vllm.py /path/to/over30s.wav --pad   # 不截断，确认服务端切窗
+
 audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name test_local
+
+# 评测跑批（同一条 YAML；评测集音频仍是 resampled_16k）
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml \
+#   --eval-name eval_core_v001 --asr-run kimi
+
+# 聚合 join 名是 kimi（不要写成 kimi_audio）：
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_local \
+#   --join-manifest sensevoice --join-manifest kimi
 
 # 续跑:
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml \
@@ -101,7 +131,7 @@ audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name test_local
 # 并行：两卡 A800，每卡 1 进程，进程内一次一条 generate。
 #       改 pipelines/kimi_audio_asr_batch.yaml 的 gpus（默认 [0, 1]）。
 
-export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
 
 # 必须先过探针（退出码 0）再跑 Parquet：
 python scripts/probe_kimi_audio.py /path/to/short.wav
@@ -119,6 +149,55 @@ audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name test_l
 
 
 -------------------------------------------------------
+2c-glm. GLM-ASR 全量识别（独立，vLLM HTTP；不依赖 Qwen/SenseVoice/Kimi）
+-------------------------------------------------------
+# 前置：先启动 vLLM（另开终端，常驻）。每卡一份，不要 TP=2。
+# YAML: pipelines/glm_asr_batch.yaml
+# 产物: cleaned_<name> → glm_asr_<name>.parquet
+# 音频: 推理用 resampled_16k；不要 pad，不要本地加载
+# 并行：客户端不占 GPU；在途 HTTP ≈ 各副本 --max-num-seqs 之和
+#       默认 1 shard × concurrency 8（单副本）
+# 两副本同权重：YAML shards/parallel_shards 改成 2，API_BASE 写两个端口
+# 不要 8 shard × 高 concurrency 去打一台 seq=2 的服务
+# GPU / 端口落地当天确认，不要和 Qwen / Kimi 撞车（占位：GPU 6 → :5570）
+
+# CUDA_VISIBLE_DEVICES=6 \
+# vllm serve /data2/data-cp/models/GLM-ASR-Nano-2512 \
+#   --host 0.0.0.0 \
+#   --port 5570 \
+#   --served-model-name glm-asr \
+#   --tensor-parallel-size 1 \
+#   --trust-remote-code \
+#   --dtype bfloat16 \
+#   --max-model-len 4096 \
+#   --max-num-seqs 8 \
+#   --gpu-memory-utilization 0.90 \
+#   --limit-mm-per-prompt '{"audio":1}'
+
+export GLM_ASR_API_BASE=http://127.0.0.1:5570
+export GLM_ASR_MODEL=glm-asr
+
+# 探针三档：短 WAV；目录并发；同一条 --repeat 2（不要 --pad）
+# python scripts/probe_glm_vllm.py /path/to/short.wav
+# python scripts/probe_glm_vllm.py /path/to/mixed_wavs --concurrency 8
+# python scripts/probe_glm_vllm.py /path/to/short.wav --repeat 2
+
+audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name test_local
+
+# 评测跑批（同一条 YAML；评测集音频仍是 resampled_16k）
+# audio-data pipeline run pipelines/glm_asr_batch.yaml \
+#   --eval-name eval_core_v001 --asr-run glm
+
+# 聚合 join 名是 glm：
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_local \
+#   --join-manifest sensevoice --join-manifest glm
+
+# 续跑:
+# audio-data pipeline run pipelines/glm_asr_batch.yaml \
+#   --source-name test_local --resume runs/<上次_shards目录>
+
+
+-------------------------------------------------------
 2d. 按 id 聚合多模型结果（不推理、不算指标）
 -------------------------------------------------------
 # base: qwen_asr_<name>；join: YAML 中 model 对应 {model}_asr_<name>
@@ -128,7 +207,7 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_lo
 
 # 显式指定要聚合的模型（可重复）：
 # audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000 \
-#   --join-manifest sensevoice --join-manifest kimi
+#   --join-manifest sensevoice --join-manifest kimi --join-manifest glm
 
 
 -------------------------------------------------------
@@ -147,7 +226,7 @@ python scripts/export_multi_asr_xlsx.py \
   --manifest datasets/stage1/derived/multi_asr_aggregate_test_local.parquet \
   --output datasets/exports/multi_asr_aggregate_test_local.xlsx \
   --baseline qwen \
-  --models qwen,sensevoice,kimi
+  --models qwen,sensevoice,kimi,glm
 
 
 -------------------------------------------------------
@@ -159,6 +238,7 @@ python scripts/export_multi_asr_xlsx.py \
   → sensevoice_asr_mt3000.parquet        # 2b 独立产物
   → kimi_asr_mt3000.parquet              # 2c vLLM 产物
   → kimi_audio_asr_mt3000.parquet        # 2c-local 本地产物
+  → glm_asr_mt3000.parquet               # 2c-glm vLLM 产物
   → multi_asr_aggregate_mt3000.parquet   # 2d 仅 join（内部金标路径）
   → multi_asr_metrics_mt3000.parquet     # 2e agreement CER（内部金标路径）
   → classified_mt3000.parquet            # 2g 外源金标路径（可跳过 2d/2e）
@@ -210,12 +290,16 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 -------------------------------------------------------
 [ ] 命令中的 --source-name / --source-dir
 [ ] （可选）pipelines/qwen_asr_batch.yaml、sensevoice_asr_batch.yaml 的 gpus/shards
-[ ] （可选）pipelines/kimi_asr_batch.yaml 的 sharding；configs/asr/kimi.yaml 的 concurrency
+[ ] （可选）pipelines/kimi_asr_batch.yaml 的 sharding（默认 2 shard）；configs/asr/kimi.yaml 的 concurrency
+[ ] （可选）KIMI_ASR_API_BASE 多端口（逗号分隔）/ KIMI_ASR_MODEL；先跑 probe_kimi_vllm.py --pad
 [ ] （可选）pipelines/kimi_audio_asr_batch.yaml 的 gpus（两卡 A800 默认 [0,1]）
 [ ] （可选）KIMI_AUDIO_MODEL_PATH；先跑 scripts/probe_kimi_audio.py
+[ ] （可选 GLM vLLM）GPU / 端口（占位 :5570，不要和 Qwen/Kimi 冲突）；GLM_ASR_MODEL=glm-asr
+[ ] （可选 GLM vLLM）pipelines/glm_asr_batch.yaml 的 sharding（默认 1 shard）；configs/asr/glm.yaml 的 concurrency
+[ ] （可选 GLM vLLM）先跑 probe_glm_vllm.py：短 WAV、目录并发、--repeat 2（不要 --pad）
 [ ] （可选）multi_asr_aggregate.yaml 的 manifests / --join-manifest
 [ ] （外源金标）--external-gold / --aggregate-base / --label-col
-[ ] 本文件中的模型环境变量（含 KIMI_ASR_API_BASE / KIMI_ASR_MODEL / KIMI_AUDIO_MODEL_PATH）
+[ ] 本文件中的模型环境变量（含 KIMI_ASR_API_BASE / KIMI_ASR_API_BASES / KIMI_ASR_MODEL / KIMI_AUDIO_MODEL_PATH / GLM_ASR_API_BASE / GLM_ASR_MODEL）
 # 一般不再改 resources/manifest.yaml 与 YAML 内 input/output 路径
 
 

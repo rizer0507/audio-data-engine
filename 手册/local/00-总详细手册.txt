@@ -125,9 +125,16 @@ export SENSEVOICE_MODEL_PATH=D:/Work/models/SenseVoiceSmall
 # Kimi-Audio 本地加载（kimi_audio_asr_batch；GPU 0）：
 export KIMI_AUDIO_MODEL_PATH=D:/Work/models/Kimi-Audio-7B-Instruct
 
-# Kimi-Audio vLLM HTTP（kimi_asr_batch；GPU 0，端口 5554；与本地模式二选一或按需并行）：
+# Kimi-Audio vLLM HTTP（kimi_asr_batch；内部时长 pad；与本地模式二选一或按需并行）：
+# 单卡例：GPU 0，端口 5554；双卡把第二份起在 :5555 并写两个 API_BASE。
 # export KIMI_ASR_API_BASE=http://127.0.0.1:5554
+# export KIMI_ASR_API_BASE=http://127.0.0.1:5554,http://127.0.0.1:5555
 # export KIMI_ASR_MODEL=kimi-audio
+
+# GLM-ASR vLLM HTTP（glm_asr_batch；无 pad，不要本地加载）：
+# 空闲 GPU / 端口落地当天确认，不要和 Qwen / Kimi 撞车（占位 :5570）
+# export GLM_ASR_API_BASE=http://127.0.0.1:5570
+# export GLM_ASR_MODEL=glm-asr
 
 # 探针用短音频（任选一条真实 wav）：
 export PROBE_WAV=D:/Work/FunASR-main/data/wavfile/fenshen-00638d84-5f8a4737.wav
@@ -249,11 +256,26 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
 # Doubao / Kimi 等同理：
 # audio-data pipeline run pipelines/doubao_asr_batch.yaml \
 #   --source-name "$BATCH" --asr-run doubao1
+# Kimi vLLM（内部 pad；join 名 kimi；pad 不进 Release / 评测集真值）：
+# python scripts/probe_kimi_vllm.py "$PROBE_WAV"
+# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --pad --concurrency 4
+# python scripts/probe_kimi_vllm.py "$PROBE_WAV" --repeat 2
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml \
 #   --source-name "$BATCH" --asr-run kimi1
-# 本地 kimi_audio：
+# # 评测：audio-data pipeline run pipelines/kimi_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run kimi
+# 本地单卡请把 YAML sharding 改成 shards=1 / parallel_shards=1，concurrency 对齐 --max-num-seqs。
+# 本地 kimi_audio（join 名 kimi_audio，不要写成 kimi）：
 # audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml \
 #   --source-name "$BATCH" --asr-run kimi_audio1
+
+# GLM vLLM（无 pad；join 名 glm；不要本地加载）：
+# python scripts/probe_glm_vllm.py "$PROBE_WAV"
+# python scripts/probe_glm_vllm.py "$SOURCE_DIR" --concurrency 8
+# python scripts/probe_glm_vllm.py "$PROBE_WAV" --repeat 2
+# audio-data pipeline run pipelines/glm_asr_batch.yaml \
+#   --source-name "$BATCH" --asr-run glm
+# # 评测：audio-data pipeline run pipelines/glm_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run glm
+# 默认 1 shard；两副本同权重再改成 2 shard，GLM_ASR_API_BASE 写两个端口。
 
 
 -------------------------------------------------------
@@ -711,7 +733,9 @@ audio-data model show <model_id>
 3. 并发预算（本地单卡建议值）
   Qwen vLLM：parallel_shards(1～2) × concurrency(2～4)；vLLM 在 GPU 0、port 5559，
              --max-num-seqs 建议 ≥ 4。
-  Kimi vLLM：parallel_shards(1～2) × concurrency(2～4)；vLLM 在 GPU 0、port 5554。
+  Kimi vLLM：单卡 port 5554，--max-num-seqs 2～4（混合 --pad 探针通过后可试 8）；
+             在途 ≈ shards × concurrency，须 ≤ seqs；单卡不要用仓库默认 2 shard×4。
+             开服加 --no-enable-prefix-caching；pad 文件不进 Release / 评测集真值。
   SenseVoice 本地：GPU 0 × instances_per_gpu(1) = 1～2 shard，batch_size=16～32。
   Kimi 本地：GPU 0 × instances_per_gpu(1) = 1 shard，batch_size=1（一次一条；YAML 默认两卡时请改成 [0]）。
   出现 OOM、超时或服务排队时，先降低 concurrency / parallel_shards / batch_size。
@@ -726,7 +750,7 @@ audio-data model show <model_id>
   空 text：使用同一音频直接 curl 探针；确认采样率、音频可解码和模型能力。
 
 5. 缓存与重跑
-  API_BASE、model、language、prompt 会参与缓存键。改变这些配置会生成新结果。
+  API_BASE、model、language、prompt、pad 桶/目标时长会参与 Kimi vLLM 缓存键。改变这些配置会生成新结果。
   服务端更换权重但仍沿用同一 served-model-name 时，客户端无法感知权重变化；此时必须
   同时升级 model/model_version 或用 --force 重跑，禁止复用旧缓存冒充新模型结果。
 
@@ -773,6 +797,11 @@ audio-data model show <model_id>
     kimi_asr_batch       → kimi_asr_<BATCH>       → --join-manifest kimi
     kimi_audio_asr_batch → kimi_audio_asr_<BATCH> → --join-manifest kimi_audio
 
+7. GLM-ASR vLLM
+  glm_asr_batch        → glm_asr_<BATCH>        → --join-manifest glm
+  无 pad、无本地加载。未 export GLM_ASR_API_BASE 会直接报错。
+  探针：scripts/probe_glm_vllm.py（短 WAV / 目录并发 / --repeat 2；不要 --pad）
+
 
 ================================================================================
 八、每个新批次只需要修改的变量
@@ -786,11 +815,14 @@ audio-data model show <model_id>
 [ ] SENSEVOICE_MODEL_PATH=D:/Work/models/SenseVoiceSmall
 [ ] SenseVoice sharding：gpus [0] × instances_per_gpu 1
 [ ] （可选 Kimi vLLM）GPU 0，D:/Work/models/Kimi-Audio-7B-Instruct，port 5554，KIMI_ASR_MODEL=kimi-audio
-[ ] （可选 Kimi vLLM）kimi_asr_batch sharding；configs/asr/kimi.yaml concurrency=4
+[ ] （可选 Kimi vLLM）单卡把 kimi_asr_batch 改成 shards=1；concurrency 对齐 max-num-seqs；--no-enable-prefix-caching
+[ ] （可选 Kimi vLLM）probe_kimi_vllm.py 短 WAV、长短混合 --pad、--repeat 2
 [ ] （可选 Kimi 本地）KIMI_AUDIO_MODEL_PATH=D:/Work/models/Kimi-Audio-7B-Instruct
 [ ] （可选 Kimi 本地）单卡把 kimi_audio_asr_batch 改成 gpus [0] shards=1；batch_size=1
 [ ] （可选 Kimi 本地）先跑 probe_kimi_audio.py 单文件和文件夹探针
-[ ] multi_asr_aggregate 的 --join-manifest（kimi 或 kimi_audio）
+[ ] （可选 GLM vLLM）GLM_ASR_API_BASE（占位 :5570，不要和 Qwen/Kimi 冲突）/ GLM_ASR_MODEL=glm-asr
+[ ] （可选 GLM vLLM）probe_glm_vllm.py 短 WAV、目录并发、--repeat 2（不要 --pad）
+[ ] multi_asr_aggregate 的 --join-manifest（kimi 或 kimi_audio 或 glm）
 [ ] （仅 Qwen 本地回退）QWEN_ASR_MODEL_PATH=D:/Work/Qwen3-ASR-main/models/qwen3-asr-0.6b
 [ ] REVIEW_REV
 [ ] GOLD_MANIFEST（datasets/stage1/derived/gold_${BATCH}.parquet）
@@ -819,7 +851,8 @@ audio-data model show <model_id>
 [ ] Qwen /v1/models 返回的 served model 与配置完全一致
 [ ] Qwen transcription curl 探针返回非空 text
 [ ] Qwen 实际并发不超过 vLLM/GPU 的稳定承载能力
-[ ] （若跑 Kimi vLLM）Kimi /v1/models 与 KIMI_ASR_MODEL 一致，transcription 探针非空
+[ ] （若跑 Kimi vLLM）Kimi /v1/models 与 KIMI_ASR_MODEL 一致；短 WAV / --pad 混合 / --repeat 2 探针通过
+[ ] （若跑 Kimi vLLM）在途请求不超过 max-num-seqs；pad 音频未写入 Release
 [ ] （若跑 Kimi 本地）KIMI_AUDIO_MODEL_PATH 存在；probe_kimi_audio.py 单文件和文件夹探针均为 0
 [ ] （若跑 Kimi 本地）parallel_shards 不超过可用 GPU slot 数，transcripts.kimi.text 非空
 [ ] aggregate alignment report 中 aligned=true，sha256_mismatches=0
@@ -896,6 +929,7 @@ wav/pcm（D:/Work/FunASR-main/data/wavfile）
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch10
 # export QWEN_ASR_API_BASE=http://127.0.0.1:5562
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "eval_${BATCH}" --asr-run qwen-sft-epoch100
+# audio-data pipeline run pipelines/glm_asr_batch.yaml --eval-name "eval_${BATCH}" --asr-run glm
 # audio-data pipeline run pipelines/eval_aggregate.yaml --eval-name "eval_${BATCH}" \
 #   --join-manifest qwen-sft-epoch10 --join-manifest qwen-sft-epoch100
 # audio-data pipeline run pipelines/eval_metric_pipeline.yaml --eval-name "eval_${BATCH}" \

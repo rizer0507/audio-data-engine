@@ -8,7 +8,7 @@ vLLM 的探针与 Parquet 批量流程见 `docs/07-操作手册/Kimi-Audio-vLLM�
 
 ```bash
 pip install -e '.[kimi-audio]'
-export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
 ```
 
 模型路径也可写在 `configs/asr/kimi_audio.yaml`。环境变量优先于 operator 参数和 YAML。

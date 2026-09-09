@@ -78,6 +78,18 @@ def test_apply_eval_name_asr_aggregate_metric(tmp_path: Path, monkeypatch: pytes
     )
     assert asr["asr_run"] == "qwen-sft-epoch10"
 
+    glm = apply_eval_name_to_single_pipeline(
+        pipeline_name="glm_asr_batch",
+        steps=[_Step("asr.glm_batch")],
+        eval_name="eval_local_test",
+        asr_run="glm",
+    )
+    assert glm["input_manifest"].endswith("eval_local_test.parquet")
+    assert Path(glm["output_manifest"]).as_posix() == (
+        "datasets/stage3/asr/glm_asr_eval_local_test.parquet"
+    )
+    assert glm["asr_run"] == "glm"
+
     aggregate = apply_eval_name_to_single_pipeline(
         pipeline_name="eval_aggregate",
         steps=[_Step("quality.aggregate_manifests", {"manifests": []})],

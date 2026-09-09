@@ -1,7 +1,7 @@
 # Kimi-Audio 本地模型加载识别流水线
 
 按 SenseVoice 本地加载模式实现，与 vLLM HTTP 版 `kimi_asr_batch.yaml` **独立**。
-vLLM 链路（`asr.kimi_batch` / `scripts/probe_kimi_vllm.py` / `pipelines/kimi_asr_batch.yaml`）保持不变。
+vLLM 链路（内部时长 pad → `asr.kimi_batch` / `scripts/probe_kimi_vllm.py`）见 [Kimi-Audio-vLLM识别流水线](./Kimi-Audio-vLLM识别流水线.md)；两套 join 名不可混用。
 
 ## 实现位置
 
@@ -26,7 +26,7 @@ vLLM 链路（`asr.kimi_batch` / `scripts/probe_kimi_vllm.py` / `pipelines/kimi_
 
 ```bash
 pip install -e '.[kimi-audio]'
-export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
 ```
 
 可调参数见 `configs/asr/kimi_audio.yaml`：
@@ -48,7 +48,7 @@ python scripts/probe_kimi_audio.py /path/to/wav_folder --recursive --limit 8
 
 # 覆盖模型路径 / 设备
 python scripts/probe_kimi_audio.py /path/to/short.wav \
-  --model-path /data2/data-cp/models/kimi-audio --device cuda
+  --model-path /data2/data-cp/models/kimi-audio-instruct-7b --device cuda
 ```
 
 探针退出码：`0`=全部非空，`1`=输入/模型/推理错误，`2`=至少一条空转写。

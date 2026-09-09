@@ -80,13 +80,15 @@
 
 # 服务器参数速查（A800 集群 · 现场常用布局）
 #   工程目录：  /data2/data-cp/lizi/audio-data-engine
-#   conda：     /data2/data-cp/zk/env_hub/miniconda312_qw3tts
+#   conda：     /data2/data-cp/zk/env_hub/miniconda312_qw3tts          # 基座/SFT · vllm 0.19
+#   conda LoRA：/data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020  # Qwen3-ASR LoRA · vllm>=0.20
 #   原始音频例：/data2/data-cp/lizi/mt3000
 #   Qwen 基座： /data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 #   Qwen SFT：  /data2/data-cp/lizi/Qwen-ASR-main/data/outputs/0831/checkpoint-290
 #               /home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500
+#   Qwen LoRA： /home/lizi/Qwen3-ASR-main/data/exp004_audio/checkpoint-1800
 #   SenseVoice：/data2/data-cp/xijujun/models/SenseVoiceSmall
-#   Kimi：      /data2/data-cp/models/kimi-audio
+#   Kimi：      /data2/data-cp/models/kimi-audio-instruct-7b
 #   chat-template：/data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
 
 cd /data2/data-cp/lizi/audio-data-engine
@@ -108,6 +110,36 @@ export MKL_NUM_THREADS=1
 # pip install -e ".[sensevoice]"
 # pip install vllm && vllm --version
 
+# ── 克隆 ASR 环境升级 vLLM（Qwen3-ASR LoRA 需要 >=0.20；不要动原环境）────────
+# 原环境：vllm 0.19.0 + torch 2.10（现场 wheel：
+#   /data2/data-cp/zk/download/pip_related/vllm_wheel/vllm-0.19.0-cp38-abi3-manylinux_2_31_x86_64.whl）
+# 0.20 会连带升 torch==2.11 / torchaudio==2.11 / torchvision==0.26 / flashinfer==0.6.8.post1
+# 只走内网 PyPI；原环境继续给基座 A / SFT B·C 用
+#
+# 坑：rsync 拷贝后 bin/activate、bin/pip、bin/vllm 的 shebang 仍写死 zk 原路径。
+#     source activate / 直接 pip 会装回同事环境 → Errno 13 权限不够。
+#     一律用 "$DST_ENV/bin/python" -m pip，启动用 "$DST_ENV/bin/python" "$DST_ENV/bin/vllm"。
+#     不要 python -m vllm（0.19/0.20 没有 vllm.__main__）。which python 绝不能再出现 /zk/。
+#     不要加 --user（会装到 ~/.local，更乱）。拷贝已在的话不必重 rsync，直接从 python -c 检查开始。
+
+# export SRC_ENV=/data2/data-cp/zk/env_hub/miniconda312_qw3tts
+# export DST_ENV=/data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020
+# export PIP_INDEX_URL=http://maven.paic.com.cn/repository/pypi/simple/
+# export PIP_TRUSTED_HOST=maven.paic.com.cn
+# export PYTHONNOUSERSITE=1
+# df -h /data2/data-cp/lizi   # 克隆大约再占一份原环境体积，先确认磁盘
+# mkdir -p /data2/data-cp/lizi/env_hub
+# rsync -a --info=progress2 "$SRC_ENV/" "$DST_ENV/"
+# "$DST_ENV/bin/python" -c "import sys; print(sys.executable); print(sys.prefix)"
+# # 上面两行必须都是 $DST_ENV，不能是 zk
+# "$DST_ENV/bin/python" -c "import vllm,torch; print('before', vllm.__version__, torch.__version__)"
+# "$DST_ENV/bin/python" -m pip index versions vllm
+# "$DST_ENV/bin/python" -m pip install 'vllm==0.20.0' --upgrade
+# 内网没有包时（与 0.19 同一目录放 0.20 wheel）：
+# "$DST_ENV/bin/python" -m pip install /data2/data-cp/zk/download/pip_related/vllm_wheel/vllm-0.20.0*.whl
+# "$DST_ENV/bin/python" -c "import sys,vllm,torch; print(sys.prefix, vllm.__version__, torch.__version__)"
+# "$DST_ENV/bin/python" "$DST_ENV/bin/vllm" --version   # 必须 >=0.20.0
+
 # 本次批次名。只使用字母、数字、下划线和短横线。
 export BATCH=mt3000
 
@@ -124,7 +156,8 @@ export QWEN_ASR_API_KEY=dummy
 # 多实例 round-robin（文档.txt 现场写法）：
 # export QWEN_ASR_API_BASES="http://127.0.0.1:5560/v1"
 
-# vLLM 的 --served-model-name 必须与 configs/asr/qwen_asr.yaml 中 model 一致（qwen3-asr）。
+# vLLM 的请求 model 必须与 configs/asr/qwen_asr.yaml 中 model 一致（qwen3-asr）。
+# 基座服：--served-model-name qwen3-asr；LoRA 服：--lora-modules qwen3-asr=<adapter>。
 
 # 仅 Qwen 本地推理回退：
 # unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY QWEN_ASR_API_BASES
@@ -133,11 +166,17 @@ export QWEN_ASR_API_KEY=dummy
 export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 
 # Kimi-Audio 本地加载（kimi_audio_asr_batch）：
-export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
 
-# Kimi-Audio vLLM HTTP（kimi_asr_batch；与本地模式二选一或按需并行）：
-# export KIMI_ASR_API_BASE=http://127.0.0.1:5554
+# Kimi-Audio vLLM HTTP（kimi_asr_batch；内部时长 pad；与本地模式二选一或按需并行）：
+# 两副本示例（每卡一份，TP=1，--no-enable-prefix-caching）：
+# export KIMI_ASR_API_BASE=http://127.0.0.1:5554,http://127.0.0.1:5555
 # export KIMI_ASR_MODEL=kimi-audio
+
+# GLM-ASR vLLM HTTP（glm_asr_batch；无 pad，不要本地加载）：
+# 空闲 GPU / 端口落地当天确认，不要和 Qwen / Kimi 撞车（占位 :5570）
+# export GLM_ASR_API_BASE=http://127.0.0.1:5570
+# export GLM_ASR_MODEL=glm-asr
 
 # 探针用短音频（任选一条真实 wav）：
 export PROBE_WAV=/data2/data-cp/lizi/audio-data-engine/test_wav/sample.wav
@@ -221,10 +260,31 @@ CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
 #   --tensor-parallel-size 1 --served-model-name qwen3-asr \
 #   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
 
+# E) 基座 + LoRA exp004_audio/checkpoint-1800 · GPU5 · port 5564
+# 用克隆环境的 python 去跑 bin/vllm（绕开 shebang 指向 zk；不要 python -m vllm）
+# export PYTHONNOUSERSITE=1
+# 请求 model 仍填 qwen3-asr（LoRA 模块名与 yaml 对齐）；/v1/models 里基座叫 qwen3-asr-base
+# 可与 A（GPU4:5555）分卡并行对比；--max-lora-rank 按 adapter_config.json 的 r 调整
+CUDA_VISIBLE_DEVICES=5 /data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/python \
+  /data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
+  --gpu-memory-utilization 0.5 \
+  --host 127.0.0.1 \
+  --port 5564 \
+  --tensor-parallel-size 1 \
+  --served-model-name qwen3-asr-base \
+  --enable-lora \
+  --enable-tower-connector-lora \
+  --max-loras 1 \
+  --max-lora-rank 64 \
+  --lora-modules qwen3-asr=/home/lizi/Qwen3-ASR-main/data/exp004_audio/checkpoint-1800 \
+  --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+
 # ── 2.2 流水线终端：确认接口 + 探针 ──────────────────────────────────
 
 export QWEN_ASR_API_BASE=http://127.0.0.1:5555
 export QWEN_ASR_API_KEY=dummy
+# LoRA 服（E）改端口：
+# export QWEN_ASR_API_BASE=http://127.0.0.1:5564
 
 curl -fsS http://127.0.0.1:5555/v1/models | python -m json.tool
 
@@ -290,36 +350,44 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATC
 #   本地：kimi_audio_asr_${BATCH}.parquet    → --join-manifest kimi_audio
 # 转写均写入 transcripts.kimi.text。
 
-# ── 4.1 vLLM HTTP 模式 ───────────────────────────────────────────────
+# ── 4.1 vLLM HTTP 模式（内部按时长桶 pad；join 名 kimi）────────────────
+# 两卡各起一份完整模型，不要 --tensor-parallel-size 2，不要和本地 kimi_audio 抢卡。
+# pad 音频只作推理输入，不进 Release / 评测集真值；duration 仍是原始时长。
+# 未 pad / 混合探针未通过前 --max-num-seqs 保持 2～4；通过后每卡可试到 8。
+# 在途 HTTP ≈ 各副本 max-num-seqs 之和。默认 YAML：2 shard × concurrency 4。
+#
 # 现场开服例 A（GPU4 · port 5554）：
-# CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/models/kimi-audio \
-#   --gpu-memory-utilization 0.5 --host 127.0.0.1 --port 5554 \
+# CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/models/kimi-audio-instruct-7b-instruct-7b \
+#   --gpu-memory-utilization 0.90 --host 127.0.0.1 --port 5554 \
 #   --tensor-parallel-size 1 --served-model-name kimi-audio \
-#   --trust-remote-code --dtype bfloat16 --max-num-seqs 2 \
-#   --limit-mm-per-prompt '{"audio":1}'
-
-# 现场开服例 B（GPU4 · port 5561 · 0.0.0.0）：
-# CUDA_VISIBLE_DEVICES=4 \
-# vllm serve /data2/data-cp/models/kimi-audio \
-#   --host 0.0.0.0 --port 5561 --served-model-name kimi-audio \
-#   --tensor-parallel-size 1 --trust-remote-code --dtype bfloat16 \
-#   --max-model-len 4096 --max-num-seqs 2 \
-#   --limit-mm-per-prompt '{"audio":1}'
-
-# export KIMI_ASR_API_BASE=http://127.0.0.1:5554
+#   --trust-remote-code --dtype bfloat16 --max-model-len 4096 --max-num-seqs 4 \
+#   --no-enable-prefix-caching --limit-mm-per-prompt '{"audio":1}'
+#
+# 现场开服例 B（GPU5 · port 5555）：
+# CUDA_VISIBLE_DEVICES=5 vllm serve /data2/data-cp/models/kimi-audio-instruct-7b \
+#   --gpu-memory-utilization 0.90 --host 127.0.0.1 --port 5555 \
+#   --tensor-parallel-size 1 --served-model-name kimi-audio \
+#   --trust-remote-code --dtype bfloat16 --max-model-len 4096 --max-num-seqs 4 \
+#   --no-enable-prefix-caching --limit-mm-per-prompt '{"audio":1}'
+#
+# export KIMI_ASR_API_BASE=http://127.0.0.1:5554,http://127.0.0.1:5555
 # export KIMI_ASR_MODEL=kimi-audio
 # curl -fsS http://127.0.0.1:5554/v1/models | python -m json.tool
+# curl -fsS http://127.0.0.1:5555/v1/models | python -m json.tool
 # python scripts/probe_kimi_vllm.py "$PROBE_WAV"
-# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --concurrency 4
-# # 探针退出码：0=全部非空，1=输入/连接/配置错误，2=至少一条空转写
+# python scripts/probe_kimi_vllm.py "$SOURCE_DIR" --pad --concurrency 4
+# python scripts/probe_kimi_vllm.py "$PROBE_WAV" --repeat 2
+# # 探针退出码：0=全部非空且稳定，1=输入/连接/配置错误，2=空转写，3=重复识别不一致
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH"
+# # 评测：audio-data pipeline run pipelines/kimi_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run kimi
+# # 聚合：--join-manifest kimi
 
 # ── 4.2 本地 kimia_infer 模式（两卡 A800；与 vLLM 独立）──────────────
 # 前置：pip install -e ".[kimi-audio]"
 # 并发：gpus [0,1] × instances_per_gpu 1；batch_size=1；load_detokenizer=false
 # 共享集群请把 YAML 里 gpus 改成空闲卡，避开 Qwen / SenseVoice 占用卡。
 
-export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+export KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
 test -e "$KIMI_AUDIO_MODEL_PATH" || exit 1
 
 python scripts/probe_kimi_audio.py "$PROBE_WAV"
@@ -331,6 +399,32 @@ audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATC
 # 中断后续跑：
 # audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml \
 #   --source-name "$BATCH" --resume runs/<上次_run_root>
+
+
+-------------------------------------------------------
+4.3 GLM-ASR 全量识别（可选，vLLM HTTP；join 名 glm）
+-------------------------------------------------------
+# GLM 与 Qwen / SenseVoice / Kimi 独立。不要 pad，不要本地加载。
+# 产物：glm_asr_${BATCH}.parquet / transcripts.glm → --join-manifest glm
+# 默认 YAML：1 shard × concurrency 8。两副本同权重再改成 2 shard。
+# GPU / 端口占位：GPU 6 → :5570；落地当天确认空闲卡。
+#
+# CUDA_VISIBLE_DEVICES=6 vllm serve /data2/data-cp/models/GLM-ASR-Nano-2512 \
+#   --host 0.0.0.0 --port 5570 --served-model-name glm-asr \
+#   --tensor-parallel-size 1 --trust-remote-code --dtype bfloat16 \
+#   --max-model-len 4096 --max-num-seqs 8 --gpu-memory-utilization 0.90 \
+#   --limit-mm-per-prompt '{"audio":1}'
+#
+# export GLM_ASR_API_BASE=http://127.0.0.1:5570
+# export GLM_ASR_MODEL=glm-asr
+# curl -fsS http://127.0.0.1:5570/v1/models | python -m json.tool
+# python scripts/probe_glm_vllm.py "$PROBE_WAV"
+# python scripts/probe_glm_vllm.py "$SOURCE_DIR" --concurrency 8
+# python scripts/probe_glm_vllm.py "$PROBE_WAV" --repeat 2
+# # 探针退出码：0=全部非空且稳定，1=输入/连接/配置错误，2=空转写，3=重复识别不一致
+# audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH"
+# # 评测：audio-data pipeline run pipelines/glm_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run glm
+# # 聚合：--join-manifest glm
 
 
 -------------------------------------------------------
@@ -357,6 +451,8 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
 #   --join-manifest sensevoice --join-manifest kimi
 # 或本地 kimi_audio：
 #   --join-manifest sensevoice --join-manifest kimi_audio
+# 或 GLM：
+#   --join-manifest sensevoice --join-manifest glm
 
 audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH" --force
 
@@ -650,7 +746,9 @@ audio-data model show <model_id>
 3. 并发预算（当前生产默认值）
   Qwen vLLM：parallel_shards(8) × concurrency(4) ≈ 32 路 HTTP；
              现场端口常见 5555 / 5559 / 5560 / 5563（按权重分开）。
-  Kimi vLLM：port 5554 或 5561；--max-num-seqs 2～4。
+  Kimi vLLM：两副本 port 5554+5555；--max-num-seqs 4（混合 --pad 探针通过后可试 8）；
+             默认 2 shard × concurrency 4；KIMI_ASR_API_BASE 可写多端口。
+             pad 文件不进 Release / 评测集真值。
   SenseVoice 本地：GPU 4、5 × instances_per_gpu(4) = 8 shard，batch_size=32。
   Kimi 本地：两卡 A800 × instances_per_gpu(1) = 2 shard，batch_size=1。
   出现 OOM、超时或服务排队时，先降低 concurrency / parallel_shards / batch_size。
@@ -664,7 +762,7 @@ audio-data model show <model_id>
   空 text：使用同一音频直接 curl 探针。
 
 5. 缓存与重跑
-  API_BASE、model、language、prompt 会参与缓存键。改变这些配置会生成新结果。
+  API_BASE、model、language、prompt、pad 桶/目标时长会参与 Kimi vLLM 缓存键。改变这些配置会生成新结果。
   服务端更换权重但仍沿用同一 served-model-name 时，必须升级 model/model_version
   或用 --force 重跑，禁止复用旧缓存冒充新模型结果。
 
@@ -676,7 +774,7 @@ audio-data model show <model_id>
 
 1. 依赖与模型路径
   pip install -e ".[kimi-audio]"
-  KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+  KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
   ASR 场景 load_detokenizer: false（默认已关闭）。
 
 2. 探针
@@ -709,6 +807,11 @@ audio-data model show <model_id>
   kimi_asr_batch       → kimi_asr_<BATCH>       → --join-manifest kimi
   kimi_audio_asr_batch → kimi_audio_asr_<BATCH> → --join-manifest kimi_audio
 
+6. GLM-ASR vLLM
+  glm_asr_batch        → glm_asr_<BATCH>        → --join-manifest glm
+  无 pad、无本地加载。未 export GLM_ASR_API_BASE 会直接报错。
+  探针：scripts/probe_glm_vllm.py（短 WAV / 目录并发 / --repeat 2；不要 --pad）
+
 
 ================================================================================
 八、每个新批次只需要修改的变量
@@ -721,10 +824,13 @@ audio-data model show <model_id>
 [ ] Qwen parallel_shards(8) × concurrency(4)
 [ ] SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 [ ] SenseVoice sharding：gpus [4,5] × instances_per_gpu 4
-[ ] （可选 Kimi vLLM）KIMI_ASR_API_BASE / KIMI_ASR_MODEL=kimi-audio
-[ ] （可选 Kimi 本地）KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio
+[ ] （可选 Kimi vLLM）KIMI_ASR_API_BASE 多端口 / KIMI_ASR_MODEL=kimi-audio
+[ ] （可选 Kimi vLLM）probe_kimi_vllm.py 短 WAV、长短混合 --pad、--repeat 2
+[ ] （可选 Kimi 本地）KIMI_AUDIO_MODEL_PATH=/data2/data-cp/models/kimi-audio-instruct-7b
 [ ] （可选 Kimi 本地）先跑 probe_kimi_audio.py 单文件和文件夹探针
-[ ] multi_asr_aggregate 的 --join-manifest（sensevoice / doubao / qwen / kimi / kimi_audio）
+[ ] （可选 GLM vLLM）GLM_ASR_API_BASE（占位 :5570，不要和 Qwen/Kimi 冲突）/ GLM_ASR_MODEL=glm-asr
+[ ] （可选 GLM vLLM）probe_glm_vllm.py 短 WAV、目录并发、--repeat 2（不要 --pad）
+[ ] multi_asr_aggregate 的 --join-manifest（sensevoice / doubao / qwen / kimi / kimi_audio / glm）
 [ ] （仅 Qwen 本地回退）QWEN_ASR_MODEL_PATH
 [ ] REVIEW_REV
 [ ] RELEASE_ID
@@ -750,7 +856,8 @@ audio-data model show <model_id>
 [ ] Qwen /v1/models 返回的 served model 与配置完全一致
 [ ] Qwen transcription curl 探针返回非空 text
 [ ] Qwen 实际并发不超过 vLLM/GPU 的稳定承载能力
-[ ] （若跑 Kimi vLLM）Kimi /v1/models 与 KIMI_ASR_MODEL 一致，transcription 探针非空
+[ ] （若跑 Kimi vLLM）Kimi /v1/models 与 KIMI_ASR_MODEL 一致；短 WAV / --pad 混合 / --repeat 2 探针通过
+[ ] （若跑 Kimi vLLM）在途请求不超过各副本 max-num-seqs 之和；pad 音频未写入 Release
 [ ] （若跑 Kimi 本地）KIMI_AUDIO_MODEL_PATH 存在；probe_kimi_audio.py 单文件和文件夹探针均为 0
 [ ] （若跑 Kimi 本地）gpus 为两张空闲 A800，parallel_shards == GPU 槽位数，transcripts.kimi.text 非空
 [ ] aggregate alignment report 中 aligned=true，sha256_mismatches=0
@@ -773,7 +880,7 @@ audio-data model show <model_id>
 wav/pcm（例：/data2/data-cp/lizi/mt3000）
   → cleaned_${BATCH}
   → qwen_asr_${BATCH} + sensevoice_asr_${BATCH}
-    (+ 可选 kimi_asr_${BATCH} 或 kimi_audio_asr_${BATCH})
+    (+ 可选 kimi_asr_${BATCH} 或 kimi_audio_asr_${BATCH} 或 glm_asr_${BATCH})
   → multi_asr_aggregate_${BATCH}
   → multi_asr_metrics_${BATCH}
   → classified_${BATCH}
@@ -797,7 +904,7 @@ wav/pcm（例：/data2/data-cp/lizi/mt3000）
 # 2c 聚合
 # audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name test_local
 # audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name mt3000 \
-#   --join-manifest sensevoice --join-manifest kimi
+#   --join-manifest sensevoice --join-manifest kimi --join-manifest glm
 
 # 2d 字准
 # audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name test_local

@@ -49,6 +49,25 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
   --eval-model qwen-sft-epoch10 \
   --eval-model qwen-sft-epoch100
 
+# 可选：评 Kimi-vLLM 本身（同一条 kimi_asr_batch，内部 pad；评测集真值仍是 resampled_16k）
+# export KIMI_ASR_API_BASE=http://127.0.0.1:5554
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml \
+#   --eval-name "$EVAL_NAME" --asr-run kimi
+# audio-data pipeline run pipelines/eval_aggregate.yaml \
+#   --eval-name "$EVAL_NAME" --join-manifest kimi
+# audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+#   --eval-name "$EVAL_NAME" --eval-model kimi
+
+# 可选：评 GLM-vLLM 本身（同一条 glm_asr_batch，无 pad；端口不要和 Qwen/Kimi 冲突）
+# export GLM_ASR_API_BASE=http://127.0.0.1:5570
+# export GLM_ASR_MODEL=glm-asr
+# audio-data pipeline run pipelines/glm_asr_batch.yaml \
+#   --eval-name "$EVAL_NAME" --asr-run glm
+# audio-data pipeline run pipelines/eval_aggregate.yaml \
+#   --eval-name "$EVAL_NAME" --join-manifest glm
+# audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+#   --eval-name "$EVAL_NAME" --eval-model glm
+
 # 权威报告：datasets/stage3/reports/${EVAL_NAME}/evaluation.{json,xlsx}
 # runs/.../reports/ 仅副本
 

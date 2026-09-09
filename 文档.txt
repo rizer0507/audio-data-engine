@@ -409,3 +409,37 @@ python scripts/run_eval_from_summary.py \
 
 
 贷款审批、单位名称、住址、手机号、联系人关系
+
+
+
+cd /data2/data-cp/lizi/audio-data-engine
+source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
+
+# 1) 复制评测表，避免脚本回写原文件
+cp tmp/0909/evaluation-12347.xlsx tmp/0909/eval_summary_for_lora.xlsx
+
+# 2) 一键：xlsx → 评测集 → 按 id 左连接两份 LoRA → 相对 gold 算字准
+python scripts/run_eval_from_summary.py \
+  --summary tmp/0909/evaluation-12347.xlsx \
+  --model qwen-lora-thinker-ep100=datasets/stage1/asr/qwen_asr_lora_thinker_ep100.parquet \
+  --model qwen-lora-audio-thinker-ep100=datasets/stage1/asr/qwen_asr_lora_audio_thinker_ep100.parquet \
+  --eval-name eval_fenshen12347_lora_ep100 \
+  --eval-model qwen1 \
+  --eval-model qwen-sft-e10 \
+  --eval-model qwen-sft-e100 \
+  --eval-model qwen-lora-thinker-ep100 \
+  --eval-model qwen-lora-audio-thinker-ep100 \
+  --force
+
+
+python scripts/run_eval_from_summary.py \
+  --summary tmp/0909/evaluation-mt3000.xlsx \
+  --model qwen-lora-thinker-ep100=datasets/stage1/asr/qwen_asr_mt3000_lora_thinker_ep100.parquet \
+  --model qwen-lora-audio-thinker-ep100=datasets/stage1/asr/qwen_asr_mt3000_lora_audio_thinker_ep100.parquet \
+  --eval-name eval_mt3000_lora_ep100 \
+  --eval-model qwen3-asr \
+  --eval-model qwen3-asr-sft-e10 \
+  --eval-model qwen3-asr-sft-e100 \
+  --eval-model qwen-lora-thinker-ep100 \
+  --eval-model qwen-lora-audio-thinker-ep100 \
+  --force

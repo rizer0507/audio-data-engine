@@ -44,6 +44,12 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
 # 可选：
 # audio-data pipeline run pipelines/doubao_asr_batch.yaml \
 #   --source-name "$BATCH" --asr-run doubao1
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml \
+#   --source-name "$BATCH" --asr-run kimi
+# # 单卡请把 kimi_asr_batch.yaml 的 shards/parallel_shards 改成 1
+# audio-data pipeline run pipelines/glm_asr_batch.yaml \
+#   --source-name "$BATCH" --asr-run glm
+# # 默认 1 shard；两副本同权重再改成 2 shard，GLM_ASR_API_BASE 写两个端口
 
 # 3) 聚合 + 字准 + 分拣 + 汇总
 audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
@@ -52,7 +58,7 @@ audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
   --join-manifest qwen3-asr-sft-e10 \
   --join-manifest qwen3-asr-sft-e100 \
   --force
-# 有 doubao1 时再加：--join-manifest doubao1
+# 有 doubao1 / glm 时再加：--join-manifest doubao1 --join-manifest glm
 
 audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
   --source-name "$BATCH" \

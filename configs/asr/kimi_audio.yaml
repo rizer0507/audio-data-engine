@@ -1,5 +1,5 @@
 model: kimi-audio-7b-instruct
-model_path: /data2/data-cp/models/kimi-audio
+model_path: /data2/data-cp/models/kimi-audio-instruct-7b
 model_version: "Kimi-Audio-7B-Instruct"
 device: cuda
 

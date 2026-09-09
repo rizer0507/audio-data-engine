@@ -110,7 +110,10 @@ def _parse_model_arg(raw: str) -> tuple[str, Path]:
 def _load_summary_xlsx(path: Path) -> pd.DataFrame:
     if not path.is_file():
         raise SystemExit(f"[ERROR] summary xlsx 不存在: {path}")
-    frame = pd.read_excel(path, dtype=str).fillna("")
+    # ExcelFile must be closed before any later write on Windows; pd.read_excel()
+    # otherwise keeps an openpyxl handle and to_excel hits PermissionError.
+    with pd.ExcelFile(path) as xf:
+        frame = pd.read_excel(xf, dtype=str).fillna("")
     if frame.empty:
         raise SystemExit(f"[ERROR] summary xlsx 为空: {path}")
     id_col = "sample_id" if "sample_id" in frame.columns else ("id" if "id" in frame.columns else None)
@@ -411,7 +414,7 @@ def main() -> int:
             f"{marked['review_queue_empty_label']}"
         )
 
-    # 同步写回 summary.xlsx：noise 全量 + review_queue 空 label
+    # 占位写入旁路 xlsx，不覆盖 --summary（Windows 上源表句柄/多 sheet 报告都经不起原地写回）
     type_col = "type" if "type" in frame.columns else "classification_bucket"
     type_series = frame[type_col].map(_cell)
     label_series = frame["label"].map(_cell) if "label" in frame.columns else pd.Series([""] * len(frame))
@@ -434,11 +437,22 @@ def main() -> int:
             if not name.endswith("_text") or name in _META_COLS or name.startswith("_"):
                 continue
             frame.loc[write_mask, col] = _EMPTY_LABEL_MARKER
-        frame.drop(columns=["_id"], errors="ignore").to_excel(summary_path, index=False)
-        print(
-            f"[OK] 已更新 summary：noise={int(noise_mask.sum())}, "
-            f"review_queue空label={int(empty_rq_mask.sum())} → {summary_path}"
+        placeholder_path = summary_path.with_name(
+            f"{summary_path.stem}_placeholders.xlsx"
         )
+        try:
+            frame.drop(columns=["_id"], errors="ignore").to_excel(
+                placeholder_path, index=False
+            )
+            print(
+                f"[OK] 已写出占位同步表：noise={int(noise_mask.sum())}, "
+                f"review_queue空label={int(empty_rq_mask.sum())} → {placeholder_path}"
+            )
+        except OSError as exc:
+            print(
+                f"[WARN] 无法写出占位表 {placeholder_path}: {exc}；"
+                "评测继续（内存中已占位，不覆盖 --summary）"
+            )
     audio_src = args.audio_from
     if audio_src is None:
         audio_src = model_specs[0][1]

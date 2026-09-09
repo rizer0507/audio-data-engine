@@ -1,5 +1,6 @@
 from audio_engine.operators.asr.base import BaseASROperator
 from audio_engine.operators.asr.doubao import DoubaoASROperator, DoubaoBatchASROperator
+from audio_engine.operators.asr.glm import GlmASROperator, GlmBatchASROperator
 from audio_engine.operators.asr.kimi import KimiASROperator, KimiBatchASROperator
 from audio_engine.operators.asr.kimi_audio import KimiAudioASROperator, KimiAudioBatchASROperator
 from audio_engine.operators.asr.qwen import QwenASROperator, QwenBatchASROperator
@@ -9,6 +10,8 @@ __all__ = [
     "BaseASROperator",
     "DoubaoASROperator",
     "DoubaoBatchASROperator",
+    "GlmASROperator",
+    "GlmBatchASROperator",
     "KimiASROperator",
     "KimiBatchASROperator",
     "KimiAudioASROperator",

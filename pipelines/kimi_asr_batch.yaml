@@ -1,22 +1,29 @@
 # 工序②-c：全量 Kimi-Audio ASR（vLLM 服务；与其他模型独立）
 #
+#   pad + 识别在同一条命令内完成；pad 音频只作本流水线推理输入。
 #   audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name mt3000
 #   → cleaned_mt3000 → kimi_asr_mt3000.parquet
 #
 # 前置：
-#   1. input 须含 resampled_16k
-#   2. 先启动 vLLM
-#   3. scripts/probe_kimi_vllm.py 的单 WAV 和 WAV 目录探针均通过
-#      （见 docs/07-操作手册/Kimi-Audio-vLLM识别流水线.md）
+#   1. input 须含 resampled_16k 与原始 duration（清洗产物；评测用 --eval-name）
+#   2. 先启动 vLLM（每卡一份，TP=1；不要 --tensor-parallel-size 2）
+#   3. scripts/probe_kimi_vllm.py 三档探针均通过
+#      （短 WAV；长短混合目录 --pad --concurrency；同一条 --repeat 2）
+#      见 docs/07-操作手册/Kimi-Audio-vLLM识别流水线.md
 #
 # 环境变量：
-#   KIMI_ASR_API_BASE   默认 http://127.0.0.1:5554
-#   KIMI_ASR_MODEL        默认 kimi-audio（与 --served-model-name 一致）
+#   KIMI_ASR_API_BASE    一台或多台，逗号分隔
+#                        例：http://127.0.0.1:5554,http://127.0.0.1:5555
+#   KIMI_ASR_API_BASES   同上（优先于单值写法）
+#   KIMI_ASR_MODEL       默认 kimi-audio（与 --served-model-name 一致）
 #
-# 并行：
-#   - sharding 将数据切成多片，每片一个子进程
-#   - 子进程内 thread workers 并发调用 vLLM API
-#   - 无需客户端 GPU；请按 vLLM --max-num-seqs 调整 shards × workers
+# 并行（在途 HTTP ≈ 各副本 --max-num-seqs 之和）：
+#   - 两副本 × seqs=4 → 2 shard × concurrency 4 = 8 路
+#   - 不要 8 shard × 4 去打一台 seq=2 的服务
+#   - pad 且混合时长探针通过后，可把每卡 seqs 与 concurrency 一起试到 8
+#
+# 产物契约：transcripts.kimi / kimi_asr_<source>.parquet；join 名 kimi。
+# pad 文件不进 Release / 评测集真值；duration 仍是原始时长。
 
 name: kimi_asr_batch
 
@@ -33,15 +40,21 @@ execution:
   checkpoint_every: 500
 
 sharding:
-  shards: 8
+  shards: 2
   strategy: duration-balanced
-  parallel_shards: 8
+  parallel_shards: 2
   workers: 4
   executor: thread
 
 pipeline:
+  - name: kimi_duration_pad
+    operator: audio.kimi_duration_pad
+    params:
+      input_audio_key: resampled_16k
+      output_audio_key: kimi_padded_16k
+
   - name: kimi_asr
     operator: asr.kimi_batch
     params:
-      input_audio_key: resampled_16k
+      input_audio_key: kimi_padded_16k
       config_path: configs/asr/kimi.yaml

@@ -1,0 +1,15 @@
+# model 须与 vLLM --served-model-name 一致。
+# 并发跑批时不要改本文件：用环境变量 GLM_ASR_MODEL / GLM_ASR_API_BASE 覆盖。
+# 未设置 GLM_ASR_API_BASE / api_base 时 batch 算子直接报错，禁止回退本地权重。
+model: glm-asr
+model_version: "GLM-ASR-Nano-2512"
+api_base: null
+api_key: dummy
+# 单 shard 内并发 HTTP 请求数（对接 vLLM /v1/audio/transcriptions）。
+# 对齐该副本 --max-num-seqs；先 4～8，探针通过再加。
+concurrency: 8
+timeout: 120
+language: zh
+batch_size: 32
+temperature: 0
+response_format: json

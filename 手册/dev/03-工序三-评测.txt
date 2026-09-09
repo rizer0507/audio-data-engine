@@ -4,7 +4,7 @@
 # 详解：手册/dev/00-总详细手册.txt · docs/03-流水线/评测流水线.md
 # 已落地：docs/04-改进需求/已完成/005-评测流水线改进需求.md
 #         docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
-# 注意：跑前务必 unset 建集用的全局 QWEN_ASR_API_BASE，避免新旧模型串同一端口
+# 注意：跑前务必 unset 建集用的全局 QWEN_ASR_API_BASE / GLM_ASR_API_BASE，避免新旧模型串同一端口
 
 cd /data2/data-cp/lizi/audio-data-engine
 source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
@@ -12,6 +12,7 @@ source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
 export BATCH=mt3000
 export EVAL_NAME="eval_${BATCH}"
 unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY QWEN_ASR_API_BASES
+unset GLM_ASR_API_BASE GLM_ASR_API_KEY GLM_ASR_API_BASES
 export QWEN_ASR_API_KEY=dummy
 
 # ---------------------------------------------------------------------------
@@ -50,6 +51,25 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
   --eval-model qwen \
   --eval-model qwen-sft-epoch10 \
   --eval-model qwen-sft-epoch100
+
+# 可选：评 Kimi-vLLM 本身（同一条 kimi_asr_batch，内部 pad；评测集真值仍是 resampled_16k）
+# export KIMI_ASR_API_BASE=http://127.0.0.1:5554,http://127.0.0.1:5555
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml \
+#   --eval-name "$EVAL_NAME" --asr-run kimi
+# audio-data pipeline run pipelines/eval_aggregate.yaml \
+#   --eval-name "$EVAL_NAME" --join-manifest kimi
+# audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+#   --eval-name "$EVAL_NAME" --eval-model kimi
+
+# 可选：评 GLM-vLLM 本身（同一条 glm_asr_batch，无 pad；端口不要和 Qwen/Kimi 冲突）
+# export GLM_ASR_API_BASE=http://127.0.0.1:5570
+# export GLM_ASR_MODEL=glm-asr
+# audio-data pipeline run pipelines/glm_asr_batch.yaml \
+#   --eval-name "$EVAL_NAME" --asr-run glm
+# audio-data pipeline run pipelines/eval_aggregate.yaml \
+#   --eval-name "$EVAL_NAME" --join-manifest glm
+# audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
+#   --eval-name "$EVAL_NAME" --eval-model glm
 
 # 输出：
 #   datasets/stage3/eval_sets/eval_* 

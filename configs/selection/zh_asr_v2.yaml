@@ -47,6 +47,10 @@ model_families:
     - kimi
     - kimi1
     - kimi2
+  glm:
+    - glm
+    - glm1
+    - glm2
 
 semantic_lexicon_path: configs/selection/semantic_lexicon_zh_v2.yaml
 voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml

@@ -69,6 +69,7 @@
 - [SenseVoice识别流水线](07-操作手册/SenseVoice识别流水线.md)
 - [Kimi-Audio-vLLM识别流水线](07-操作手册/Kimi-Audio-vLLM识别流水线.md)
 - [Kimi-Audio-本地识别流水线](07-操作手册/Kimi-Audio-本地识别流水线.md)
+- [GLM-ASR-vLLM识别流水线](07-操作手册/GLM-ASR-vLLM识别流水线.md)
 - [外源基线字准率脚本](07-操作手册/外源基线字准率脚本.md)
 - [豆包ASR-API参考](07-操作手册/豆包ASR-API参考.md)
 
