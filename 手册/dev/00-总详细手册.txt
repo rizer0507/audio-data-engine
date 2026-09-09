@@ -140,6 +140,45 @@ export MKL_NUM_THREADS=1
 # "$DST_ENV/bin/python" -c "import sys,vllm,torch; print(sys.prefix, vllm.__version__, torch.__version__)"
 # "$DST_ENV/bin/python" "$DST_ENV/bin/vllm" --version   # 必须 >=0.20.0
 
+# ── GLM-ASR vLLM 专用环境（只走内网 PyPI；不要动上面两个 Qwen 环境）────────
+# 原因：GLM-ASR-Nano-2512 的 model_type=glmasr，Transformers 4.x 不认识，必须 >=5.0.0。
+# 做法：克隆已能在本机 A800 跑的 vllm020，再只升 transformers / 补 vllm[audio]。
+# 无外网：不能 pip install git+https://github.com/huggingface/transformers.git
+# 一律 "$DST_ENV/bin/python" -m pip；不要 source activate（shebang 会指回源环境）。
+#
+# export SRC_ENV=/data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020
+# export DST_ENV=/data2/data-cp/lizi/env_hub/glm_asr_vllm
+# export PIP_INDEX_URL=http://maven.paic.com.cn/repository/pypi/simple/
+# export PIP_TRUSTED_HOST=maven.paic.com.cn
+# export PYTHONNOUSERSITE=1
+# df -h /data2/data-cp/lizi
+# mkdir -p /data2/data-cp/lizi/env_hub
+# rsync -a --info=progress2 "$SRC_ENV/" "$DST_ENV/"
+# "$DST_ENV/bin/python" -c "import sys; print(sys.executable); print(sys.prefix)"
+# # 必须都是 glm_asr_vllm，不能是 vllm020 / zk
+# "$DST_ENV/bin/python" -c "import vllm,torch,transformers; print('before', vllm.__version__, torch.__version__, transformers.__version__)"
+# "$DST_ENV/bin/python" -m pip index versions transformers
+# "$DST_ENV/bin/python" -m pip index versions vllm
+# # 内网有 5.x 时：
+# "$DST_ENV/bin/python" -m pip install -U 'transformers>=5.0.0'
+# "$DST_ENV/bin/python" -m pip install -U 'vllm[audio]'
+# # 内网没有 transformers 5：把 Linux 轮子放到与 vLLM 相同的下载目录后本地装
+# # "$DST_ENV/bin/python" -m pip install /data2/data-cp/zk/download/pip_related/transformers_wheel/transformers-5*.whl
+# "$DST_ENV/bin/python" - <<'PY'
+# import transformers, vllm
+# from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+# print(transformers.__version__, vllm.__version__)
+# print("glmasr", "glmasr" in CONFIG_MAPPING or "glm_asr" in CONFIG_MAPPING)
+# PY
+# # glmasr 必须 True 再开服（GPU 4/5 空闲）：
+# # export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# # CUDA_VISIBLE_DEVICES=4 "$DST_ENV/bin/python" "$DST_ENV/bin/vllm" serve \
+# #   /data2/data-cp/models/GLM-ASR-Nano-2512 \
+# #   --host 0.0.0.0 --port 5570 --served-model-name glm-asr \
+# #   --tensor-parallel-size 1 --trust-remote-code --dtype bfloat16 \
+# #   --max-model-len 4096 --max-num-seqs 8 --gpu-memory-utilization 0.90 \
+# #   --limit-mm-per-prompt '{"audio":1}'
+
 # 本次批次名。只使用字母、数字、下划线和短横线。
 export BATCH=mt3000
 
@@ -409,11 +448,23 @@ audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATC
 # 默认 YAML：1 shard × concurrency 8。两副本同权重再改成 2 shard。
 # GPU / 端口占位：GPU 6 → :5570；落地当天确认空闲卡。
 #
-# CUDA_VISIBLE_DEVICES=6 vllm serve /data2/data-cp/models/GLM-ASR-Nano-2512 \
+# 现场 glm_asr_vllm（vLLM 0.28）：必须 VLLM_USE_FLASHINFER_SAMPLER=0（SAMPLER，不是 SAMPLE）
+# 系统 /usr/bin/nvcc <12，FlashInfer 采样 JIT 会炸。整段复制，不要手改变量名。
+# export DST_ENV=/data2/data-cp/lizi/env_hub/glm_asr_vllm
+# export PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# export FLASHINFER_DISABLE_VERSION_CHECK=1
+# export VLLM_USE_FLASHINFER_SAMPLER=0
+# unset VLLM_ATTENTION_BACKEND VLLM_USE_FLASHINFER_SAMPLE VLLM_ATTENTIOIN_BACKEND
+# env | grep -E 'VLLM_|FLASHINFER' | sort
+# CUDA_VISIBLE_DEVICES=4 \
+# "$DST_ENV/bin/python" "$DST_ENV/bin/vllm" serve \
+#   /data2/data-cp/models/GLM-ASR-Nano-2512 \
 #   --host 0.0.0.0 --port 5570 --served-model-name glm-asr \
 #   --tensor-parallel-size 1 --trust-remote-code --dtype bfloat16 \
 #   --max-model-len 4096 --max-num-seqs 8 --gpu-memory-utilization 0.90 \
-#   --limit-mm-per-prompt '{"audio":1}'
+#   --limit-mm-per-prompt '{"audio":1}' \
+#   --no-enable-flashinfer-autotune \
+#   --kernel-config '{"enable_jit_warmup":false,"enable_cutedsl_warmup":false}'
 #
 # export GLM_ASR_API_BASE=http://127.0.0.1:5570
 # export GLM_ASR_MODEL=glm-asr

@@ -18,21 +18,32 @@ audio-data pipeline run pipelines/glm_asr_batch.yaml --eval-name eval_core_v001 
 
 空闲 GPU 与正式端口 **落地当天确认**。下文 `GPU 6` / `:5570` 只是占位，避免和 Qwen `:5559` / Kimi `:5554` 撞车。
 
+现场环境 `glm_asr_vllm`（vLLM 0.28、系统 `/usr/bin/nvcc` < 12）必须关掉 FlashInfer 采样，否则 warmup 会现场 JIT 炸。**变量名是 `SAMPLER`，不是 `SAMPLE`。** 先清掉打错的旧变量，再整段粘贴：
+
 ```bash
-# 示例：GPU 6 → :5570；路径换成服务器本地权重
-CUDA_VISIBLE_DEVICES=6 \
-vllm serve /data2/data-cp/models/GLM-ASR-Nano-2512 \
-  --host 0.0.0.0 \
-  --port 5570 \
-  --served-model-name glm-asr \
-  --tensor-parallel-size 1 \
-  --trust-remote-code \
-  --dtype bfloat16 \
-  --max-model-len 4096 \
-  --max-num-seqs 8 \
-  --gpu-memory-utilization 0.90 \
-  --limit-mm-per-prompt '{"audio":1}'
+export DST_ENV=/data2/data-cp/lizi/env_hub/glm_asr_vllm
+export PYTHONNOUSERSITE=1
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export FLASHINFER_DISABLE_VERSION_CHECK=1
+export VLLM_USE_FLASHINFER_SAMPLER=0
+unset VLLM_ATTENTION_BACKEND VLLM_USE_FLASHINFER_SAMPLE VLLM_ATTENTIOIN_BACKEND
+
+# 必须看到 SAMPLER=0；不能出现 SAMPLE= 或 Unknown vLLM environment variable
+env | grep -E 'VLLM_|FLASHINFER' | sort
+
+CUDA_VISIBLE_DEVICES=4 \
+"$DST_ENV/bin/python" "$DST_ENV/bin/vllm" serve \
+  /data2/data-cp/models/GLM-ASR-Nano-2512 \
+  --host 0.0.0.0 --port 5570 --served-model-name glm-asr \
+  --tensor-parallel-size 1 --trust-remote-code --dtype bfloat16 \
+  --max-model-len 4096 --max-num-seqs 8 --gpu-memory-utilization 0.90 \
+  --limit-mm-per-prompt '{"audio":1}' \
+  --no-enable-flashinfer-autotune \
+  --kernel-config '{"enable_jit_warmup":false,"enable_cutedsl_warmup":false}'
 ```
+
+成功标志：日志 **不能** 再写 `Using FlashInfer for top-p & top-k sampling`，随后出现 `Application startup complete` / Uvicorn 听 `0.0.0.0:5570`。  
+`Unknown vLLM environment variable` 出现就说明名字写错了，不要继续等它崩。
 
 `--served-model-name` 必须与 `GLM_ASR_MODEL`（默认 `glm-asr`）一致。  
 不要把 Qwen 的 `--chat-template …/qwen3_asr_language.jinja` 套到 GLM 上。
