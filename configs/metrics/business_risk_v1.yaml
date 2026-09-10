@@ -1,0 +1,70 @@
+# business_metrics_v1.0 — 统一业务风险指标与发布门禁（012-E）
+#
+# 消费入口：quality.evaluation_report（params.business_metrics_config）
+#           或 MetricRunner(business_config_path=...)
+#
+# 硬约束：
+# - 每个指标输出 numerator/denominator/value/eligible_count/excluded_count
+# - 分母为 0 → value=null（禁止记 0%）
+# - mixed/unknown 预测不算 confirmed positive；单独报 semantic_unk_rate 与保守上界
+# - 固定评测集上任一模型 failed/missing → 门禁 incomplete
+# - 缺校准阈值或分母不足 → needs_review（不自动 pass）
+# - 未通过人工校准不得修改生产默认分拣配置
+
+version: business_metrics_v1.0
+
+business:
+  lexicon_path: configs/selection/semantic_lexicon_zh_v3.yaml
+  judge_version: business_semantic_judge_v1.0
+  require_complete_predictions: true
+  min_denominator: 1
+  # NAHR：人工 non_speech 且音频事件含噪声/忙音/音乐
+  noise_event_tags:
+    - noise
+    - env_noise
+    - environment_noise
+    - ambient
+    - busy
+    - busy_tone
+    - music
+    - background_music
+  # 纯静音同口径切片
+  silence_event_tags:
+    - silence
+    - true_silence
+    - quiet
+
+# 发布门禁：初版不硬编码未经业务校准的增益阈值。
+# 缺 min_improvement / 非劣容忍度时返回 needs_review，永不自动 pass。
+gate:
+  primary_metric: nfr
+  primary_higher_is_better: false
+  # 以下阈值须业务校准后填入；保持 null → needs_review
+  min_improvement: null
+  cer_non_inferiority: null
+  positive_retention_non_inferiority: null
+  nshr_non_inferiority: null
+  confidence: 0.95
+  min_denominator: 30
+  max_semantic_unk_rate: null
+  require_complete_predictions: true
+  require_calibrated_thresholds: true
+  bootstrap_iterations: 1000
+  bootstrap_seed: 42
+
+# 报告切片（evaluation_report 可覆盖）
+slices:
+  - name: negative
+    human_semantic: negative
+  - name: positive
+    human_semantic: positive
+  - name: filler_neutral
+    human_semantic: neutral
+  - name: short_le6
+    short_max_chars: 6
+  - name: noise_events
+    noise_only: true
+  - name: crosstalk
+    crosstalk: true
+  - name: non_speech
+    gold_kind: non_speech

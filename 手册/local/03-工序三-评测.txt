@@ -49,6 +49,12 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
   --eval-model qwen-sft-epoch10 \
   --eval-model qwen-sft-epoch100
 
+# 012-E：evaluation.json 含 business_metrics（NFR/FAR/…）与 publish_status
+# 缺校准门禁阈值 → needs_review；未通过人工校准不得改生产默认分拣（仍为 v1.1）
+# 正式 Base vs SFT 比较时配置 baseline_prefix / candidate_prefix 与校准后的 gate 阈值
+# 详见：docs/04-改进需求/进行中/012-E-业务评测与生产切换.md
+#       configs/metrics/business_risk_v1.yaml
+
 # 可选：评 Kimi-vLLM 本身（同一条 kimi_asr_batch，内部 pad；评测集真值仍是 resampled_16k）
 # export KIMI_ASR_API_BASE=http://127.0.0.1:5554
 # audio-data pipeline run pipelines/kimi_asr_batch.yaml \

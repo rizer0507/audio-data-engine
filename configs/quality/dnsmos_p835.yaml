@@ -1,0 +1,27 @@
+# DNSMOS P.835 质量侧车（012-B / 009）
+# 模型文件需自行放置到 model_path（官方 primary ONNX）；缺文件时算子启动失败。
+# calibrated: false → 可输出分数，但 noise_band/noise_risk 为 unknown/null。
+
+quality_policy_version: quality_policy_v3.0
+input_audio_key: resampled_16k
+model_path: third_party/dnsmos/sig_bak_ovr.onnx
+preprocess_version: p835_official_nonpersonalized_v2
+providers:
+  - CPUExecutionProvider
+
+# 阈值须在独立人工校准池上验证；未校准不得改生产默认 calibrated=true。
+calibrated: false
+
+thresholds:
+  # noise_risk = (BAK < moderate_bak) OR (OVRL < moderate_ovrl)
+  clean_bak: 3.5
+  clean_ovrl: 3.2
+  moderate_bak: 3.0
+  moderate_ovrl: 2.8
+  t_bak: 3.0
+  t_ovrl: 2.8
+
+# 固定 WAV 验收容差（有真实模型与参考分时启用）
+acceptance:
+  score_atol: 0.15
+  require_model: true

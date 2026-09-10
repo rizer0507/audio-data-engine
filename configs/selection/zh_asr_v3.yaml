@@ -1,0 +1,48 @@
+# selection_v3.0 / consensus_v3 — 四家族双跑分拣（012-B）
+# 与 v1/v2 并行；不得覆盖旧分拣产物。校准未通过前禁止自动发布伪标签训练集。
+policy_version: selection_zh_asr_v3_0
+engine: consensus_v3
+rule_version: selection_v3.0
+target_family: qwen
+
+model_families:
+  kimi:
+    - kimi_1
+    - kimi_2
+  glm:
+    - glm_1
+    - glm_2
+  sensevoice:
+    - sensevoice_1
+    - sensevoice_2
+  qwen:
+    - qwen_1
+    - qwen_2
+
+teacher_families:
+  - kimi
+  - glm
+  - sensevoice
+
+expected_runs_per_family: 2
+
+similarity:
+  family_threshold: 0.98
+  teacher_consensus_threshold: 0.98
+  pseudo_high_min_similarity: 0.98
+  pseudo_medium_min_similarity: 0.95
+  pseudo_medium_min_stable_families: 3
+
+short_utterance:
+  max_audio_sec: 2.0
+  max_text_chars: 6
+
+# 质量侧车消费：未校准前 risk/band 视为 unknown（分拣可送审，不可自动伪标签）
+quality:
+  calibrated: false
+
+semantic_lexicon_path: configs/selection/semantic_lexicon_zh_v3.yaml
+voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml
+
+defaults:
+  label_broken: false

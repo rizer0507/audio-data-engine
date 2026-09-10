@@ -31,6 +31,8 @@ BLOCKED_UNVERIFIED_TYPES = frozenset(
 
 
 def gold_text_of(sample: Sample, gold_field: str = "gold_text") -> str:
+    if _is_v3(sample) and gold_field == "gold_text":
+        return str(sample.labels.get("gold_text") or "")
     text = str(sample.labels.get(gold_field) or "").strip()
     if not text and gold_field == "gold_text":
         text = str(sample.labels.get("label") or "").strip()
@@ -80,6 +82,9 @@ def is_trusted_external(sample: Sample) -> bool:
 
 def is_formal_gold_sample(sample: Sample) -> bool:
     """Whether a sample may contribute gold_text to a formal eval Release."""
+    if _is_v3(sample):
+        from audio_engine.core.annotation_v3.gold import has_formal_gold_evidence
+        return has_formal_gold_evidence(sample, require_dual=True)
     if is_trusted_external(sample):
         return True
     state = str(sample.labels.get("annotation_state") or "").strip().lower()
@@ -90,6 +95,10 @@ def is_formal_gold_sample(sample: Sample) -> bool:
     if label_tier_of(sample) == LABEL_TIER_GOLD and label_source_of(sample) in TRUSTED_LABEL_SOURCES:
         return True
     return False
+
+
+def _is_v3(sample: Sample) -> bool:
+    return bool(sample.labels.get("gold_kind")) or str(sample.labels.get("dataset_policy_version") or "").startswith("dataset_policy_v3")
 
 
 def is_pseudo_gold_sample(sample: Sample) -> bool:
@@ -124,6 +133,9 @@ class EvalReadiness:
     unverified_risk_ids: list[str] = field(default_factory=list)
     leak_audio_ids: list[str] = field(default_factory=list)
     leak_duplicate_groups: list[str] = field(default_factory=list)
+    leak_leakage_groups: list[str] = field(default_factory=list)
+    leak_source_audio_ids: list[str] = field(default_factory=list)
+    leak_content_hashes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -171,7 +183,7 @@ def inspect_eval_manifest(
         else:
             seen.add(sample_id)
 
-        if gold_text_of(sample, gold_field):
+        if gold_text_of(sample, gold_field) or (_is_v3(sample) and is_formal_gold_sample(sample)):
             report.with_gold.append(sample.id)
         else:
             report.without_gold.append(sample.id)
@@ -257,6 +269,10 @@ def inspect_eval_manifest(
         informal: list[str] = []
         empty_ok = EMPTY_GOLD_TYPES | {"true_silence", "invalid_audio", "noise"}
         for sample in samples:
+            if _is_v3(sample):
+                if not is_formal_gold_sample(sample):
+                    informal.append(sample.id)
+                continue
             bucket = type_of(sample, type_field)
             has_gold = bool(gold_text_of(sample, gold_field))
             if has_gold and not is_formal_gold_sample(sample):
@@ -292,6 +308,26 @@ def inspect_eval_manifest(
     return report
 
 
+def _content_hash_of(sample: Sample) -> str:
+    for key in ("original_audio_sha256", "pcm_sha256", "normalized_pcm_sha256"):
+        value = sample.labels.get(key) or sample.quality.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return str(sample.sha256 or "").strip()
+
+
+def _source_audio_id_of(sample: Sample) -> str:
+    for key in ("source_audio_id",):
+        value = sample.labels.get(key) or sample.quality.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _leakage_group_of(sample: Sample) -> str:
+    return str(sample.labels.get("leakage_group_id") or "").strip()
+
+
 def _check_train_leakage(
     report: EvalReadiness,
     eval_samples: list[Sample],
@@ -304,10 +340,22 @@ def _check_train_leakage(
         return
     train_ids = {sample.id for sample in train if str(sample.id).strip()}
     train_dups: set[str] = set()
+    train_leakage: set[str] = set()
+    train_source_audio: set[str] = set()
+    train_hashes: set[str] = set()
     for sample in train:
         dup = str(sample.labels.get("duplicate_group_id") or "").strip()
         if dup:
             train_dups.add(dup)
+        lg = _leakage_group_of(sample)
+        if lg:
+            train_leakage.add(lg)
+        src = _source_audio_id_of(sample)
+        if src:
+            train_source_audio.add(src)
+        ch = _content_hash_of(sample)
+        if ch:
+            train_hashes.add(ch)
 
     for sample in eval_samples:
         if sample.id in train_ids:
@@ -315,6 +363,15 @@ def _check_train_leakage(
         dup = str(sample.labels.get("duplicate_group_id") or "").strip()
         if dup and dup in train_dups:
             report.leak_duplicate_groups.append(dup)
+        lg = _leakage_group_of(sample)
+        if lg and lg in train_leakage:
+            report.leak_leakage_groups.append(lg)
+        src = _source_audio_id_of(sample)
+        if src and src in train_source_audio:
+            report.leak_source_audio_ids.append(src)
+        ch = _content_hash_of(sample)
+        if ch and ch in train_hashes:
+            report.leak_content_hashes.append(ch)
 
     if report.leak_audio_ids:
         report.errors.append(
@@ -325,5 +382,23 @@ def _check_train_leakage(
         unique = sorted(set(report.leak_duplicate_groups))
         report.errors.append(
             f"train/eval duplicate_group_id leakage: {len(unique)} groups "
+            f"(preview={unique[:10]})"
+        )
+    if report.leak_leakage_groups:
+        unique = sorted(set(report.leak_leakage_groups))
+        report.errors.append(
+            f"train/eval leakage_group_id leakage: {len(unique)} groups "
+            f"(preview={unique[:10]})"
+        )
+    if report.leak_source_audio_ids:
+        unique = sorted(set(report.leak_source_audio_ids))
+        report.errors.append(
+            f"train/eval source_audio_id leakage: {len(unique)} ids "
+            f"(preview={unique[:10]})"
+        )
+    if report.leak_content_hashes:
+        unique = sorted(set(report.leak_content_hashes))
+        report.errors.append(
+            f"train/eval content-hash leakage: {len(unique)} hashes "
             f"(preview={unique[:10]})"
         )

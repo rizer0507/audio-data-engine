@@ -8,6 +8,10 @@
 # xlsx「按type统计」末两列：非 base 模型相对 base 的总体/平均字准率差值；
 # base 默认为第一个 --eval-model（也可用 evaluation_report.params.base_prefix 指定）。
 # 与训练 / Model Registry 无依赖。
+#
+# 012-E：business_metrics_v1（NFR/FAR/…）写入 evaluation.json；
+# 缺校准门禁阈值时 publish_status=needs_review，不自动 pass。
+# 正式比较请固定 baseline_prefix / candidate_prefix；任一模型 failed/missing → incomplete。
 
 name: eval_metric_pipeline
 input:
@@ -33,3 +37,9 @@ pipeline:
       allow_missing_gold: true
       export_xlsx: true
       fail_on_regression: false
+      enable_business_metrics: true
+      business_metrics_config: configs/metrics/business_risk_v1.yaml
+      # 正式门禁比较时指定（也可用 CLI 注入 params）：
+      # baseline_prefix: qwen
+      # candidate_prefix: qwen-sft-epoch10
+      fail_on_business_gate: false

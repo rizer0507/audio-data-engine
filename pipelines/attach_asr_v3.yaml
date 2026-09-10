@@ -1,0 +1,14 @@
+name: attach_asr_v3
+input:
+  manifest: datasets/stage1/derived/prepared_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+execution:
+  executor: sequential
+  fail_fast: true
+pipeline:
+  - name: attach_asr
+    operator: quality.attach_asr_v3
+    params:
+      config_path: configs/datasets/zh_asr_v3.yaml
+      catalog_dir: data/catalog

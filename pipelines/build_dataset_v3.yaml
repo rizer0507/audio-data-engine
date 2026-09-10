@@ -1,0 +1,29 @@
+# 012-D：数据集构建与 Release — 消费分类+审核+抽检，确定性配额抽样、门禁、原子冻结
+#
+#   audio-data pipeline run pipelines/build_dataset_v3.yaml \
+#     --config configs/datasets/zh_asr_v3.yaml
+#
+# 输入：人审完成后的 Manifest（含 reservation / gold / pseudo_audit 字段）
+# 可选：reservation_path、audit_report_path（伪标签抽检报告）
+# 输出：data/releases/{release_id}/
+#       train|dev|eval_core|eval_random|excluded + release/sampling/leakage/audit JSON
+
+name: build_dataset_v3
+input:
+  manifest: datasets/stage1/derived/reviewed_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/built_v3_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: build
+    operator: quality.build_dataset_v3
+    params:
+      config_path: configs/datasets/zh_asr_v3.yaml
+      # reservation_path: runs/.../artifacts/reservation.json
+      # audit_report_path: datasets/stage1/review/.../audit_report.json
+      # release_id / train_size 也可在 configs/datasets/zh_asr_v3.yaml 的 build: 下配置
+      release_output_dir: data/releases
+      catalog_dir: data/catalog

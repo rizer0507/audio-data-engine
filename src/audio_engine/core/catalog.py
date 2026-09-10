@@ -83,15 +83,42 @@ class ArtifactRecord(BaseModel):
         return value
 
 
+ReleaseSplitName = Literal[
+    "train",
+    "dev",
+    "test",
+    "holdout",
+    "eval_core",
+    "eval_random",
+    "excluded",
+]
+
+_V1_REQUIRED_SPLITS = frozenset({"train", "dev", "test"})
+_V3_REQUIRED_SPLITS = frozenset({"train", "dev", "eval_core", "eval_random"})
+_ALLOWED_SPLITS = frozenset(
+    {"train", "dev", "test", "holdout", "eval_core", "eval_random", "excluded"}
+)
+
+
+def is_dataset_policy_v3(policy_version: str) -> bool:
+    text = str(policy_version or "")
+    return text.startswith("dataset_policy_v3") or "dataset_policy_v3" in text
+
+
 class DatasetRelease(BaseModel):
-    """Frozen train/dev/test selection and the policy that produced it."""
+    """Frozen dataset selection.
+
+    v1/v2: train/dev/test (optional holdout).
+    dataset_policy_v3: train/dev/eval_core/eval_random (optional excluded);
+    never merge eval_core + eval_random into a single test role.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: str = CATALOG_SCHEMA_VERSION
     release_id: str
     source_artifact_id: str
-    outputs: dict[Literal["train", "dev", "test", "holdout"], str]
+    outputs: dict[ReleaseSplitName, str]
     policy_version: str
     normalization_version: str
     gold_revision: str
@@ -101,10 +128,30 @@ class DatasetRelease(BaseModel):
     parent_release_id: str | None = None
     created_at: str = Field(default_factory=utc_now)
     git_commit: str | None = None
+    # Optional v3 provenance (ignored by legacy readers that only look at outputs).
+    sampling_digest: str | None = None
+    reservation_digest: str | None = None
+    leakage_report_uri: str | None = None
+    sampling_report_uri: str | None = None
+    audit_report_uri: str | None = None
 
     @model_validator(mode="after")
     def validate_outputs(self) -> DatasetRelease:
-        required = {"train", "dev", "test"}
+        unknown = set(self.outputs) - _ALLOWED_SPLITS
+        if unknown:
+            raise ValueError(f"dataset release outputs contain unknown splits: {sorted(unknown)}")
+        if is_dataset_policy_v3(self.policy_version):
+            required = set(_V3_REQUIRED_SPLITS)
+            # Do not allow collapsing dual eval into legacy test without roles.
+            if "test" in self.outputs and (
+                "eval_core" not in self.outputs or "eval_random" not in self.outputs
+            ):
+                raise ValueError(
+                    "dataset_policy_v3 forbids mapping eval_core/eval_random into a single test; "
+                    "require both eval_core and eval_random outputs"
+                )
+        else:
+            required = set(_V1_REQUIRED_SPLITS)
         missing = required - self.outputs.keys()
         if missing:
             raise ValueError(f"dataset release outputs missing: {sorted(missing)}")

@@ -18,6 +18,13 @@ from audio_engine.core.selection_v2 import (
     SelectionV2Config,
     classify_sample as classify_sample_v2,
 )
+from audio_engine.core.selection_v3 import (
+    SelectionV3Config,
+    classify_sample as classify_sample_v3,
+    merge_field_by_join_key,
+    original_audio_sha256,
+)
+from audio_engine.core.manifest import Manifest
 from audio_engine.core.transcript_reconcile import (
     plain_transcript_text,
     rewrite_plain_transcript_entry,
@@ -209,6 +216,30 @@ def _apply_expr_rules(
     return updated
 
 
+def _merge_quality_sidecar(
+    samples: list[Sample],
+    sidecar_path: str | Path | None,
+) -> list[Sample]:
+    """Join DNSMOS quality fields by (id, original_audio_sha256); never by row."""
+    if not sidecar_path:
+        return samples
+    path = Path(sidecar_path)
+    if not path.exists():
+        raise ValueError(f"quality_sidecar_manifest not found: {path}")
+    sidecar_samples = Manifest.load(path)
+    by_key: dict[tuple[str, str], dict] = {}
+    for item in sidecar_samples:
+        key = (str(item.id).strip(), original_audio_sha256(item))
+        if not key[1] or key in by_key:
+            raise ValueError(f"duplicate or missing-hash quality sidecar key: {key}")
+        by_key[key] = dict(item.quality or {})
+    base_hashes = {str(s.id).strip(): original_audio_sha256(s) for s in samples}
+    for sid, digest in by_key:
+        if sid in base_hashes and base_hashes[sid] != digest:
+            raise ValueError(f"quality sidecar audio hash mismatch: {sid}")
+    return merge_field_by_join_key(samples, by_key, target="quality")
+
+
 def _apply_consensus_engine(
     updated: list[Sample],
     frame: pd.DataFrame,
@@ -220,13 +251,24 @@ def _apply_consensus_engine(
     operator_version: str,
     engine: str = "consensus_v1",
 ) -> list[Sample]:
-    use_v2 = engine in {"consensus_v2", "selection_v2.0", "selection_v2"}
-    selection_v1 = None if use_v2 else SelectionConfig.from_params(params)
+    use_v3 = engine in {"consensus_v3", "selection_v3.0", "selection_v3"}
+    use_v2 = (not use_v3) and engine in {
+        "consensus_v2",
+        "selection_v2.0",
+        "selection_v2",
+    }
+    selection_v1 = None if (use_v2 or use_v3) else SelectionConfig.from_params(params)
     selection_v2 = SelectionV2Config.from_params(params) if use_v2 else None
+    selection_v3 = SelectionV3Config.from_params(params) if use_v3 else None
     for index, sample in enumerate(updated):
         if "label_broken" in frame.columns:
             sample.labels["label_broken"] = bool(frame.loc[index, "label_broken"])
-        if use_v2:
+        if use_v3:
+            assert selection_v3 is not None
+            result = classify_sample_v3(
+                sample, selection_v3, voicemail_pattern=voicemail_pattern
+            )
+        elif use_v2:
             assert selection_v2 is not None
             result = classify_sample_v2(
                 sample, selection_v2, voicemail_pattern=voicemail_pattern
@@ -313,7 +355,7 @@ class ClassifyOperator(ManifestOperator):
     """
 
     name = "classify"
-    version = "2.2.0"
+    version = "3.0.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -336,6 +378,9 @@ class ClassifyOperator(ManifestOperator):
             "consensus_v2",
             "selection_v2.0",
             "selection_v2",
+            "consensus_v3",
+            "selection_v3.0",
+            "selection_v3",
         }
         use_consensus = (not use_external) and (
             engine in consensus_engines or (not rules and engine != "expr")
@@ -347,8 +392,15 @@ class ClassifyOperator(ManifestOperator):
         voicemail_pattern = _load_voicemail_patterns(params.get("voicemail_patterns_path"))
 
         updated = [sample.model_copy(deep=True) for sample in samples]
+        # v3: merge DNSMOS sidecar by join key before classification
+        if engine in {"consensus_v3", "selection_v3.0", "selection_v3"}:
+            updated = _merge_quality_sidecar(
+                updated, params.get("quality_sidecar_manifest")
+            )
         for sample in updated:
-            _rewrite_plain_transcripts(sample)
+            # Keep raw_text; plain rewrite is for legacy v1/v2 display only.
+            if engine not in {"consensus_v3", "selection_v3.0", "selection_v3"}:
+                _rewrite_plain_transcripts(sample)
         frame = pd.DataFrame([sample.to_flat_dict() for sample in updated])
         for field, value in (params.get("defaults") or {}).items():
             if field not in frame:

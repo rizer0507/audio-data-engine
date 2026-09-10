@@ -131,6 +131,45 @@ def _apply_aggregate_manifests(cfg: PipelineConfig, manifests: list[dict]) -> No
         )
 
 
+def _apply_pipeline_config(cfg: PipelineConfig, config_file: Path) -> None:
+    """Inject ``--config`` YAML into steps that consume an explicit config_path.
+
+    Used by prepare_dataset_v3 (and later classify/build v3) so artifact paths and
+    policy versions come from the resolved config rather than ad-hoc discovery.
+    Existing step params are preserved; ``config_path`` is overridden.
+    """
+    path = Path(config_file).resolve()
+    if not path.exists():
+        raise typer.BadParameter(f"--config file not found: {path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise typer.BadParameter(f"--config must be a YAML mapping: {path}")
+
+    patched = False
+    for step in cfg.steps:
+        op = str(step.operator)
+        consumes = (
+            op in {
+                "quality.prepare_dataset_v3",
+                "quality.classify",
+                "quality.aggregate_manifests",
+                "quality.dnsmos",
+            }
+            or op.endswith("_v3")
+            or "config_path" in (step.params or {})
+        )
+        if not consumes:
+            continue
+        step.params = {**step.params, "config_path": str(path)}
+        if op == "quality.aggregate_manifests":
+            step.params["selection_config_path"] = str(path)
+        patched = True
+    if not patched:
+        raise typer.BadParameter(
+            f"--config={path} could not be applied: pipeline has no config-consuming step"
+        )
+
+
 def _apply_asr_run_transcript_key(cfg: PipelineConfig, asr_run: str) -> None:
     """Inject ``transcript_key`` into ASR steps for a result alias."""
     alias = validate_asr_run(asr_run)
@@ -579,6 +618,16 @@ def pipeline_run(
             "(default: --aggregate-base, else auto-pick qwen*)"
         ),
     ),
+    dataset_config: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help=(
+            "Dataset / selection policy YAML injected into config-consuming steps "
+            "(e.g. configs/datasets/zh_asr_v3.yaml for prepare_dataset_v3). "
+            "Does not replace the pipeline YAML argument."
+        ),
+    ),
 ) -> None:
     """Run a pipeline from YAML configuration.
 
@@ -749,6 +798,13 @@ def pipeline_run(
         cfg.output_manifest = overrides["output_manifest"]
         if overrides.get("aggregate_manifests") is not None:
             _apply_aggregate_manifests(cfg, overrides["aggregate_manifests"])
+        if overrides.get("quality_sidecar_manifest"):
+            for step in cfg.steps:
+                if step.operator == "quality.classify":
+                    step.params = {
+                        **(step.params or {}),
+                        "quality_sidecar_manifest": overrides["quality_sidecar_manifest"],
+                    }
         if overrides.get("asr_run"):
             _apply_asr_run_transcript_key(cfg, str(overrides["asr_run"]))
             cfg.name = pipeline_run_name(
@@ -764,6 +820,10 @@ def pipeline_run(
             console.print(f"  ASR run:     [cyan]{overrides['asr_run']}[/cyan]")
         if overrides.get("aggregate_base"):
             console.print(f"  Agg base:    [cyan]{overrides['aggregate_base']}[/cyan]")
+        if overrides.get("quality_sidecar_manifest"):
+            console.print(
+                f"  Quality:     [cyan]{overrides['quality_sidecar_manifest']}[/cyan]"
+            )
         if cfg.source_dir:
             console.print(f"  Source dir:  [cyan]{cfg.source_dir}[/cyan]")
         if cfg.input_manifest:
@@ -837,6 +897,15 @@ def pipeline_run(
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         console.print(f"  Transcript:  [cyan]{validate_asr_run(transcript_key)}[/cyan]")
+
+    if dataset_config is not None:
+        try:
+            _apply_pipeline_config(cfg, dataset_config)
+        except typer.BadParameter:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"  Config:      [cyan]{dataset_config.resolve()}[/cyan]")
 
     if input_manifest is not None:
         cfg.input_manifest = str(input_manifest)
@@ -929,6 +998,50 @@ def artifact_register(
     console.print(f"[green]OK[/green] registered [cyan]{record.artifact_id}[/cyan]")
     console.print(f"  URI: {record.uri}")
     console.print(f"  SHA256: {record.sha256}")
+
+
+@artifact_app.command("register-asr-run")
+def artifact_register_asr_run(
+    manifest_path: Path = typer.Argument(...),
+    identity_path: Path = typer.Option(..., "--identity", help="Actual run identity YAML; never inferred from alias"),
+    audio_base: Path = typer.Option(..., "--audio-base", help="Complete original audio snapshot manifest"),
+    output_identity: Path = typer.Option(..., "--output-identity"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Register existing ASR output with supplied execution provenance for attach_asr_v3."""
+    from dataclasses import asdict
+    from audio_engine.core.catalog import ProducerRecord
+    from audio_engine.core.selection_v3.config import RunIdentity
+    from audio_engine.core.selection_v3.input_contract import original_audio_sha256, validate_base_snapshot, align_run_manifest
+    from audio_engine.core.dataset_v3.audit_plan import digest_payload
+    raw = yaml.safe_load(identity_path.read_text(encoding="utf-8")) or {}
+    identity = RunIdentity.from_dict(raw)
+    if not identity.execution_id or not all((identity.model_checkpoint_digest, identity.decode_config_digest,
+                                            identity.prompt_digest, identity.created_at)):
+        raise typer.BadParameter("actual execution_id/checkpoint/decode/prompt digests/created_at are required")
+    base = list(Manifest.load(audio_base))
+    indexed = validate_base_snapshot(base)
+    if not indexed or any(not original_audio_sha256(s) for s in base):
+        raise typer.BadParameter("audio base requires nonempty IDs and original hashes")
+    audio_digest = digest_payload({s.id: original_audio_sha256(s) for s in sorted(base, key=lambda s: s.id)})
+    if identity.input_audio_digest and identity.input_audio_digest != audio_digest:
+        raise typer.BadParameter("declared input_audio_digest differs from audio base")
+    identity.input_audio_digest = audio_digest
+    incoming = list(Manifest.load(manifest_path))
+    alignment = align_run_manifest(indexed, incoming, transcript_key=identity.transcript_key,
+                                   path=str(manifest_path), id_policy="left")
+    if alignment["original_audio_sha256_unchecked"] or alignment["extra_ids"]:
+        raise typer.BadParameter("ASR output has missing hashes or unknown source IDs")
+    metadata = {"run_identity": {k: v for k, v in asdict(identity).items() if k != "artifact_id"}}
+    record = ArtifactCatalog(catalog_dir).register_file(manifest_path, kind="manifest",
+        producer=ProducerRecord(pipeline="asr_external_execution", run_id=identity.execution_id), metadata=metadata)
+    identity.artifact_id = record.artifact_id
+    payload = yaml.safe_dump(asdict(identity), allow_unicode=True, sort_keys=False)
+    if output_identity.exists() and output_identity.read_text(encoding="utf-8") != payload:
+        raise typer.BadParameter("output identity already exists with different content")
+    output_identity.parent.mkdir(parents=True, exist_ok=True)
+    output_identity.write_text(payload, encoding="utf-8")
+    console.print(f"Registered ASR artifact: {record.artifact_id}; identity: {output_identity}")
 
 
 @artifact_app.command("list")
@@ -1045,7 +1158,11 @@ def release_show(
 @release_app.command("path")
 def release_path(
     release_id: str,
-    split: str = typer.Option("test", "--split", help="train/dev/test/holdout"),
+    split: str = typer.Option(
+        "test",
+        "--split",
+        help="train/dev/test/holdout 或 v3: eval_core/eval_random/excluded",
+    ),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
     """Resolve one frozen release split to its verified Manifest path."""
@@ -1081,7 +1198,14 @@ def release_build(
     output_dir: Path = typer.Option(Path("data/releases"), "--output-dir"),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
-    """Validate reviewed Gold, split by group, register outputs and freeze a release."""
+    """Validate reviewed Gold, split by group, register outputs and freeze a release.
+
+    Legacy v1/v2 path: mixes accepted non-empty gold then ratio-splits train/dev/test.
+    For dataset_policy_v3 (eval_core / eval_random / train quotas / leakage gates), use::
+
+        audio-data pipeline run pipelines/build_dataset_v3.yaml \\
+          --config configs/datasets/zh_asr_v3.yaml
+    """
     catalog = ArtifactCatalog(catalog_dir)
     if dataset.startswith("manifest_"):
         try:
@@ -1283,38 +1407,109 @@ def review_export(
         None,
         "--bucket",
         help=(
-            "Bucket to review; repeatable "
+            "v1 bucket to review; repeatable "
             "(default: model_missing/hardcase/semantic_* / possible_vad_miss/...)"
         ),
     ),
     revision: str = typer.Option(..., "--revision"),
+    protocol: str = typer.Option(
+        "v1",
+        "--protocol",
+        help="v1=legacy bucket export; v3=annotation_v3 blind/dual-review packs",
+    ),
+    view: str = typer.Option(
+        "blind",
+        "--view",
+        help="v3 view: blind | candidate_check | second_review | adjudication | spot_check",
+    ),
+    priority: Optional[list[str]] = typer.Option(
+        None,
+        "--priority",
+        help="v3 review_priority filter; repeatable (default: P0 P1 P2)",
+    ),
+    queue: Optional[list[str]] = typer.Option(
+        None,
+        "--queue",
+        help="v3 review_queue filter; repeatable (e.g. manual_review, pseudo_audit)",
+    ),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        help="v3 max samples in this batch (remainder stays in pool)",
+    ),
+    annotation_config: Path = typer.Option(
+        Path("configs/annotation/zh_asr_v3.yaml"),
+        "--annotation-config",
+        help="v3 annotation policy YAML",
+    ),
+    fmt: str = typer.Option(
+        "xlsx",
+        "--format",
+        help="v3 package format: xlsx | jsonl | both",
+    ),
 ) -> None:
+    """Export a human review package.
+
+    v1 keeps legacy bucket + model text columns. v3 exports blind packs by default
+    (no model answers); use --view candidate_check for a separate anonymous check view.
+    """
     dataset_path = _resolve_dataset(dataset)
     manifest = Manifest.load(dataset_path)
-    buckets = bucket or list(_DEFAULT_REVIEW_BUCKETS)
-    queue_id = _review_queue_id(dataset_path, buckets, revision)
-    rows = []
-    for sample in manifest:
-        if sample.labels.get("classification_bucket") not in buckets:
-            continue
-        row = {
-            "sample_id": sample.id,
-            "sha256": sample.sha256,
-            "queue_id": queue_id,
-            "review_revision": revision,
-            "source_path": sample.source_path,
-            "decision": "",
-            "gold_text": "",
-            "reason": "",
-        }
-        row.update({f"{key}_text": sample.get_transcript_text(key) for key in sample.transcripts})
-        rows.append(row)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    import pandas as pd
+    if protocol == "v1":
+        buckets = bucket or list(_DEFAULT_REVIEW_BUCKETS)
+        queue_id = _review_queue_id(dataset_path, buckets, revision)
+        rows = []
+        for sample in manifest:
+            if sample.labels.get("classification_bucket") not in buckets:
+                continue
+            row = {
+                "sample_id": sample.id,
+                "sha256": sample.sha256,
+                "queue_id": queue_id,
+                "review_revision": revision,
+                "source_path": sample.source_path,
+                "decision": "",
+                "gold_text": "",
+                "reason": "",
+            }
+            row.update(
+                {f"{key}_text": sample.get_transcript_text(key) for key in sample.transcripts}
+            )
+            rows.append(row)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        import pandas as pd
 
-    pd.DataFrame(rows).to_excel(output, index=False)
-    console.print(f"[green]OK[/green] exported {len(rows)} review rows to [cyan]{output}[/cyan]")
+        pd.DataFrame(rows).to_excel(output, index=False)
+        console.print(
+            f"[green]OK[/green] exported {len(rows)} review rows to [cyan]{output}[/cyan]"
+        )
+        return
 
+    if protocol != "v3":
+        raise typer.BadParameter(f"unsupported protocol: {protocol!r} (use v1 or v3)")
+
+    from audio_engine.core.annotation_v3 import AnnotationConfig, build_export_rows, write_review_package
+    from audio_engine.core.annotation_v3.types import VIEWS
+
+    if view not in VIEWS:
+        raise typer.BadParameter(f"invalid --view {view!r}; expected one of {sorted(VIEWS)}")
+    cfg = AnnotationConfig.load(annotation_config)
+    priorities = priority or ["P0", "P1", "P2"]
+    qid, rows, meta = build_export_rows(
+        list(manifest),
+        config=cfg,
+        dataset_path=str(dataset_path.resolve()),
+        revision=revision,
+        view=view,
+        priorities=priorities,
+        queues=queue,
+        limit=limit,
+    )
+    written = write_review_package(rows, meta, output, fmt=fmt)
+    console.print(
+        f"[green]OK[/green] exported {len(rows)} v3/{view} rows "
+        f"(queue={qid}) → {[str(p) for p in written]}"
+    )
 
 @review_app.command("export-gold")
 def review_export_gold(
@@ -1421,89 +1616,353 @@ def review_import(
     output: Path = typer.Option(..., "--output", "-o"),
     expected_revision: str = typer.Option(..., "--revision"),
     bucket: Optional[list[str]] = typer.Option(
-        None, "--bucket", help="Bucket included by export; repeatable"
+        None, "--bucket", help="v1 bucket included by export; repeatable"
     ),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+    protocol: str = typer.Option(
+        "v1",
+        "--protocol",
+        help="v1=legacy accepted/rejected; v3=annotation_v3 dual-review state machine",
+    ),
+    review_pass: str = typer.Option(
+        "first",
+        "--pass",
+        help="v3 pass: first | second | adjudication | spot_check",
+    ),
+    actor_id: str = typer.Option(
+        "",
+        "--actor-id",
+        help="v3 annotator/reviewer/adjudicator id (required for completed rows)",
+    ),
+    queue_id: Optional[str] = typer.Option(
+        None,
+        "--queue-id",
+        help="v3 expected queue_id (default: read from package meta or first row)",
+    ),
+    annotation_config: Path = typer.Option(
+        Path("configs/annotation/zh_asr_v3.yaml"),
+        "--annotation-config",
+        help="v3 annotation policy YAML",
+    ),
+    allow_issues: bool = typer.Option(
+        False,
+        "--allow-issues",
+        help="v3: write output even when blocking validation issues exist (still reports them)",
+    ),
 ) -> None:
+    """Import human review decisions.
+
+    v3: empty gold ``__EMPTY__`` / JSON null vs ``__NULL__``; first pass alone cannot
+    promote dual-required samples to gold; same person cannot self-review.
+    """
     import pandas as pd
 
     dataset_path = _resolve_dataset(dataset)
     manifest = Manifest.load(dataset_path)
-    frame = pd.read_excel(review_file, dtype=str).fillna("")
-    required = {
-        "sample_id",
-        "sha256",
-        "queue_id",
-        "review_revision",
-        "decision",
-        "gold_text",
-        "reason",
-    }
-    missing = required - set(frame.columns)
-    if missing:
-        raise typer.BadParameter(f"review file missing columns: {sorted(missing)}")
-    if frame["sample_id"].duplicated().any():
-        raise typer.BadParameter("review file contains duplicate sample_id")
-    buckets = bucket or list(_DEFAULT_REVIEW_BUCKETS)
-    expected_queue_id = _review_queue_id(dataset_path, buckets, expected_revision)
-    if set(frame["queue_id"]) != {expected_queue_id}:
-        raise typer.BadParameter(f"review queue identity mismatch: expected {expected_queue_id}")
-    indexed = {sample.id: sample.model_copy(deep=True) for sample in manifest}
-    for row in frame.to_dict(orient="records"):
-        sample_id = str(row["sample_id"])
-        if sample_id not in indexed:
-            raise typer.BadParameter(f"unknown review sample_id: {sample_id}")
-        sample = indexed[sample_id]
-        if str(row["sha256"]) != sample.sha256:
-            raise typer.BadParameter(f"audio hash changed for review sample: {sample_id}")
-        if str(row["review_revision"]) != expected_revision:
-            raise typer.BadParameter(f"stale review revision for sample: {sample_id}")
-        existing_revision = sample.labels.get("annotation_revision")
-        existing_state = sample.labels.get("annotation_state")
-        if (
-            existing_state in {"human_accepted", "rejected"}
-            and existing_revision != expected_revision
-        ):
-            raise typer.BadParameter(
-                f"refusing to overwrite annotated sample {sample_id} revision {existing_revision}"
-            )
-        decision = str(row["decision"]).strip()
-        if decision not in {"accepted", "rejected"}:
-            raise typer.BadParameter(f"invalid decision for {sample_id}: {decision!r}")
-        gold_text = str(row["gold_text"]).strip()
-        if decision == "accepted" and not gold_text:
-            raise typer.BadParameter(f"accepted sample requires gold_text: {sample_id}")
-        updates = {
-            "annotation_state": "human_accepted" if decision == "accepted" else "rejected",
-            "gold_text": gold_text,
-            "annotation_revision": expected_revision,
-            "annotation_reason": str(row["reason"]).strip(),
+
+    if protocol == "v1":
+        frame = pd.read_excel(review_file, dtype=str).fillna("")
+        required = {
+            "sample_id",
+            "sha256",
+            "queue_id",
+            "review_revision",
+            "decision",
+            "gold_text",
+            "reason",
         }
-        if decision == "accepted":
-            updates["label"] = gold_text
-            updates["label_source"] = "human"
-            updates["label_tier"] = "gold"
-            updates["is_human_verified"] = True
-            # Human gold upgrades the bucket for formal eval consumption.
-            if str(sample.labels.get("type") or "").startswith("pseudo_gold"):
-                updates["type"] = "human_gold"
-                updates["classification_bucket"] = "human_gold"
-                updates["subtype"] = str(sample.labels.get("type") or "")
-        sample.labels.update(updates)
-    result = Manifest([indexed[sample.id] for sample in manifest])
+        missing = required - set(frame.columns)
+        if missing:
+            raise typer.BadParameter(f"review file missing columns: {sorted(missing)}")
+        if frame["sample_id"].duplicated().any():
+            raise typer.BadParameter("review file contains duplicate sample_id")
+        buckets = bucket or list(_DEFAULT_REVIEW_BUCKETS)
+        expected_queue_id = _review_queue_id(dataset_path, buckets, expected_revision)
+        if set(frame["queue_id"]) != {expected_queue_id}:
+            raise typer.BadParameter(f"review queue identity mismatch: expected {expected_queue_id}")
+        indexed = {sample.id: sample.model_copy(deep=True) for sample in manifest}
+        for row in frame.to_dict(orient="records"):
+            sample_id = str(row["sample_id"])
+            if sample_id not in indexed:
+                raise typer.BadParameter(f"unknown review sample_id: {sample_id}")
+            sample = indexed[sample_id]
+            if str(row["sha256"]) != sample.sha256:
+                raise typer.BadParameter(f"audio hash changed for review sample: {sample_id}")
+            if str(row["review_revision"]) != expected_revision:
+                raise typer.BadParameter(f"stale review revision for sample: {sample_id}")
+            existing_revision = sample.labels.get("annotation_revision")
+            existing_state = sample.labels.get("annotation_state")
+            if (
+                existing_state in {"human_accepted", "rejected"}
+                and existing_revision != expected_revision
+            ):
+                raise typer.BadParameter(
+                    f"refusing to overwrite annotated sample {sample_id} revision {existing_revision}"
+                )
+            decision = str(row["decision"]).strip()
+            if decision not in {"accepted", "rejected"}:
+                raise typer.BadParameter(f"invalid decision for {sample_id}: {decision!r}")
+            gold_text = str(row["gold_text"]).strip()
+            if decision == "accepted" and not gold_text:
+                raise typer.BadParameter(f"accepted sample requires gold_text: {sample_id}")
+            updates = {
+                "annotation_state": "human_accepted" if decision == "accepted" else "rejected",
+                "gold_text": gold_text,
+                "annotation_revision": expected_revision,
+                "annotation_reason": str(row["reason"]).strip(),
+            }
+            if decision == "accepted":
+                updates["label"] = gold_text
+                updates["label_source"] = "human"
+                updates["label_tier"] = "gold"
+                updates["is_human_verified"] = True
+                # Human gold upgrades the bucket for formal eval consumption.
+                if str(sample.labels.get("type") or "").startswith("pseudo_gold"):
+                    updates["type"] = "human_gold"
+                    updates["classification_bucket"] = "human_gold"
+                    updates["subtype"] = str(sample.labels.get("type") or "")
+            sample.labels.update(updates)
+        result = Manifest([indexed[sample.id] for sample in manifest])
+        result.save(output)
+        result.save(output.with_suffix(".jsonl"))
+        run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_review_import"
+        record = register_manifest_output(
+            output,
+            catalog_dir=catalog_dir,
+            pipeline="review.import",
+            run_dir=run_dir,
+            sample_count=len(result),
+        )
+        console.print(f"[green]OK[/green] imported review decisions to [cyan]{output}[/cyan]")
+        console.print(f"  Artifact: [cyan]{record.artifact_id}[/cyan]")
+        return
+
+    if protocol != "v3":
+        raise typer.BadParameter(f"unsupported protocol: {protocol!r} (use v1 or v3)")
+
+    from audio_engine.core.annotation_v3 import (
+        AnnotationConfig,
+        apply_review_import_v3,
+        import_has_blocking_issues,
+        load_review_rows,
+    )
+    from audio_engine.core.annotation_v3.types import PASSES
+    from audio_engine.core.artifacts import atomic_write_json
+
+    if review_pass not in PASSES:
+        raise typer.BadParameter(f"invalid --pass {review_pass!r}; expected one of {sorted(PASSES)}")
+    cfg = AnnotationConfig.load(annotation_config)
+    rows = load_review_rows(review_file)
+    if not rows:
+        raise typer.BadParameter("review file has no rows")
+    meta_path = Path(review_file).with_suffix(".meta.json")
+    if not meta_path.is_file():
+        raise typer.BadParameter("v3 import requires the original exported .meta.json")
+    package_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    from audio_engine.core.annotation_v3.types import IMMUTABLE_EXPORT_COLUMNS
+    for row in rows:
+        original = (package_meta.get("immutable_rows") or {}).get(str(row.get("sample_id") or ""))
+        if original is None:
+            raise typer.BadParameter("sample absent from exported queue membership")
+        for field in IMMUTABLE_EXPORT_COLUMNS:
+            if str(row.get(field) or "") != str(original.get(field) or ""):
+                raise typer.BadParameter(f"immutable review column changed: {field}")
+    expected_qid = queue_id or str(rows[0].get("queue_id") or "")
+    if not expected_qid:
+        meta_path = Path(review_file).with_suffix(".meta.json")
+        if meta_path.exists():
+            expected_qid = str(json.loads(meta_path.read_text(encoding="utf-8")).get("queue_id") or "")
+    if not expected_qid:
+        raise typer.BadParameter("could not resolve queue_id; pass --queue-id")
+
+    import_result = apply_review_import_v3(
+        list(manifest),
+        rows,
+        config=cfg,
+        expected_queue_id=expected_qid,
+        expected_revision=expected_revision,
+        review_pass=review_pass,
+        actor_id=actor_id,
+    )
+    if import_has_blocking_issues(import_result) and not allow_issues:
+        for issue in import_result.issues[:20]:
+            console.print(
+                f"[red]ERR[/red] {issue.sample_id}: {issue.code} — {issue.message}"
+            )
+        raise typer.BadParameter(
+            f"review import blocked by {len(import_result.issues)} issue(s); "
+            "fix and re-import, or pass --allow-issues for diagnostics only"
+        )
+
+    result = Manifest(import_result.samples)
+    if import_has_blocking_issues(import_result):
+        for sample in result:
+            sample.labels["review_validation_failed"] = True
+            sample.labels["is_human_verified"] = False
+    output.parent.mkdir(parents=True, exist_ok=True)
     result.save(output)
     result.save(output.with_suffix(".jsonl"))
-    run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_review_import"
+    # New annotation artifact under datasets/stage1/review/{queue}/{revision}/
+    artifact_dir = Path("datasets/stage1/review") / expected_qid / expected_revision
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    from audio_engine.core.dataset_v3.audit_plan import digest_payload
+    artifact_path = artifact_dir / f"annotation_{review_pass}_{digest_payload(import_result.artifact_payload)[:16]}.json"
+    atomic_write_json(artifact_path, import_result.artifact_payload)
+    run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_review_import_v3"
     record = register_manifest_output(
         output,
         catalog_dir=catalog_dir,
-        pipeline="review.import",
+        pipeline="review.import_v3",
         run_dir=run_dir,
         sample_count=len(result),
     )
-    console.print(f"[green]OK[/green] imported review decisions to [cyan]{output}[/cyan]")
+    console.print(f"[green]OK[/green] imported v3/{review_pass} → [cyan]{output}[/cyan]")
+    console.print(
+        f"  applied={import_result.applied} pending={import_result.pending_left} "
+        f"conflicts={import_result.conflicts} rejected={import_result.rejected} "
+        f"gold={import_result.gold_promoted} issues={len(import_result.issues)}"
+    )
+    console.print(f"  Annotation artifact: [cyan]{artifact_path}[/cyan]")
     console.print(f"  Artifact: [cyan]{record.artifact_id}[/cyan]")
 
+
+@review_app.command("audit-pseudo")
+def review_audit_pseudo(
+    dataset: str = typer.Argument(
+        ...,
+        help="Manifest with pseudo_high candidates + human dual-review audit labels",
+    ),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="audit_report.json path",
+    ),
+    output_manifest: Optional[Path] = typer.Option(
+        None,
+        "--output-manifest",
+        help="Optional stamped Manifest (auto_accept only if gate passes)",
+    ),
+    annotation_config: Path = typer.Option(
+        Path("configs/annotation/zh_asr_v3.yaml"),
+        "--annotation-config",
+    ),
+    rule_version: str = typer.Option("selection_v3.0", "--rule-version"),
+    audit_plan: Optional[Path] = typer.Option(None, "--audit-plan", help="Frozen pre-annotation audit plan"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+) -> None:
+    """Independent pseudo-label audit gate (group-balanced mislabel rate + Wilson).
+
+    Calibration samples are excluded from self-proof. Critical semantic errors
+    force stop_publish. Does not rewrite frozen Releases.
+    """
+    from audio_engine.core.annotation_v3 import AnnotationConfig
+    from audio_engine.core.artifacts import atomic_write_json
+    from audio_engine.core.dataset_v3.audit import evaluate_pseudo_audit, mark_pseudo_audit_outcome
+
+    dataset_path = _resolve_dataset(dataset)
+    manifest = Manifest.load(dataset_path)
+    cfg = AnnotationConfig.load(annotation_config)
+    # Prefer audit_pending / pseudo_high pool; fall back to whole manifest.
+    pool = [
+        s
+        for s in manifest
+        if str(s.labels.get("type") or "") == "pseudo_high"
+        or str(s.labels.get("review_queue") or "") == "pseudo_audit"
+        or s.labels.get("pseudo_audit_sampled")
+        or s.labels.get("is_human_verified")
+    ]
+    if not pool:
+        pool = list(manifest)
+    plan = json.loads(audit_plan.read_text(encoding="utf-8")) if audit_plan else None
+    report = evaluate_pseudo_audit(pool, config=cfg, rule_version=rule_version, plan=plan)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(output, report.to_dict())
+    status = "PASS" if report.passed else "BLOCK"
+    color = "green" if report.passed else "red"
+    console.print(
+        f"[{color}]{status}[/{color}] pseudo audit → [cyan]{output}[/cyan] "
+        f"(n={report.overall.n} errors={report.overall.errors} "
+        f"upper={report.overall.upper} stop={report.stop_publish})"
+    )
+    for reason in report.reasons[:10]:
+        console.print(f"  - {reason}")
+    if output_manifest is not None:
+        stamped = Manifest(mark_pseudo_audit_outcome(list(manifest), report))
+        output_manifest.parent.mkdir(parents=True, exist_ok=True)
+        stamped.save(output_manifest)
+        stamped.save(output_manifest.with_suffix(".jsonl"))
+        run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_review_audit_pseudo"
+        record = register_manifest_output(
+            output_manifest,
+            catalog_dir=catalog_dir,
+            pipeline="review.audit_pseudo",
+            run_dir=run_dir,
+            sample_count=len(stamped),
+        )
+        console.print(f"  Stamped Manifest: [cyan]{output_manifest}[/cyan]")
+        console.print(f"  Artifact: [cyan]{record.artifact_id}[/cyan]")
+    if not report.passed:
+        raise typer.Exit(code=2)
+
+
+@review_app.command("check-v3")
+def review_check_v3(
+    dataset: Path = typer.Argument(...),
+    queue_meta: Path = typer.Option(..., "--queue-meta"),
+) -> None:
+    """DAG human checkpoint: exit 75 until every exported row has a reviewed outcome."""
+    from audio_engine.core.annotation_v3.gold import has_formal_gold_evidence
+    if not dataset.is_file():
+        raise typer.Exit(code=75)
+    meta = json.loads(queue_meta.read_text(encoding="utf-8"))
+    members = meta.get("immutable_rows") or {}
+    if not members:
+        raise typer.BadParameter("queue metadata has no frozen membership")
+    samples = {s.id: s for s in Manifest.load(dataset)}
+    pending = []
+    for sid, identity in members.items():
+        sample = samples.get(sid)
+        if sample is None:
+            pending.append(sid)
+            continue
+        if (sample.labels.get("original_audio_sha256") or sample.sha256) != identity.get("original_audio_sha256"):
+            raise typer.BadParameter(f"review audio hash mismatch: {sid}")
+        dual = str(identity.get("requires_dual_review")).lower() == "true"
+        if sample.labels.get("annotation_state") == "rejected":
+            continue
+        if (sample.labels.get("gold_kind") in {"invalid", "unintelligible", "ambiguous_target"}
+            and sample.labels.get("annotation_state") in {"second_review", "adjudicated"}):
+            continue  # A completed exclusion is an outcome; build enforces formal quotas.
+        if not has_formal_gold_evidence(sample, require_dual=dual):
+            pending.append(sid)
+    if pending:
+        console.print(f"WAITING_REVIEW: {len(pending)} pending rows")
+        raise typer.Exit(code=75)
+    console.print("Review gold evidence complete")
+
+
+@review_app.command("plan-audit-pseudo")
+def review_plan_audit_pseudo(
+    dataset: str = typer.Argument(...),
+    output: Path = typer.Option(..., "--output"),
+    output_manifest: Path = typer.Option(..., "--output-manifest"),
+    annotation_config: Path = typer.Option(Path("configs/annotation/zh_asr_v3.yaml"), "--annotation-config"),
+) -> None:
+    """Freeze group-balanced audit draws from the unannotated training candidate pool."""
+    from audio_engine.core.annotation_v3 import AnnotationConfig
+    from audio_engine.core.artifacts import atomic_write_json
+    from audio_engine.core.dataset_v3.audit_plan import freeze_audit_plan, stamp_audit_draw
+    samples = list(Manifest.load(_resolve_dataset(dataset)))
+    plan = freeze_audit_plan(samples, AnnotationConfig.load(annotation_config))
+    if output.exists():
+        if json.loads(output.read_text(encoding="utf-8")) != plan:
+            raise typer.BadParameter("audit plan exists with different content")
+    else:
+        atomic_write_json(output, plan)
+    output_manifest.parent.mkdir(parents=True, exist_ok=True)
+    Manifest(stamp_audit_draw(samples, plan)).save(output_manifest)
+    console.print(f"Frozen audit plan: {output}; digest={plan['digest']}")
 
 def _write_xlsx_parts(
     rows: list[dict],
@@ -1872,7 +2331,7 @@ def task_run(
         state = runner.run()
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[green]OK[/green] task [cyan]{state.task_id}[/cyan] succeeded")
+    console.print(f"task [cyan]{state.task_id}[/cyan] {state.status}")
     console.print(f"  Run dir: {runner.run_dir}")
 
 

@@ -1,0 +1,67 @@
+# annotation_v3.0 — 人工审核与伪标签抽检门禁（012-C）
+# 空金标、盲审、双审、仲裁、revision；伪标签独立抽检（组均衡误标率 + Wilson）。
+
+annotation_version: annotation_v3.0
+
+blind_seed_salt: annotation_v3_blind
+candidate_seed_salt: annotation_v3_candidate
+audio_event_tags_required_for_non_speech: true
+
+dual_review:
+  eval_formal: true
+  priority_p0: true
+  empty_gold_candidates: true
+  pseudo_audit_samples: true
+  reservation_roles:
+    - eval_random
+    - eval_core_reserve
+    - dev
+
+spot_check:
+  single_review_min_rate: 0.10
+  expand_on_critical_error: true
+
+budget:
+  calibration_target: 3000
+  calibration_min: 2000
+  calibration_max: 5000
+  p0_all_to_queue: true
+  p1_priority_tags:
+    - false_affirmation_candidate
+    - qwen_correction_candidate
+    - short_utterance
+    - all_empty_unverified
+    - noisy_audio
+    - crosstalk_suspected
+
+pseudo_audit:
+  min_groups_overall: 500
+  wilson_z: 1.96
+  overall_upper_bound: 0.01
+  critical_semantic_errors_max: 0
+  seed: 42
+  forbid_calibration_self_proof: true
+  protected_layers:
+    short_utterance:
+      min_groups: 200
+      upper_bound: 0.02
+      match:
+        risk_tags_any: [short_utterance]
+    negation:
+      min_groups: 200
+      upper_bound: 0.02
+      match:
+        human_semantic: [negative]
+        risk_tags_any: [negation_flip]
+    affirmation:
+      min_groups: 200
+      upper_bound: 0.02
+      match:
+        human_semantic: [positive]
+        risk_tags_any: [false_affirmation_candidate]
+    moderate_quality:
+      min_groups: 200
+      upper_bound: 0.02
+      match:
+        noise_band: [moderate]
+        human_noise: [moderate]

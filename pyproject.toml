@@ -30,6 +30,10 @@ kimi-audio = [
     "torch",
     "kimia-audio @ git+https://github.com/MoonshotAI/Kimi-Audio.git",
 ]
+dnsmos = [
+    "onnxruntime>=1.16",
+    "librosa>=0.10",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",

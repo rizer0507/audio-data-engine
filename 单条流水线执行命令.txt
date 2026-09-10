@@ -268,6 +268,9 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 # --aggregate-base 须与 ASR 别名/transcript key 一致（例 qwen3-asr）
 # 可选: --compare-model / --id-col
 # 之后: audio-data eval register datasets/stage1/derived/classified_<name>.parquet --name eval_<name>
+# 工序三评测（含 012-E 业务风险指标）见 手册/*/03-工序三-评测.txt：
+#   eval register → 独立跑批 → eval_aggregate → eval_metric_pipeline
+#   configs/metrics/business_risk_v1.yaml；publish_status=needs_review 时不得切生产默认
 
 
 -------------------------------------------------------

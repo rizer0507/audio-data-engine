@@ -1,0 +1,121 @@
+# dataset_policy_v3.0 — 契约 / 隔离（012-A）+ 配额抽样与 Release（012-D）
+# 八路家族身份、泄漏分组、eval/dev/calibration 预留；
+# 人工校准消费、双评测集、train 四池配额、跨集防泄漏、原子 Release。
+# 分类规则见 configs/selection/zh_asr_v3.yaml；审核见 configs/annotation/zh_asr_v3.yaml。
+
+dataset_policy_version: dataset_policy_v3.0
+engine: consensus_v3
+rule_version: selection_v3.0
+target_family: qwen
+
+model_families:
+  kimi:
+    - kimi_1
+    - kimi_2
+  glm:
+    - glm_1
+    - glm_2
+  sensevoice:
+    - sensevoice_1
+    - sensevoice_2
+  qwen:
+    - qwen_1
+    - qwen_2
+
+teacher_families:
+  - kimi
+  - glm
+  - sensevoice
+
+expected_runs_per_family: 2
+
+# prepare 可暂缺；attach_asr_v3 / 伪标签放行前必须填写全部 8 条真实推理身份。
+# artifact_id 必须来自 catalog；metadata.run_identity 与下述声明一致。
+# runs:
+#   - run_id: kimi_1
+#     family: kimi
+#     transcript_key: kimi_1
+#     artifact_id: manifest_...
+#     execution_id: 实际独立执行编号
+#     model_checkpoint_digest: ""
+#     decode_config_digest: ""
+#     prompt_digest: ""
+#     input_audio_digest: ""
+#     input_audio_key: resampled_16k
+#     created_at: ""
+
+grouping:
+  call_id_fields: [call_id, conversation_id]
+  # 仅当来源标记 speaker_id_reliable=true 时并入同组
+  speaker_id_fields: [customer_id, speaker_id]
+  require_reliable_speaker: true
+  source_audio_id_fields: [source_audio_id]
+  file_hash_fields: [original_audio_sha256, sha256]
+  pcm_hash_fields: [pcm_sha256, normalized_pcm_sha256]
+  confirmed_near_duplicate_field: near_duplicate_group_id
+  uncertain_near_duplicate_field: near_duplicate_uncertain_id
+  source_index_fields:
+    - source_snapshot_id
+    - source_audio_id
+    - call_id
+    - conversation_id
+  require_source_index: true
+
+reservation:
+  seed: 42
+  eval_random_target: 2000
+  eval_core_reserve_ratio: 0.15
+  dev_ratio_of_dev_pool: 0.10
+  calibration_target: 3000
+  isolate_missing_group_meta: true
+  policy_version: dataset_policy_v3.0
+  # 若历史模型结果已被查看，填写设计形成时间与已用信息（不得宣称未观察独立测试）
+  design_formed_at: ""
+  prior_information_used: []
+
+# ---- 012-D：构建与 Release（先锁定用途，再按集合标签门禁冻结）----
+build:
+  # 正式构建时必填；也可由算子 params.release_id 覆盖
+  release_id: ""
+  train_size: 10000
+  sampling_seed: 42
+  normalization_version: zh_v1
+  gold_revision: annotation_v3.0
+  group_key: leakage_group_id
+  # 训练适配器未验收空转写目标前禁止把 non_speech 写入 train
+  allow_non_speech_train: false
+  max_per_call: 3
+  exact_duplicate_fields:
+    - duplicate_group_id
+    - original_audio_sha256
+    - pcm_sha256
+  fail_on_shortfall: true
+  require_dual_review_for_eval: true
+  require_pseudo_audit_for_pseudo_train: true
+  require_reservation: true
+
+eval_random:
+  target: 2000
+
+eval_core:
+  target: 2000
+  strata:
+    negative_reject: 500
+    filler_neutral: 300
+    confirmed_non_speech: 300
+    noisy_crosstalk_speech: 300
+    positive: 300
+    other: 300
+
+train_pools:
+  qwen_error_fix: 0.40
+  human_high_risk: 0.20
+  human_ordinary: 0.20
+  pseudo_high_audited: 0.20
+
+train_cross_constraints:
+  min_positive_ratio: 0.15
+  min_negative_ratio: 0.15
+  min_noisy_crosstalk_ratio: 0.10
+  max_non_speech_ratio: 0.10
+  max_pseudo_high_ratio: 0.20

@@ -1,0 +1,26 @@
+# 012-B：四家族双跑分拣 — 消费八路 + DNSMOS 侧车 + reservation，只输出候选
+#
+#   audio-data pipeline run pipelines/classify_dataset_v3.yaml \
+#     --source-name mt3000 \
+#     --config configs/selection/zh_asr_v3.yaml
+#
+# 输入：prepared_v3_*（含契约/预留）或等价八路聚合表
+# 可选：quality_sidecar_manifest 按 join key 合并 DNSMOS
+# 输出：classified_v3_*（不覆盖 classified_ / classified_v2_）
+
+name: classify_dataset_v3
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_v3_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_v3.yaml
+      # 由 --source-name 改写时可同步注入；亦可显式指定
+      # quality_sidecar_manifest: datasets/stage1/derived/quality_sidecar_source_A.parquet

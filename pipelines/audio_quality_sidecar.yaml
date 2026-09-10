@@ -1,0 +1,25 @@
+# 012-B：音频质量侧车 — 仅 DNSMOS（与 ASR 独立，分拣前按 ID+原音频哈希合并）
+#
+#   audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
+#     --source-name mt3000 \
+#     --config configs/quality/dnsmos_p835.yaml
+#
+# 输入：清洗后的 cleaned_*（resampled_16k，未 pad）
+# 输出：quality_sidecar_*（quality.dnsmos_* / noise_band / noise_risk）
+# 缺模型文件或 onnxruntime 时启动失败，禁止写默认干净分。
+
+name: audio_quality_sidecar
+input:
+  manifest: datasets/stage1/cleaned/cleaned_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/quality_sidecar_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: dnsmos
+    operator: quality.dnsmos
+    params:
+      config_path: configs/quality/dnsmos_p835.yaml
+      input_audio_key: resampled_16k

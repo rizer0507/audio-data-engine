@@ -1,4 +1,5 @@
 from audio_engine.operators.quality.asr_edit_distance import AsrEditDistanceOperator
+from audio_engine.operators.quality.attach_asr_v3 import AttachAsrV3Operator
 from audio_engine.operators.quality.cer import CerOperator
 from audio_engine.operators.quality.copy_transcripts import CopyTranscriptsOperator
 from audio_engine.operators.quality.filter import FilterOperator, TranscriptDiffOperator
@@ -12,6 +13,9 @@ from audio_engine.operators.quality.classify import ClassifyOperator
 from audio_engine.operators.quality.inject_external_gold import InjectExternalGoldOperator
 from audio_engine.operators.quality.split_dataset import SplitDatasetOperator
 from audio_engine.operators.quality.evaluation_report import EvaluationReportOperator
+from audio_engine.operators.quality.prepare_dataset_v3 import PrepareDatasetV3Operator
+from audio_engine.operators.quality.dnsmos import DnsmosOperator
+from audio_engine.operators.quality.build_dataset_v3 import BuildDatasetV3Operator
 
 __all__ = [
     "AsrEditDistanceOperator",
@@ -29,4 +33,8 @@ __all__ = [
     "InjectExternalGoldOperator",
     "SplitDatasetOperator",
     "EvaluationReportOperator",
+    "PrepareDatasetV3Operator",
+    "DnsmosOperator",
+    "BuildDatasetV3Operator",
+    "AttachAsrV3Operator",
 ]

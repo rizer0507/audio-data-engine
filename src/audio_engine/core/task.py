@@ -22,6 +22,7 @@ class TaskNode(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     outputs: list[str] = Field(default_factory=list)
+    waiting_exit_codes: list[int] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -165,6 +166,12 @@ class TaskRunner:
                 )
             node_state.return_code = result.returncode
             node_state.finished_at = utc_now()
+            if result.returncode in node.waiting_exit_codes:
+                node_state.status = "waiting_review"
+                state.status = "waiting_review"
+                self._save(state)
+                self._event("waiting_review", node.id, {"return_code": result.returncode})
+                return state
             if result.returncode != 0:
                 node_state.status = "failed"
                 node_state.error = f"command exited with code {result.returncode}"

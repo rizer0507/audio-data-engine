@@ -100,7 +100,12 @@ def manifest_dir_for_stem(stem: str) -> Path:
 
     if text.startswith("cleaned_"):
         return STAGE1_CLEANED_DIR
-    if text.startswith("multi_asr_") or text.startswith("classified_"):
+    if (
+        text.startswith("multi_asr_")
+        or text.startswith("classified_")
+        or text.startswith("prepared_v3_")
+        or text.startswith("quality_sidecar_")
+    ):
         return STAGE1_DERIVED_DIR
     if text.startswith("eval_aggregate_") or text.startswith("eval_metrics_"):
         return STAGE3_DERIVED_DIR
@@ -531,6 +536,78 @@ def apply_source_name_to_single_pipeline(
             "asr_run": None,
             "aggregate_base": base_model,
         }
+
+    if "prepare_dataset" in key or key.startswith("prepare_v3"):
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("prepared_v3", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
+    if "audio_quality" in key or "quality_sidecar" in key:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("quality_sidecar", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
+    if "classify_dataset_v3" in key or key in {"classify_v3", "classified_v3"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        resolved = resolve_existing_manifest(manifest_stem("prepared_asr_v3", name))
+        sidecar = staged_manifest_path(manifest_stem("quality_sidecar", name))
+        overrides = {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("classified_v3", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+        if sidecar.exists():
+            overrides["quality_sidecar_manifest"] = _posix(sidecar)
+        return overrides
+
+    if key == "attach_asr_v3":
+        resolved = resolve_existing_manifest(manifest_stem("prepared_v3", name))
+        return {"source_dir": None, "input_manifest": str(resolved), "source_id": None,
+                "output_manifest": _posix(manifest_path("prepared_asr_v3", name)),
+                "aggregate_manifests": None, "asr_run": None, "aggregate_base": None}
+
+    if key == "build_dataset_v3":
+        if run_alias is not None or base_alias is not None:
+            raise ValueError("build_dataset_v3 does not accept ASR run/base overrides")
+        resolved = resolve_existing_manifest(manifest_stem("reviewed_v3", name))
+        return {"source_dir": None, "input_manifest": str(resolved), "source_id": None,
+                "output_manifest": _posix(manifest_path("built_v3", name)),
+                "aggregate_manifests": None, "asr_run": None, "aggregate_base": None}
 
     asr_kind = _asr_output_kind(pipeline_name)
     if asr_kind is not None:

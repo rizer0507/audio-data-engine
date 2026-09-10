@@ -1,0 +1,30 @@
+# Formal v3 entry. Override explicit input/output paths and fixed model aliases per experiment.
+# Business thresholds must be calibrated in the referenced config before this gate can pass.
+name: eval_metrics_v3
+input:
+  manifest: datasets/stage3/derived/eval_aggregate_v3.parquet
+output:
+  manifest: datasets/stage3/derived/eval_metrics_v3.parquet
+execution:
+  executor: sequential
+  fail_fast: true
+pipeline:
+  - name: evaluation_metrics
+    operator: quality.text_metrics
+    params:
+      config_path: configs/metrics/model_eval.yaml
+      normalization_path: configs/normalization/zh_asr_v1.yaml
+      skip_missing_reference: false
+  - name: evaluation_report
+    operator: quality.evaluation_report
+    params:
+      bucket_key: type
+      allow_missing_gold: false
+      require_formal_v3: true
+      enable_business_metrics: true
+      business_metrics_config: configs/metrics/business_risk_v1.yaml
+      baseline_prefix: qwen_1
+      candidate_prefix: qwen_sft
+      export_xlsx: true
+      fail_on_regression: false
+      fail_on_business_gate: true

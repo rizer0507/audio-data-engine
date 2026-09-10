@@ -1,0 +1,24 @@
+# 012-A：契约与隔离 — 输入校验、泄漏分组、eval/dev/calibration 预留
+#
+#   audio-data pipeline run pipelines/prepare_dataset_v3.yaml \
+#     --config configs/datasets/zh_asr_v3.yaml \
+#     --source-name mt3000
+#
+# 输入：未按模型结果筛选的完整音频底表；先冻结，再 attach_asr_v3。
+# 输出：带 contract / leakage_group_id / reservation 字段的 Manifest
+#       + runs/.../artifacts/reservation.json（不可变）
+
+name: prepare_dataset_v3
+input:
+  manifest: datasets/stage1/derived/cleaned_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/prepared_v3_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: prepare
+    operator: quality.prepare_dataset_v3
+    params:
+      config_path: configs/datasets/zh_asr_v3.yaml

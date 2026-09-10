@@ -16,6 +16,12 @@ from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
 from audio_engine.core.selection_v2.types import EMPTY_GOLD_TYPES
 from audio_engine.core.source_naming import evaluation_report_dir
+from audio_engine.metrics.business import (
+    load_business_metric_config,
+    prediction_completeness,
+)
+from audio_engine.metrics.gate import evaluate_release_gate, load_gate_config
+from audio_engine.metrics.runner import MetricRunner, load_business_risk_config
 
 # Types whose empty reference must not pollute the primary CER table.
 _EMPTY_REF_TYPES = frozenset(EMPTY_GOLD_TYPES) | {
@@ -427,15 +433,126 @@ def _write_xlsx(
         summary_df.to_excel(writer, index=False, sheet_name="按type统计")
 
 
+def _attach_business_metrics(
+    report: dict[str, Any],
+    samples: list[Sample],
+    prefixes: list[str],
+    config: OperatorConfig,
+) -> None:
+    """Extend evaluation.json with business_metrics_v1 + optional release gate."""
+    cfg_path = config.params.get("business_metrics_config") or config.params.get(
+        "business_risk_config"
+    )
+    enable = config.params.get("enable_business_metrics")
+    if enable is False:
+        return
+    if cfg_path is None and enable is not True:
+        # Opt-in via explicit path or enable flag (keeps v1/v2 CER-only path stable).
+        return
+    raw = load_business_risk_config(cfg_path) if cfg_path else {}
+    runner = MetricRunner(
+        business_config_path=None,
+        business_config=raw,
+    )
+    business_report = runner.score_corpus(samples, prefixes)
+    report["business_metrics"] = business_report
+    report["prediction_completeness"] = {
+        prefix: prediction_completeness(samples, prefix) for prefix in prefixes
+    }
+    incomplete_models = [
+        prefix
+        for prefix, info in report["prediction_completeness"].items()
+        if not info.get("is_complete")
+    ]
+    if incomplete_models:
+        report["publish_status"] = "incomplete"
+        report["publish_reasons"] = [
+            f"incomplete predictions for models: {incomplete_models}"
+        ]
+
+    baseline = config.params.get("baseline_prefix") or config.params.get("base_prefix")
+    candidate = config.params.get("candidate_prefix")
+    if baseline is not None:
+        baseline = str(baseline).strip() or None
+    if candidate is not None:
+        candidate = str(candidate).strip() or None
+    if not baseline or not candidate or baseline not in prefixes or candidate not in prefixes:
+        if "publish_status" not in report:
+            report["publish_status"] = "diagnostic_only"
+        return
+
+    gate_raw = raw.get("gate") or {}
+    gate_overrides = config.params.get("business_gate") or {}
+    if isinstance(gate_overrides, dict):
+        gate_raw = {**gate_raw, **gate_overrides}
+    gate_cfg = load_gate_config(gate_raw)
+    biz_cfg = load_business_metric_config(raw.get("business") or raw)
+    gate_result = evaluate_release_gate(
+        samples,
+        baseline=baseline,
+        candidate=candidate,
+        gate=gate_cfg,
+        business=biz_cfg,
+        judge=runner.judge,
+    )
+    report["business_gate"] = gate_result.to_dict()
+    report["publish_status"] = gate_result.status
+    report["publish_reasons"] = list(gate_result.reasons)
+    # Report the two fixed evaluation populations independently; a pooled
+    # improvement must not hide a regression in either population.
+    by_role = {}
+    for role in ("eval_core", "eval_random"):
+        subset = [s for s in samples if (s.labels.get("eval_role") or s.labels.get("split")
+                  or s.labels.get("dataset_role")) == role]
+        if subset:
+            by_role[role] = evaluate_release_gate(subset, baseline=baseline, candidate=candidate,
+                gate=gate_cfg, business=biz_cfg, judge=runner.judge).to_dict()
+    if by_role:
+        report["business_gate_by_eval_role"] = by_role
+        statuses = [v["status"] for v in by_role.values()]
+        for status in ("incomplete", "fail", "needs_review"):
+            if status in statuses:
+                report["publish_status"] = status
+                report["publish_reasons"].append(f"per-eval-role gate: {status}")
+                break
+    if incomplete_models:
+        report["publish_status"] = "incomplete"
+        report["publish_reasons"].append(f"incomplete predictions for models: {incomplete_models}")
+
+
 @register_operator
 class EvaluationReportOperator(ManifestOperator):
     """Aggregate multi-model sample metrics vs gold; optional pairwise regression gates."""
 
     name = "evaluation_report"
-    version = "1.5.0"
+    version = "1.6.0"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
+        if config.params.get("require_formal_v3"):
+            from audio_engine.core.annotation_v3.gold import has_formal_gold_evidence
+            if any(not has_formal_gold_evidence(s, require_dual=True) for s in samples):
+                raise ValueError("formal v3 evaluation requires complete independently reviewed gold")
+            if any((s.labels.get("split") or s.labels.get("dataset_role")) not in {"eval_core", "eval_random"} for s in samples):
+                raise ValueError("formal v3 evaluation requires a frozen eval split")
+            from audio_engine.core.catalog import ArtifactCatalog
+            from audio_engine.core.manifest import Manifest
+            release_ids = {s.labels.get("release_id") for s in samples}
+            if len(release_ids) != 1 or None in release_ids or "" in release_ids:
+                raise ValueError("formal v3 evaluation requires exactly one release_id")
+            catalog = ArtifactCatalog(config.params.get("catalog_dir") or "data/catalog")
+            release = catalog.get_release(next(iter(release_ids)))
+            roles = {s.labels.get("split") or s.labels.get("dataset_role") for s in samples}
+            expected = {}
+            for role in roles:
+                record = catalog.get(release.outputs[role], verify=True)
+                expected.update({s.id: s for s in Manifest.load(record.uri)})
+            if len({s.id for s in samples}) != len(samples) or {s.id for s in samples} != set(expected):
+                raise ValueError("evaluation IDs differ from frozen release membership")
+            for sample in samples:
+                frozen = expected[sample.id]
+                if sample.sha256 != frozen.sha256 or sample.labels.get("gold_text") != frozen.labels.get("gold_text"):
+                    raise ValueError(f"evaluation audio/gold differs from frozen release: {sample.id}")
         prefixes = _resolve_prefixes(config, samples)
         if not prefixes:
             raise ValueError("evaluation_report requires at least one model prefix")
@@ -620,6 +737,8 @@ class EvaluationReportOperator(ManifestOperator):
             report["gates"] = []
             report["passed"] = True
 
+        _attach_business_metrics(report, samples, prefixes, config)
+
         auth_dir = _resolve_authoritative_report_dir(config)
         auth_dir.mkdir(parents=True, exist_ok=True)
         run_reports = (
@@ -681,4 +800,12 @@ class EvaluationReportOperator(ManifestOperator):
         if not report["passed"] and bool(config.params.get("fail_on_regression", True)):
             failed = [item["name"] for item in report["gates"] if not item["passed"]]
             raise ValueError(f"evaluation regression gate failed: {failed}; report={report_path}")
+        fail_on_business = bool(config.params.get("fail_on_business_gate", False))
+        if fail_on_business:
+            status = str(report.get("publish_status") or "")
+            if status != "pass":
+                raise ValueError(
+                    f"business publish gate status={status}; "
+                    f"reasons={report.get('publish_reasons')}; report={report_path}"
+                )
         return list(samples)
