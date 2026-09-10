@@ -12,13 +12,14 @@ from audio_engine.core.selection_v3.types import (
     DEFAULT_EXPECTED_RUNS_PER_FAMILY,
     DEFAULT_TARGET_FAMILY,
     DEFAULT_TEACHER_FAMILIES,
+    MIN_MODEL_FAMILIES,
     RULE_VERSION,
 )
 
 
 @dataclass
 class RunIdentity:
-    """Explicit identity of one ASR result artifact (one of eight routes)."""
+    """Explicit identity of one ASR result artifact (one of 2N configured routes)."""
 
     run_id: str
     family: str
@@ -145,8 +146,21 @@ class SelectionV3Config:
                 ordered.append(family)
         return ordered
 
+    @property
+    def configured_family_count(self) -> int:
+        return len(self.model_families)
+
+    @property
+    def expected_total_runs(self) -> int:
+        return self.configured_family_count * self.expected_runs_per_family
+
     def validate_family_config(self) -> None:
-        """Fail-fast on duplicate family membership or wrong run counts."""
+        """Fail-fast on duplicate family membership or wrong run counts.
+
+        Contract (015): N ≥ 3 families, exactly ``expected_runs_per_family`` (2)
+        runs each, teachers = non-target configured families (count N−1).
+        Four families / eight routes remain a valid recommended shape, not a floor.
+        """
         if not self.model_families:
             raise ValueError("model_families must be configured explicitly")
         seen_keys: dict[str, str] = {}
@@ -167,22 +181,47 @@ class SelectionV3Config:
                         f"{seen_keys[key]!r} and {family!r}"
                     )
                 seen_keys[key] = family
-        if len(self.model_families) != 4 or self.expected_runs_per_family != 2:
-            raise ValueError("consensus_v3 requires four families with two runs each")
-        if len(self.teacher_families) != 3 or len(set(self.teacher_families)) != 3:
-            raise ValueError("consensus_v3 requires three distinct teacher families")
+        n = self.configured_family_count
+        if n < MIN_MODEL_FAMILIES:
+            raise ValueError(
+                f"consensus_v3 requires at least {MIN_MODEL_FAMILIES} model families, "
+                f"got {n}"
+            )
+        if self.expected_runs_per_family != 2:
+            raise ValueError(
+                "consensus_v3 requires expected_runs_per_family=2 "
+                f"(got {self.expected_runs_per_family})"
+            )
+        teachers = list(self.teacher_families)
+        if len(teachers) != n - 1 or len(set(teachers)) != n - 1:
+            raise ValueError(
+                f"consensus_v3 requires exactly {n - 1} distinct teacher families "
+                f"(N-1 for configured_family_count={n}), got {teachers}"
+            )
         if self.target_family not in self.model_families:
             raise ValueError(
                 f"target_family {self.target_family!r} not in model_families"
             )
-        for teacher in self.teacher_families:
-            if teacher not in self.model_families:
-                raise ValueError(f"teacher_family {teacher!r} not in model_families")
+        expected_teachers = sorted(
+            f for f in self.model_families if f != self.target_family
+        )
+        if sorted(teachers) != expected_teachers:
+            raise ValueError(
+                "teacher_families must be exactly the non-target configured families; "
+                f"expected {expected_teachers}, got {sorted(teachers)}"
+            )
+        for teacher in teachers:
             if teacher == self.target_family:
                 raise ValueError("target_family must not be listed as a teacher_family")
         if self.runs:
-            if len(self.runs) != 8 or {r.transcript_key for r in self.runs} != set(seen_keys):
-                raise ValueError("runs must cover exactly the eight configured transcript keys")
+            expected_n = self.expected_total_runs
+            if len(self.runs) != expected_n or {r.transcript_key for r in self.runs} != set(
+                seen_keys
+            ):
+                raise ValueError(
+                    f"runs must cover exactly the {expected_n} configured transcript keys "
+                    f"(2N for N={n})"
+                )
             if any(seen_keys.get(r.transcript_key) != r.family for r in self.runs):
                 raise ValueError("run family differs from model_families")
             if any(not all((r.model_checkpoint_digest, r.decode_config_digest, r.prompt_digest,
@@ -225,12 +264,17 @@ class SelectionV3Config:
             for k, v in families_raw.items()
         }
         teachers = params.get("teacher_families")
+        target = str(params.get("target_family") or DEFAULT_TARGET_FAMILY)
         if teachers is None:
+            # Prefer known default order, then any remaining non-target families.
             teachers = [
                 f
                 for f in DEFAULT_TEACHER_FAMILIES
-                if f in families and f != params.get("target_family")
+                if f in families and f != target
             ]
+            for family in sorted(families):
+                if family != target and family not in teachers:
+                    teachers.append(family)
         runs_raw = params.get("runs") or []
         runs = [
             RunIdentity.from_dict(item) if isinstance(item, dict) else item
@@ -302,7 +346,7 @@ class SelectionV3Config:
             engine=str(params.get("engine") or "consensus_v3"),
             rule_version=str(params.get("rule_version") or RULE_VERSION),
             policy_version=str(params.get("policy_version") or "selection_zh_asr_v3_0"),
-            target_family=str(params.get("target_family") or DEFAULT_TARGET_FAMILY),
+            target_family=target,
             model_families=families,
             teacher_families=[str(x) for x in teachers],
             expected_runs_per_family=int(

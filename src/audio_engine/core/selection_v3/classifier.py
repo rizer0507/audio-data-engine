@@ -300,6 +300,7 @@ def classify_sample(
             family_status=family_status,
             support_family_count=support_family_count,
             support_ratio_of_4=support_ratio,
+            configured_family_count=len(config.model_families),
             teacher_support_count=teacher_support,
             min_similarity=min_sim,
             consensus_ambiguous=ambiguous,
@@ -328,7 +329,7 @@ def classify_sample(
         return _finish(
             type_=TYPE_INFERENCE_INCOMPLETE,
             decision=DECISION_RETRY,
-            reason="eight_route_incomplete",
+            reason="configured_runs_incomplete",
             review_reason="retry_missing_or_failed_runs",
         )
 
@@ -359,7 +360,7 @@ def classify_sample(
         return _finish(
             type_=TYPE_ALL_EMPTY_UNVERIFIED,
             decision=DECISION_MANUAL_REVIEW,
-            reason="all_eight_success_empty",
+            reason="all_configured_runs_success_empty",
             review_reason="forbid_auto_empty",
         )
 
@@ -484,7 +485,7 @@ def classify_sample(
         return _finish(
             type_=TYPE_PSEUDO_HIGH,
             decision=DECISION_AUDIT_PENDING,
-            reason="four_family_strict_consensus",
+            reason="configured_family_strict_consensus",
             candidate_text=primary.candidate_text,
             label_source=LABEL_SOURCE_MODEL,
             label_tier=LABEL_TIER_PSEUDO_HIGH,

@@ -1,15 +1,12 @@
-# selection_v3.0 / consensus_v3 — 多家族双跑分拣（012-B / 015：N≥3）
-# 四族八路为推荐示例；三族见 zh_asr_v3_three_family.yaml。不得覆盖旧分拣产物。
-# 校准未通过前禁止自动发布伪标签训练集。
+# selection_v3.0 / consensus_v3 — 三族双跑分拣示例（015）
+# 与 zh_asr_v3.yaml（四族推荐）并行；N≥3 即可 classify_v3，不要求第四族 Kimi。
+# 实测覆盖：N=3 / N=4；更多族须复核 teacher 阈值与 pseudo_medium_min_stable_families。
 policy_version: selection_zh_asr_v3_0
 engine: consensus_v3
 rule_version: selection_v3.0
 target_family: qwen
 
 model_families:
-  kimi:
-    - kimi_1
-    - kimi_2
   glm:
     - glm_1
     - glm_2
@@ -21,7 +18,6 @@ model_families:
     - qwen_2
 
 teacher_families:
-  - kimi
   - glm
   - sensevoice
 
@@ -32,13 +28,13 @@ similarity:
   teacher_consensus_threshold: 0.98
   pseudo_high_min_similarity: 0.98
   pseudo_medium_min_similarity: 0.95
+  # 三族时「≥3 stable」即配置内全族；四族时仍为至少三族
   pseudo_medium_min_stable_families: 3
 
 short_utterance:
   max_audio_sec: 2.0
   max_text_chars: 6
 
-# 质量侧车消费：未校准前 risk/band 视为 unknown（分拣可送审，不可自动伪标签）
 quality:
   calibrated: false
 

@@ -1,6 +1,6 @@
-"""selection_v3.0 — contract, quality consumption, four-family classification.
+"""selection_v3.0 — contract, quality consumption, multi-family (≥3) classification.
 
-Stage A: family config, eight-route status, input alignment.
+Stage A: family config, 2N-route status, input alignment.
 Stage B: DNSMOS consumption, family evidence, semantic risk, consensus, classifier.
 """
 

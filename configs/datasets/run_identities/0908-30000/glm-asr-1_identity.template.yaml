@@ -1,0 +1,10 @@
+run_id: glm-asr-1
+family: glm
+transcript_key: glm-asr-1
+execution_id: "TODO_UNIQUE_EXECUTION_ID"
+model_checkpoint_digest: "TODO"
+decode_config_digest: "TODO"
+prompt_digest: "TODO"
+input_audio_digest: ""
+input_audio_key: resampled_16k
+created_at: "TODO_ISO8601"

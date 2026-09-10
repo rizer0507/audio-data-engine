@@ -71,14 +71,18 @@ audio-data stats manifest_<内容摘要>_<记录摘要>
 
 ### 数据集生产、训练与评测闭环
 
-多模型指标完成后，使用有版本的规则分拣，并只导出需要人工处理的 review queue：
+多模型识别与 DNSMOS 侧车完成后，使用 **v3** 规则分拣（默认入口）：
 
 ```bash
-audio-data pipeline run pipelines/classify_dataset.yaml
-audio-data review export classified_source_A --output review.xlsx --revision review_v1
-audio-data review import classified_source_A --input review.xlsx \
-  --output datasets/stage1/derived/reviewed_source_A.parquet --revision review_v1
+audio-data pipeline run pipelines/classify_dataset_v3.yaml \
+  --source-name <BATCH> \
+  --config configs/selection/zh_asr_v3.yaml
+# 三族：configs/selection/zh_asr_v3_three_family.yaml
+# 0908 存量别名：configs/selection/zh_asr_v3_0908_30000.yaml
+audio-data review export classified_v3_<BATCH> --output review.xlsx --revision review_v1 --protocol v3
 ```
+
+（legacy）`pipelines/classify_dataset.yaml`（v1）仅复现历史批次，不作新批次默认。
 
 审核完成后按说话人或会话分组拆分并冻结不可变 release。命令会校验每条数据都有 accepted Gold，
 输出并注册 train/dev/test Manifest：

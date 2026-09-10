@@ -1,31 +1,36 @@
-# selection_v3.0 / consensus_v3 — 多家族双跑分拣（012-B / 015：N≥3）
-# 四族八路为推荐示例；三族见 zh_asr_v3_three_family.yaml。不得覆盖旧分拣产物。
-# 校准未通过前禁止自动发布伪标签训练集。
+# selection_v3.0 — 0908-30000 存量三族方案 B（014 §5.2）
+# 保留现网别名 qwen3-asr-* / glm-asr-* / sensevoice-asr-*，显式归族；禁止靠文件名猜测。
+# 不要求第四族 Kimi（015）。新批次请优先用契约别名 qwen_1…（方案 A）。
 policy_version: selection_zh_asr_v3_0
 engine: consensus_v3
 rule_version: selection_v3.0
 target_family: qwen
 
 model_families:
-  kimi:
-    - kimi_1
-    - kimi_2
   glm:
-    - glm_1
-    - glm_2
+    - glm-asr-1
+    - glm-asr-2
   sensevoice:
-    - sensevoice_1
-    - sensevoice_2
+    - sensevoice-asr-1
+    - sensevoice-asr-2
   qwen:
-    - qwen_1
-    - qwen_2
+    - qwen3-asr-1
+    - qwen3-asr-2
 
 teacher_families:
-  - kimi
   - glm
   - sensevoice
 
 expected_runs_per_family: 2
+
+# 显式别名→族（与 model_families 一致；防止仅靠 stem 猜测）
+run_aliases:
+  glm-asr-1: glm
+  glm-asr-2: glm
+  sensevoice-asr-1: sensevoice
+  sensevoice-asr-2: sensevoice
+  qwen3-asr-1: qwen
+  qwen3-asr-2: qwen
 
 similarity:
   family_threshold: 0.98
@@ -38,7 +43,6 @@ short_utterance:
   max_audio_sec: 2.0
   max_text_chars: 6
 
-# 质量侧车消费：未校准前 risk/band 视为 unknown（分拣可送审，不可自动伪标签）
 quality:
   calibrated: false
 

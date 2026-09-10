@@ -1,88 +1,106 @@
 ﻿工序一：数据清洗落库打标（local · 一键执行）
 ================================================================================
-# 对齐：docs/01-项目架构/工序总览.md · 工序一（①清洗 + ②ASR/聚拢/字准 + ③分拣）
-# 详解：手册/local/00-总详细手册.txt
-# 前置：另开终端已起好 Qwen vLLM（例：port 5559 / 5560）
-# 改批次只改 BATCH / SOURCE_DIR
-# 外源金标（不生成共识金标、产物直接喂工序三）：
-#   docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
-#   清洗+ASR 后：
-#   audio-data pipeline run pipelines/classify_external_gold.yaml \
-#     --source-name "$BATCH" --aggregate-base qwen \
-#     --external-gold path/to/金标.xlsx --label-col label_text_raw --force
+# 对齐：docs/01-项目架构/工序总览.md · 工序一
+# 详解：手册/local/00-总详细手册.txt（正文若仍写 v1 classify，以本文件与 014 为准）
+# 分拣默认：v3（014）；家族数 N≥3×双跑（015），三族无需补 Kimi
+# 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.0.md
+# 前置：另开终端已起好所需 ASR 服务（Qwen/GLM/SenseVoice 等）
+# 改批次只改 BATCH / SOURCE_DIR / 配置中的 runs 登记
+# 外源金标路径仍可用 classify_external_gold（见 006），与下方 v3 共识分拣互斥选型
 
 cd D:/Work/audio-data-engine
-# source .venv/bin/activate   # 或 .\.venv\Scripts\Activate.ps1
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
+# .\.venv\Scripts\Activate.ps1
+$env:OMP_NUM_THREADS = "1"
+$env:MKL_NUM_THREADS = "1"
 
-export BATCH=local_test
-export SOURCE_DIR=D:/Work/asr数据/test_wav
-export QWEN_ASR_API_KEY=dummy
-export SENSEVOICE_MODEL_PATH=D:/Work/models/SenseVoiceSmall
+$env:BATCH = "local_test"
+$env:SOURCE_DIR = "D:/Work/asr数据/test_wav"
+$env:QWEN_ASR_API_KEY = "dummy"
+$env:SENSEVOICE_MODEL_PATH = "D:/Work/models/SenseVoiceSmall"
+# 三族配置（推荐试点）；四族改用 configs/datasets|selection/zh_asr_v3.yaml
+$env:V3_DATASET_CFG = "configs/datasets/zh_asr_v3_three_family.yaml"
+$env:V3_SELECTION_CFG = "configs/selection/zh_asr_v3_three_family.yaml"
 
 # 1) 清洗落库
-audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
-  --source-name "$BATCH" \
-  --source-dir "$SOURCE_DIR"
+audio-data pipeline run pipelines/data_cleaning_source_A.yaml `
+  --source-name $env:BATCH `
+  --source-dir $env:SOURCE_DIR
 
-# 2) 同源多 ASR（别名可按需增减）
-export QWEN_ASR_API_BASE=http://127.0.0.1:5559
-audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run qwen1
+# 2) 同源多 ASR（契约别名：每族 _1/_2；≥3 族）
+$env:QWEN_ASR_API_BASE = "http://127.0.0.1:5559"
+audio-data pipeline run pipelines/qwen_asr_batch.yaml `
+  --source-name $env:BATCH --asr-run qwen_1
 
-export QWEN_ASR_API_BASE=http://127.0.0.1:5560
-audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run qwen2
+$env:QWEN_ASR_API_BASE = "http://127.0.0.1:5560"
+audio-data pipeline run pipelines/qwen_asr_batch.yaml `
+  --source-name $env:BATCH --asr-run qwen_2
 
-audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run sensevoice1
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml `
+  --source-name $env:BATCH --asr-run sensevoice_1
 
-audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run sensevoice2
+audio-data pipeline run pipelines/sensevoice_asr_batch.yaml `
+  --source-name $env:BATCH --asr-run sensevoice_2
 
-# 可选：
-# audio-data pipeline run pipelines/doubao_asr_batch.yaml \
-#   --source-name "$BATCH" --asr-run doubao1
-# audio-data pipeline run pipelines/kimi_asr_batch.yaml \
-#   --source-name "$BATCH" --asr-run kimi
-# # 单卡请把 kimi_asr_batch.yaml 的 shards/parallel_shards 改成 1
-# audio-data pipeline run pipelines/glm_asr_batch.yaml \
-#   --source-name "$BATCH" --asr-run glm
-# # 默认 1 shard；两副本同权重再改成 2 shard，GLM_ASR_API_BASE 写两个端口
+# GLM 双跑（三族必备之一；端口按本机）
+# $env:GLM_ASR_API_BASE = "http://127.0.0.1:5570"
+# audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name $env:BATCH --asr-run glm_1
+# audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name $env:BATCH --asr-run glm_2
 
-# 3) 聚合 + 字准 + 分拣 + 汇总
-audio-data pipeline run pipelines/multi_asr_aggregate.yaml \
-  --source-name "$BATCH" \
-  --aggregate-base qwen3-asr \
-  --join-manifest qwen3-asr-sft-e10 \
-  --join-manifest qwen3-asr-sft-e100 \
-  --force
-# 有 doubao1 / glm 时再加：--join-manifest doubao1 --join-manifest glm
+# 可选第四族 Kimi（非进 v3 门票）：
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name $env:BATCH --asr-run kimi_1
+# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name $env:BATCH --asr-run kimi_2
 
-audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
-  --source-name "$BATCH" \
-  --agreement-base qwen3-asr \
+# 2b) 每路 ASR 登记 catalog（路径/identity 按实填；详见 012-A）
+# audio-data artifact register-asr-run "datasets/stage1/asr/qwen_1_asr_$env:BATCH.parquet" `
+#   --identity path/to/qwen_1_identity.yaml `
+#   --audio-base "datasets/stage1/cleaned/cleaned_$env:BATCH.parquet" `
+#   --output-identity "path/to/registered_qwen_1.yaml"
+# …各族双跑共 2N 次；再把 runs: 写入 $env:V3_DATASET_CFG
+
+# 3) v3：prepare → attach → DNSMOS 侧车 → classify
+audio-data pipeline run pipelines/prepare_dataset_v3.yaml `
+  --source-name $env:BATCH `
+  --config $env:V3_DATASET_CFG `
   --force
 
-audio-data pipeline run pipelines/classify_dataset.yaml \
-  --input-manifest "datasets/stage1/derived/multi_asr_metrics_${BATCH}.parquet" \
-  --output-manifest "datasets/stage1/derived/classified_${BATCH}.parquet" \
+audio-data pipeline run pipelines/attach_asr_v3.yaml `
+  --source-name $env:BATCH `
+  --config $env:V3_DATASET_CFG `
   --force
 
-audio-data review export-summary "datasets/stage1/derived/classified_${BATCH}.parquet" \
-  --output "data/exports/summary_${BATCH}.xlsx" \
+# 需要可读 resampled_16k + third_party/dnsmos/sig_bak_ovr.onnx + pip install '.[dnsmos]'
+audio-data pipeline run pipelines/audio_quality_sidecar.yaml `
+  --source-name $env:BATCH `
+  --config configs/quality/dnsmos_p835.yaml `
+  --force
+
+audio-data pipeline run pipelines/classify_dataset_v3.yaml `
+  --source-name $env:BATCH `
+  --config $env:V3_SELECTION_CFG `
+  --force
+
+audio-data review export-summary "datasets/stage1/derived/classified_v3_$env:BATCH.parquet" `
+  --output "data/exports/summary_v3_$env:BATCH.xlsx" `
   --max-rows 20000
 
-# 4) 可选：导出金标 / 人审 / Release（详解见总手册）
-# audio-data review export-gold "datasets/stage1/derived/classified_${BATCH}.parquet" \
-#   --output "data/exports/auto_gold_${BATCH}.xlsx" \
-#   --output-manifest "datasets/stage1/derived/gold_${BATCH}.parquet"
-# audio-data release build "datasets/stage1/derived/gold_${BATCH}.parquet" \
-#   --id "ds_${BATCH}_v1_auto_gold" \
-#   --policy-version selection_zh_asr_v1_2 \
-#   --normalization-version zh_asr_v1 \
-#   --gold-revision "auto_${BATCH}" \
-#   --group-key conversation_id \
-#   --stratify-key classification_bucket \
-#   --split-seed 42 --train-ratio 0.8 --dev-ratio 0.1 --test-ratio 0.1
+# 4) 可选：v3 人审 / build（见总手册与 012-C/D）
+# audio-data review export ... --protocol v3
+# audio-data pipeline run pipelines/build_dataset_v3.yaml --source-name $env:BATCH --config $env:V3_DATASET_CFG
+
+# ---------------------------------------------------------------------------
+# 0908-30000 存量试点（方案 B：保留 qwen3-asr-* / glm-asr-* / sensevoice-asr-*）
+# ---------------------------------------------------------------------------
+# $env:BATCH = "0908-30000"
+# $env:V3_DATASET_CFG = "configs/datasets/zh_asr_v3_0908_30000.yaml"
+# $env:V3_SELECTION_CFG = "configs/selection/zh_asr_v3_0908_30000.yaml"
+# # 无 cleaned 时重建底表（音频路径可能仍在 /data2，侧车须在可读机跑）
+# python scripts/rebuild_cleaned_from_asr.py `
+#   --asr "datasets/stage1/asr/qwen3-asr-1_asr_$env:BATCH.parquet" `
+#   --output "datasets/stage1/cleaned/cleaned_$env:BATCH.parquet"
+# # 填 configs/datasets/run_identities/0908-30000/*_identity.yaml 后 register ×6
+# # 再执行上面 §3 prepare → attach → sidecar → classify（配置换成 0908 两份 yaml）
+
+# ---------------------------------------------------------------------------
+# legacy 复现 only（勿作新批次正式分拣）：aggregate → metrics → classify_dataset(v1)
+# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name $env:BATCH ...
+# audio-data pipeline run pipelines/classify_dataset.yaml ...

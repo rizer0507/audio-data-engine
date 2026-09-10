@@ -1,5 +1,6 @@
-# 工序③：在多 ASR Manifest 上执行 selection_v1.1 共识分拣（type/decision/label）。
-# 配置：configs/selection/zh_asr_v1.yaml（engine: consensus_v1）
+# LEGACY / 复现 only（014）：勿作新批次正式分拣。
+# 工序一③默认入口：pipelines/classify_dataset_v3.yaml（selection_v3 / N≥3）。
+# 本 YAML：selection_v1.1 共识分拣（type/decision/label）；配置 configs/selection/zh_asr_v1.yaml。
 name: classify_dataset
 input:
   manifest: datasets/stage1/derived/multi_asr_metrics_source_A.parquet

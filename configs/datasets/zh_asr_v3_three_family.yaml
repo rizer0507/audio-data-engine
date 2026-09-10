@@ -1,8 +1,7 @@
-# dataset_policy_v3.0 — 契约 / 隔离（012-A）+ 配额抽样与 Release（012-D）
-# 多家族身份（N≥3，每族双跑；四族八路为推荐配置之一，非最低门票，见 015）、
-# 泄漏分组、eval/dev/calibration 预留；人工校准消费、双评测集、train 四池配额、跨集防泄漏、原子 Release。
-# 三族合法示例：configs/datasets/zh_asr_v3_three_family.yaml
-# 分类规则见 configs/selection/zh_asr_v3.yaml；审核见 configs/annotation/zh_asr_v3.yaml。
+# dataset_policy_v3.0 — 三族双跑合法示例（015）
+# 与 zh_asr_v3.yaml（四族推荐配置）并行；进入 v3 最低门票为 N≥3，不要求补 Kimi。
+# 分类规则见 configs/selection/zh_asr_v3_three_family.yaml。
+# 实测覆盖：N=3 / N=4；更多族须显式声明 teacher_families，并复核阈值。
 
 dataset_policy_version: dataset_policy_v3.0
 engine: consensus_v3
@@ -10,9 +9,6 @@ rule_version: selection_v3.0
 target_family: qwen
 
 model_families:
-  kimi:
-    - kimi_1
-    - kimi_2
   glm:
     - glm_1
     - glm_2
@@ -24,18 +20,17 @@ model_families:
     - qwen_2
 
 teacher_families:
-  - kimi
   - glm
   - sensevoice
 
 expected_runs_per_family: 2
 
-# prepare 可暂缺；attach_asr_v3 / 伪标签放行前必须填写全部已声明跑次真实推理身份（四族=8，三族=6）。
+# prepare 可暂缺；attach_asr_v3 / 伪标签放行前必须填写全部 6 条真实推理身份。
 # artifact_id 必须来自 catalog；metadata.run_identity 与下述声明一致。
 # runs:
-#   - run_id: kimi_1
-#     family: kimi
-#     transcript_key: kimi_1
+#   - run_id: glm_1
+#     family: glm
+#     transcript_key: glm_1
 #     artifact_id: manifest_...
 #     execution_id: 实际独立执行编号
 #     model_checkpoint_digest: ""
@@ -47,7 +42,6 @@ expected_runs_per_family: 2
 
 grouping:
   call_id_fields: [call_id, conversation_id]
-  # 仅当来源标记 speaker_id_reliable=true 时并入同组
   speaker_id_fields: [customer_id, speaker_id]
   require_reliable_speaker: true
   source_audio_id_fields: [source_audio_id]
@@ -70,20 +64,16 @@ reservation:
   calibration_target: 3000
   isolate_missing_group_meta: true
   policy_version: dataset_policy_v3.0
-  # 若历史模型结果已被查看，填写设计形成时间与已用信息（不得宣称未观察独立测试）
   design_formed_at: ""
   prior_information_used: []
 
-# ---- 012-D：构建与 Release（先锁定用途，再按集合标签门禁冻结）----
 build:
-  # 正式构建时必填；也可由算子 params.release_id 覆盖
   release_id: ""
   train_size: 10000
   sampling_seed: 42
   normalization_version: zh_v1
   gold_revision: annotation_v3.0
   group_key: leakage_group_id
-  # 训练适配器未验收空转写目标前禁止把 non_speech 写入 train
   allow_non_speech_train: false
   max_per_call: 3
   exact_duplicate_fields:

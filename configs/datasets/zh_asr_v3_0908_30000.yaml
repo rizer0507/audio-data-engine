@@ -1,8 +1,8 @@
-# dataset_policy_v3.0 — 契约 / 隔离（012-A）+ 配额抽样与 Release（012-D）
-# 多家族身份（N≥3，每族双跑；四族八路为推荐配置之一，非最低门票，见 015）、
-# 泄漏分组、eval/dev/calibration 预留；人工校准消费、双评测集、train 四池配额、跨集防泄漏、原子 Release。
-# 三族合法示例：configs/datasets/zh_asr_v3_three_family.yaml
-# 分类规则见 configs/selection/zh_asr_v3.yaml；审核见 configs/annotation/zh_asr_v3.yaml。
+# dataset_policy_v3.0 — 0908-30000 存量三族方案 B（014 §5.2 / 015）
+# ASR 文件：datasets/stage1/asr/{alias}_asr_0908-30000.parquet
+#   glm-asr-1/2 · qwen3-asr-1/2 · sensevoice-asr-1/2
+# 使用前：准备 cleaned_0908-30000 → 填 identity → register-asr-run ×6 → 写入下方 runs:
+# 不要求补 Kimi。
 
 dataset_policy_version: dataset_policy_v3.0
 engine: consensus_v3
@@ -10,34 +10,39 @@ rule_version: selection_v3.0
 target_family: qwen
 
 model_families:
-  kimi:
-    - kimi_1
-    - kimi_2
   glm:
-    - glm_1
-    - glm_2
+    - glm-asr-1
+    - glm-asr-2
   sensevoice:
-    - sensevoice_1
-    - sensevoice_2
+    - sensevoice-asr-1
+    - sensevoice-asr-2
   qwen:
-    - qwen_1
-    - qwen_2
+    - qwen3-asr-1
+    - qwen3-asr-2
 
 teacher_families:
-  - kimi
   - glm
   - sensevoice
 
 expected_runs_per_family: 2
 
-# prepare 可暂缺；attach_asr_v3 / 伪标签放行前必须填写全部已声明跑次真实推理身份（四族=8，三族=6）。
-# artifact_id 必须来自 catalog；metadata.run_identity 与下述声明一致。
+run_aliases:
+  glm-asr-1: glm
+  glm-asr-2: glm
+  sensevoice-asr-1: sensevoice
+  sensevoice-asr-2: sensevoice
+  qwen3-asr-1: qwen
+  qwen3-asr-2: qwen
+
+# prepare 可暂缺 runs；attach_asr_v3 前必须 6 条齐全且 artifact_id 来自 catalog。
+# 推荐流程：configs/datasets/run_identities/0908-30000/*.yaml → register-asr-run
+#          → 把输出 identity 合并进下方 runs:
 # runs:
-#   - run_id: kimi_1
-#     family: kimi
-#     transcript_key: kimi_1
+#   - run_id: glm-asr-1
+#     family: glm
+#     transcript_key: glm-asr-1
 #     artifact_id: manifest_...
-#     execution_id: 实际独立执行编号
+#     execution_id: ""
 #     model_checkpoint_digest: ""
 #     decode_config_digest: ""
 #     prompt_digest: ""
@@ -47,7 +52,6 @@ expected_runs_per_family: 2
 
 grouping:
   call_id_fields: [call_id, conversation_id]
-  # 仅当来源标记 speaker_id_reliable=true 时并入同组
   speaker_id_fields: [customer_id, speaker_id]
   require_reliable_speaker: true
   source_audio_id_fields: [source_audio_id]
@@ -70,20 +74,17 @@ reservation:
   calibration_target: 3000
   isolate_missing_group_meta: true
   policy_version: dataset_policy_v3.0
-  # 若历史模型结果已被查看，填写设计形成时间与已用信息（不得宣称未观察独立测试）
   design_formed_at: ""
-  prior_information_used: []
+  prior_information_used:
+    - "0908-30000 historical ASR dual-runs already observed before reservation freeze"
 
-# ---- 012-D：构建与 Release（先锁定用途，再按集合标签门禁冻结）----
 build:
-  # 正式构建时必填；也可由算子 params.release_id 覆盖
   release_id: ""
   train_size: 10000
   sampling_seed: 42
   normalization_version: zh_v1
   gold_revision: annotation_v3.0
   group_key: leakage_group_id
-  # 训练适配器未验收空转写目标前禁止把 non_speech 写入 train
   allow_non_speech_train: false
   max_per_call: 3
   exact_duplicate_fields:

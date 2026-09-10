@@ -164,7 +164,7 @@ class ConservationReport:
 
 @dataclass
 class EightRouteAlignmentReport:
-    """Integrity report for eight-route / multi-run join."""
+    """Integrity report for configured multi-run / multi-family join."""
 
     join_key: str = "id+original_audio_sha256"
     base_count: int = 0
@@ -268,7 +268,7 @@ def evaluate_sample_contract(
     sample: Sample,
     config: SelectionV3Config,
 ) -> SampleContractResult:
-    """Classify one sample against the eight-route contract."""
+    """Classify one sample against the configured multi-run contract."""
     ohash = original_audio_sha256(sample)
     statuses: dict[str, str] = {}
     missing: list[str] = []

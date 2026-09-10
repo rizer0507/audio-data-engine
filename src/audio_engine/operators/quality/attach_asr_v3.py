@@ -1,4 +1,4 @@
-"""Attach eight registered executions to the already frozen raw-audio reservation."""
+"""Attach registered ASR executions (2N routes for N≥3 families) to the frozen reservation."""
 from dataclasses import asdict
 from pathlib import Path
 
@@ -15,12 +15,16 @@ from audio_engine.operators.quality.aggregate_manifests import AggregateManifest
 class AttachAsrV3Operator(ManifestOperator):
     name = "attach_asr_v3"
     category = "quality"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def run(self, samples, config):
         cfg = SelectionV3Config.from_yaml(Path(config.params["config_path"]))
-        if len(cfg.runs) != 8:
-            raise ValueError("attach_asr_v3 requires eight registered run identities")
+        expected = cfg.expected_total_runs
+        if len(cfg.runs) != expected:
+            raise ValueError(
+                f"attach_asr_v3 requires {expected} registered run identities "
+                f"(2N for N={cfg.configured_family_count} families), got {len(cfg.runs)}"
+            )
         if not samples or any(not s.labels.get("reservation_digest") for s in samples):
             raise ValueError("freeze raw reservation before attaching ASR")
         snapshot_digest = digest_payload({s.id: original_audio_sha256(s) for s in sorted(samples, key=lambda s: s.id)})
@@ -52,8 +56,18 @@ class AttachAsrV3Operator(ManifestOperator):
             sample.labels["run_identities_digest"] = verified_digest
             sample.labels["run_identities_verified"] = True
             sample.labels["asr_snapshot_digest"] = snapshot_digest
+            sample.labels["configured_family_count"] = cfg.configured_family_count
         if config.run_dir:
             from audio_engine.core.artifacts import atomic_write_json
+            # Legacy filename kept for existing tooling; also write route_contract.json.
             atomic_write_json(Path(config.run_dir) / "eight_route_contract.json", alignment.to_dict())
             atomic_write_json(Path(config.run_dir) / "run_identities.json", [asdict(r) for r in cfg.runs])
+            atomic_write_json(
+                Path(config.run_dir) / "route_contract.json",
+                {
+                    **alignment.to_dict(),
+                    "configured_family_count": cfg.configured_family_count,
+                    "expected_total_runs": expected,
+                },
+            )
         return updated

@@ -31,12 +31,12 @@ class AggregateManifestsOperator(ManifestOperator):
         present; do not require pad-file sha256 to equal original.
       - ``sha256``: legacy — compare ``sample.sha256`` when present on both sides.
 
-    Optional ``selection_config_path`` / ``model_families`` enables an eight-route
-    integrity section in the alignment report (012-A).
+    Optional ``selection_config_path`` / ``model_families`` enables a configured-route
+    integrity section in the alignment report (N≥3 families × dual-run; 012-A / 015).
     """
 
     name = "aggregate_manifests"
-    version = "2.2.0"
+    version = "2.2.1"
     category = "quality"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
@@ -170,10 +170,11 @@ class AggregateManifestsOperator(ManifestOperator):
                     self.full_name, self.version, {"model": model, "source_manifest": str(path)}
                 )
 
-        # Eight-route integrity appendix (optional)
+        # Configured-route integrity appendix (optional; key kept as eight_route_integrity)
         eight_route = self._eight_route_integrity(base, config.params)
         if eight_route is not None:
             alignment_report["eight_route_integrity"] = eight_route
+            alignment_report["route_integrity"] = eight_route
 
         write_report(aligned=True)
         return [base[sample.id] for sample in samples]
@@ -221,6 +222,8 @@ class AggregateManifestsOperator(ManifestOperator):
                     present_counts[key] += 1
         return {
             "rule_version": selection.rule_version,
+            "configured_family_count": selection.configured_family_count,
+            "expected_total_runs": selection.expected_total_runs,
             "expected_runs": expected_keys,
             "families": selection.model_families,
             "present_success_counts": present_counts,

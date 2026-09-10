@@ -15,12 +15,18 @@ class ConsensusCluster:
     members: list[RouteView]
     families: list[str]
     support_family_count: int
+    # Compat name: value is support / configured_family_count (N), not hard-coded /4.
     support_ratio_of_4: float
     teacher_support_count: int
     min_similarity: float
     candidate_text: str
     candidate_run_id: str
     ambiguous: bool = False
+    configured_family_count: int = 0
+
+    @property
+    def support_ratio(self) -> float:
+        return self.support_ratio_of_4
 
 
 @dataclass
@@ -129,6 +135,7 @@ def _build_cluster(
         min_similarity=min_sim,
         candidate_text=medoid.raw_text or medoid.comparison_text,
         candidate_run_id=medoid.run_id,
+        configured_family_count=configured_family_count,
     )
 
 
@@ -274,7 +281,10 @@ def eight_route_full_agreement(
     threshold: float,
     short: bool,
 ) -> tuple[bool, float | None]:
-    """All eight success-text routes form one pairwise cluster at threshold."""
+    """All configured success-text routes form one pairwise cluster at threshold.
+
+    Name kept for compatibility; covers 2N routes for whatever families are present.
+    """
     routes: list[RouteView] = []
     for state in families.values():
         for route in state.routes:

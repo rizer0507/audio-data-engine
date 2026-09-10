@@ -1,10 +1,21 @@
-# 012-B：四家族双跑分拣 — 消费八路 + DNSMOS 侧车 + reservation，只输出候选
+# 012-B / 015：多家族双跑分拣（N≥3）— 消费已声明各族双跑 + DNSMOS 侧车 + reservation，只输出候选
 #
+#   # 四族推荐配置
 #   audio-data pipeline run pipelines/classify_dataset_v3.yaml \
 #     --source-name mt3000 \
 #     --config configs/selection/zh_asr_v3.yaml
 #
-# 输入：prepared_v3_*（含契约/预留）或等价八路聚合表
+#   # 三族合法示例（无需 Kimi）
+#   audio-data pipeline run pipelines/classify_dataset_v3.yaml \
+#     --source-name 0908-30000 \
+#     --config configs/selection/zh_asr_v3_three_family.yaml
+#
+#   # 0908-30000 存量别名方案 B
+#   audio-data pipeline run pipelines/classify_dataset_v3.yaml \
+#     --source-name 0908-30000 \
+#     --config configs/selection/zh_asr_v3_0908_30000.yaml
+#
+# 输入：prepared_asr_v3_*（含契约/预留）或等价 2N 路附着表
 # 可选：quality_sidecar_manifest 按 join key 合并 DNSMOS
 # 输出：classified_v3_*（不覆盖 classified_ / classified_v2_）
 

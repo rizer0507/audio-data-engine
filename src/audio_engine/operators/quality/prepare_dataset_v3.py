@@ -52,10 +52,10 @@ def _load_dataset_config(path: str | Path | None, params: dict[str, Any]) -> dic
 
 @register_operator
 class PrepareDatasetV3Operator(ManifestOperator):
-    """Stage-A prepare: eight-route contract, leakage groups, immutable reservation.
+    """Stage-A prepare: N≥3 family contract, leakage groups, immutable reservation.
 
     Params:
-      config_path: configs/datasets/zh_asr_v3.yaml
+      config_path: configs/datasets/zh_asr_v3.yaml or zh_asr_v3_three_family.yaml
       reservation_output: optional explicit path for reservation.json
       report_output: optional path for conservation/grouping report
     """

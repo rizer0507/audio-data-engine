@@ -114,11 +114,96 @@ def test_config_from_yaml_and_reject_duplicate_family_alias():
     cfg = SelectionV3Config.from_yaml(DATASET_CFG)
     assert cfg.engine == "consensus_v3"
     assert len(cfg.all_transcript_keys()) == 8
+    assert cfg.configured_family_count == 4
+    assert cfg.expected_total_runs == 8
     try:
         _cfg(model_families={"kimi": ["kimi_1", "kimi_2"], "glm": ["kimi_1", "glm_2"]})
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "both" in str(exc) or "duplicate" in str(exc).lower() or "assigned" in str(exc)
+
+
+def test_three_family_config_accepted_and_two_family_rejected():
+    three = SelectionV3Config.from_params(
+        {
+            "engine": "consensus_v3",
+            "target_family": "qwen",
+            "model_families": {
+                "glm": ["glm_1", "glm_2"],
+                "sensevoice": ["sensevoice_1", "sensevoice_2"],
+                "qwen": ["qwen_1", "qwen_2"],
+            },
+            "teacher_families": ["glm", "sensevoice"],
+            "expected_runs_per_family": 2,
+        }
+    )
+    assert three.configured_family_count == 3
+    assert three.expected_total_runs == 6
+    assert len(three.all_transcript_keys()) == 6
+
+    # Auto-derive teachers when omitted
+    auto = SelectionV3Config.from_params(
+        {
+            "target_family": "qwen",
+            "model_families": {
+                "glm": ["glm_1", "glm_2"],
+                "sensevoice": ["sensevoice_1", "sensevoice_2"],
+                "qwen": ["qwen_1", "qwen_2"],
+            },
+            "expected_runs_per_family": 2,
+        }
+    )
+    assert sorted(auto.teacher_families) == ["glm", "sensevoice"]
+
+    try:
+        SelectionV3Config.from_params(
+            {
+                "target_family": "qwen",
+                "model_families": {
+                    "glm": ["glm_1", "glm_2"],
+                    "qwen": ["qwen_1", "qwen_2"],
+                },
+                "teacher_families": ["glm"],
+                "expected_runs_per_family": 2,
+            }
+        )
+        assert False, "expected ValueError for N=2"
+    except ValueError as exc:
+        assert "at least 3" in str(exc).lower() or "3" in str(exc)
+
+
+def test_three_family_contract_classifiable():
+    cfg = SelectionV3Config.from_params(
+        {
+            "target_family": "qwen",
+            "model_families": {
+                "glm": ["glm_1", "glm_2"],
+                "sensevoice": ["sensevoice_1", "sensevoice_2"],
+                "qwen": ["qwen_1", "qwen_2"],
+            },
+            "teacher_families": ["glm", "sensevoice"],
+            "expected_runs_per_family": 2,
+        }
+    )
+    keys = cfg.all_transcript_keys()
+    s = Sample(
+        id="t3",
+        source_path="t3.wav",
+        sha256="h3",
+        duration=1.5,
+        transcripts={k: {"text": "你好"} for k in keys},
+        labels={
+            "call_id": "c3",
+            "original_audio_sha256": "h3",
+            "source_snapshot_id": "snap1",
+        },
+    )
+    result = evaluate_sample_contract(s, cfg)
+    assert result.readiness == SAMPLE_CLASSIFIABLE
+    updated, report, _ = apply_contract_to_samples([s], cfg)
+    assert report.classifiable == 1
+    report.assert_conserved()
+    assert updated[0].labels["contract_readiness"] == SAMPLE_CLASSIFIABLE
 
 
 def test_run_status_success_empty_failed_missing():

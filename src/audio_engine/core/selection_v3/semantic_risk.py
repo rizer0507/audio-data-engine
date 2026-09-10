@@ -1,4 +1,4 @@
-"""Semantic risk tags and polarity for selection_v3 (all eight routes)."""
+"""Semantic risk tags and polarity for selection_v3 (all configured routes)."""
 
 from __future__ import annotations
 

@@ -9,7 +9,8 @@
 # - mixed/unknown 预测不算 confirmed positive；单独报 semantic_unk_rate 与保守上界
 # - 固定评测集上任一模型 failed/missing → 门禁 incomplete
 # - 缺校准阈值或分母不足 → needs_review（不自动 pass）
-# - 未通过人工校准不得修改生产默认分拣配置
+# - 未通过人工校准不得宣称 publish_status=pass / 自动发布伪标签训练集
+#   （分拣默认入口已切 v3，见 014；与本业务门禁分开）
 
 version: business_metrics_v1.0
 

@@ -244,7 +244,7 @@ runs/
 | Catalog 注册       | `src/audio_engine/core/catalog.py`（跟随真实 path）             |
 | 工序权威说明           | `docs/01-项目架构/工序总览.md`                                    |
 | 评测产物说明           | `docs/03-流水线/评测流水线.md`                                    |
-| 本需求              | `docs/04-改进需求/进行中/009-datasets模块改造需求.md`                  |
+| 本需求              | `docs/04-改进需求/已完成/009-datasets模块改造需求.md`                  |
 
 
 ---
@@ -287,7 +287,7 @@ Phase C（存量 `manifests/` → stage 迁移脚本）仍可选。全部完成�
 ## 11. 交给实现 AI 时可以说
 
 ```text
-请按 docs/04-改进需求/进行中/009-datasets模块改造需求.md 落地 Phase A+B。
+请按 docs/04-改进需求/已完成/009-datasets模块改造需求.md 落地 Phase A+B。
 原则：stem 命名不变，只改目录根；resolve 双读旧 manifests；评测报告迁到 datasets/stage3/reports/。
 先改 source_naming + evaluation_report + 单测，再扫 pipelines/docs/手册路径。
 不要改分拣规则与指标语义。做完更新 datasets/README 与工序总览中的「现行」表述。

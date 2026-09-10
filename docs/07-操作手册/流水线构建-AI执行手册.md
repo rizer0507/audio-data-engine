@@ -26,7 +26,7 @@
 |--------------|----------|
 | 短名 | 根据中文目标生成 snake_case，开工前用一句话告知用户 |
 | 输入 | 优先衔接现有数据链（如 cleaned → qwen）；路径不明则问 |
-| 输出路径 | 按工序写入 staged 路径（stem 不变，见 [009](../04-改进需求/进行中/009-datasets模块改造需求.md)）：清洗 → `datasets/stage1/cleaned/`；ASR → `datasets/stage1/asr/` 或 `stage3/asr/`；派生表 → `*/derived/`；评测集 → `stage3/eval_sets/`；评测报告权威落点 → `datasets/stage3/reports/<eval_name>/`（勿再把报告只写进 `runs/`） |
+| 输出路径 | 按工序写入 staged 路径（stem 不变，见 [009](../04-改进需求/已完成/009-datasets模块改造需求.md)）：清洗 → `datasets/stage1/cleaned/`；ASR → `datasets/stage1/asr/` 或 `stage3/asr/`；派生表 → `*/derived/`；评测集 → `stage3/eval_sets/`；评测报告权威落点 → `datasets/stage3/reports/<eval_name>/`（勿再把报告只写进 `runs/`） |
 
 | 并发 | 数据量大或涉及 ASR/GPU → YAML `sharding`；小数据可不分片 |
 | 失败样本 | 记入 status/errors，不伪造结果；除非用户要求丢弃 |
@@ -34,6 +34,9 @@
 | 生产入口 | 必须是一条 `audio-data pipeline run pipelines/<短名>.yaml` |
 
 只问阻塞问题，例如：输入文件到底在哪、用哪张 GPU、热词原文是什么。不要让用户填技术表格。
+
+**分拣默认（014）**：工序一③正式入口为 `pipelines/classify_dataset_v3.yaml`（N≥3×双跑，见 015）；
+`classify_dataset.yaml`（v1）仅 legacy 复现，不要再写成新批次默认路径。
 
 ---
 

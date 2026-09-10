@@ -259,6 +259,49 @@ def test_four_family_我不需要_pseudo_high():
     assert result.is_human_verified is False
     assert result.label_tier == "pseudo_high"
     assert "不需要" in (result.candidate_text or "")
+    assert result.configured_family_count == 4
+    assert result.support_ratio_of_4 == 1.0
+    labels = result.to_labels("selection_zh_asr_v3_0")
+    assert labels["support_ratio"] == 1.0
+    assert labels["configured_family_count"] == 4
+
+
+def test_three_family_我不需要_pseudo_high():
+    three_cfg = _cfg(
+        model_families={
+            "glm": ["glm_1", "glm_2"],
+            "sensevoice": ["sensevoice_1", "sensevoice_2"],
+            "qwen": ["qwen_1", "qwen_2"],
+        },
+        teacher_families=["glm", "sensevoice"],
+    )
+    six = [
+        "glm_1",
+        "glm_2",
+        "sensevoice_1",
+        "sensevoice_2",
+        "qwen_1",
+        "qwen_2",
+    ]
+    transcripts = {
+        k: {"text": "我不需要", "extra": {"raw_text": "我不需要"}} for k in six
+    }
+    sample = Sample(
+        id="s3",
+        source_path="s3.wav",
+        sha256="h",
+        duration=1.5,
+        transcripts=transcripts,
+        labels={},
+        quality=_clean_quality(),
+    )
+    result = classify_sample(sample, three_cfg)
+    assert result.type == TYPE_PSEUDO_HIGH
+    assert result.decision == DECISION_AUDIT_PENDING
+    assert result.configured_family_count == 3
+    assert result.support_family_count == 3
+    assert result.support_ratio_of_4 == 1.0
+    assert result.reason == "configured_family_strict_consensus"
 
 
 def test_teachers_neg_qwen_pos_semantic_and_correction():

@@ -23,7 +23,7 @@ RUN_STATUSES = frozenset(
     }
 )
 
-# Sample-level readiness after eight-route contract check.
+# Sample-level readiness after configured multi-run contract check (N≥3 families × 2 runs).
 SAMPLE_CLASSIFIABLE = "classifiable"
 SAMPLE_INFERENCE_INCOMPLETE = "inference_incomplete"
 SAMPLE_INVALID_AUDIO = "invalid_audio"
@@ -54,6 +54,8 @@ GOVERNANCE_NEAR_DUP_UNCERTAIN = "near_duplicate_uncertain"
 DEFAULT_TEACHER_FAMILIES = ("kimi", "glm", "sensevoice")
 DEFAULT_TARGET_FAMILY = "qwen"
 DEFAULT_EXPECTED_RUNS_PER_FAMILY = 2
+# consensus_v3: at least three families; four remains a recommended (not required) config.
+MIN_MODEL_FAMILIES = 3
 
 # Family dual-run status (exactly one per family, priority order).
 FAMILY_INCOMPLETE = "incomplete"

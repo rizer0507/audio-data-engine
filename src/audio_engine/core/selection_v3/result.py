@@ -31,7 +31,9 @@ class ClassificationResultV3:
     polarity: str = "unknown"
     family_status: dict[str, str] = field(default_factory=dict)
     support_family_count: int = 0
+    # Compat: semantics are support / configured_family_count (see support_ratio).
     support_ratio_of_4: float | None = None
+    configured_family_count: int = 0
     teacher_support_count: int = 0
     min_similarity: float | None = None
     consensus_ambiguous: bool = False
@@ -71,7 +73,10 @@ class ClassificationResultV3:
             "polarity": self.polarity,
             "family_status": dict(self.family_status),
             "support_family_count": self.support_family_count,
+            # support_ratio is canonical; support_ratio_of_4 kept for downstream compat.
+            "support_ratio": self.support_ratio_of_4,
             "support_ratio_of_4": self.support_ratio_of_4,
+            "configured_family_count": self.configured_family_count,
             "teacher_support_count": self.teacher_support_count,
             "min_similarity": self.min_similarity,
             "consensus_ambiguous": self.consensus_ambiguous,
