@@ -1,0 +1,28 @@
+# 025 中文-only 分类前置层影子分拣。独立产物，不覆盖 classified_v3_* / 022 / 023 / 024 / 审核包 / release。
+#
+#   audio-data pipeline run pipelines/classify_dataset_v3_zh_only.yaml \
+#     --source-name 0908-30000 \
+#     --config configs/selection/zh_asr_v3_0908_30000_zh_only.yaml
+#
+# 生产 selection_v3.0 默认仍是 classify_text_policy: legacy。本入口显式打开 chinese_only_v1。
+# 不重跑 ASR，不改①清洗。空路不是已确认无语音金标。未听音前不要发布为训练集。
+
+name: classify_dataset_v3_zh_only
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_v3_source_A_zh_only_v1.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_v3_zh_only.yaml
+      classify_text_policy: chinese_only_v1
+      classify_text_version: classify_text_zh_only_v1
+      quality:
+        calibrated: false
+        noise_policy: asr_anomaly_noise_v1

@@ -677,3 +677,68 @@ pseudo_audit:
     data = json.loads(report.read_text(encoding="utf-8"))
     assert "overall" in data
     assert data["statistic_name"] == "group_balanced_mislabel_rate"
+
+
+def test_select_review_batch_priority_queue_intersection():
+    """020 / 0908: P0+manual_review must not admit matching-queue P1 (former bypass)."""
+    from audio_engine.core.annotation_v3.queue import select_review_batch
+
+    cfg = AnnotationConfig.from_params({})
+    samples = [
+        _sample("p0a", priority="P0", queue="manual_review", typ="critical_content_risk"),
+        _sample("p0b", priority="P0", queue="manual_review", typ="semantic_risk"),
+        _sample("p1a", priority="P1", queue="manual_review", typ="audio_quality_risk"),
+        _sample("p1b", priority="P1", queue="manual_review", typ="all_empty_unverified"),
+        _sample("p2a", priority="P2", queue="manual_review", typ="hardcase"),
+        _sample("aud", priority="", queue="pseudo_audit", typ="pseudo_high"),
+    ]
+    p0_only = select_review_batch(
+        samples, cfg, priorities=["P0"], queues=["manual_review"]
+    )
+    assert {s.id for s in p0_only} == {"p0a", "p0b"}
+    assert all(str(s.labels.get("review_priority")) == "P0" for s in p0_only)
+
+    p1_only = select_review_batch(
+        samples, cfg, priorities=["P1"], queues=["manual_review"]
+    )
+    assert {s.id for s in p1_only} == {"p1a", "p1b"}
+
+    audit_only = select_review_batch(
+        samples, cfg, priorities=["P0", "P1", "P2"], queues=["pseudo_audit"]
+    )
+    assert {s.id for s in audit_only} == {"aud"}
+
+    audit_narrow = select_review_batch(
+        samples, cfg, priorities=["P0"], queues=["pseudo_audit"]
+    )
+    assert audit_narrow == []
+
+    audit_queue_mode = select_review_batch(
+        samples, cfg, priorities=["P0"], queues=["pseudo_audit"], include_unprioritized=True
+    )
+    assert {s.id for s in audit_queue_mode} == {"aud"}
+
+
+def test_build_export_rows_rejects_priority_mismatch_and_records_digest(tmp_path):
+    cfg = AnnotationConfig.from_params({})
+    samples = [
+        _sample("p0", priority="P0", queue="manual_review", typ="semantic_risk"),
+        _sample("p1", priority="P1", queue="manual_review", typ="audio_quality_risk"),
+    ]
+    qid, rows, meta = build_export_rows(
+        samples,
+        config=cfg,
+        dataset_path=str(tmp_path / "c.parquet"),
+        revision="r_p0",
+        view="blind",
+        priorities=["P0"],
+        queues=["manual_review"],
+    )
+    assert len(rows) == 1
+    assert rows[0]["sample_id"] == "p0"
+    assert rows[0]["review_priority"] == "P0"
+    assert meta["priorities"] == ["P0"]
+    assert meta["queues"] == ["manual_review"]
+    assert meta["sample_count"] == 1
+    assert isinstance(meta.get("sample_set_digest"), str) and len(meta["sample_set_digest"]) == 64
+    assert qid.startswith("review_v3_")

@@ -35,8 +35,15 @@ short_utterance:
   max_audio_sec: 2.0
   max_text_chars: 6
 
+# 018：语速不可能 → exclude（不在①清洗）
+speech_rate:
+  max_chars_per_sec: 25
+  min_text_chars: 80
+  disposition: exclude
+
 quality:
   calibrated: false
+  noise_policy: legacy_full_quality_gate
 
 semantic_lexicon_path: configs/selection/semantic_lexicon_zh_v3.yaml
 voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml

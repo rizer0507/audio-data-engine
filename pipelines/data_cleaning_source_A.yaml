@@ -44,7 +44,10 @@ pipeline:
     execution:
       workers: 32
     params:
-      sample_rate: 8000
+      # sample_rate = 输出目标。有 WAV 头则先探测真实采样率再重采样到该目标。
+      # source_sample_rate 仅用于无头 pcm/raw（默认 16k；真 8k PCM 时改这里）。
+      sample_rate: 16000
+      source_sample_rate: 16000
       channels: 1
       input_audio_key: raw
       output_audio_key: pcm_wav

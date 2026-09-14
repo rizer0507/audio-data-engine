@@ -1,0 +1,24 @@
+# 024 业务语义影子分拣。独立产物，不覆盖 classified_v3_* / 022 影子 / 审核包 / release。
+#
+#   audio-data pipeline run pipelines/classify_dataset_v3_business_semantic_v4.yaml \
+#     --source-name 0908-30000 \
+#     --config configs/selection/zh_asr_v3_0908_30000_business_semantic_v4.yaml
+#
+# 未听音校准、未证明人审不超过 3000、来源隔离未补齐前，不要把本产物发布为训练集或正式评测集。
+
+name: classify_dataset_v3_business_semantic_v4
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_v3_source_A_business_semantic_v4.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_v3_business_semantic_v4.yaml
+      quality:
+        calibrated: false

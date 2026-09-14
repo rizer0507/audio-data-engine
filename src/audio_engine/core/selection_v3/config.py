@@ -89,6 +89,13 @@ class SelectionV3Config:
     short_audio_sec: float = 2.0
     short_text_chars: int = 6
 
+    # Implausible speech rate (018): len(comparison_text) / duration
+    # Only texts with >= min_text_chars are checked (avoid sub-second false positives).
+    max_chars_per_sec: float = 25.0
+    speech_rate_min_text_chars: int = 80
+    # exclude | manual_review — production default is exclude (drop from auto pools).
+    speech_rate_disposition: str = "exclude"
+
     # Lexicon / patterns
     negative_phrases: list[str] = field(default_factory=list)
     positive_phrases: list[str] = field(default_factory=list)
@@ -104,6 +111,37 @@ class SelectionV3Config:
 
     # Calibration gate: when false, noisy risk stays unknown even if scores exist
     quality_calibrated: bool = False
+    # 022 semantic-tolerant options. Ignored unless rule_version selects that rule.
+    recall_max_distance: float = 0.10
+    divergence_min_distance: float = 0.25
+    min_support_ratio: float = 2 / 3
+    min_support_families: int = 2
+    short_pair_max_chars: int = 6
+    tolerance_version: str = "text_tolerance_v1"
+    homophone_pairs: list[tuple[str, str]] = field(default_factory=list)
+    voicemail_strong_path: str = ""
+    semantic_verifier_mode: str = "local"
+    semantic_verifier_endpoint: str = ""
+    semantic_verifier_protocol: str = "auto"
+    semantic_verifier_model: str = ""
+    semantic_verifier_timeout_sec: float = 5.0
+    max_route_retries: int = 1
+    # 024: disclose when this batch was already inspected while designing the rule.
+    prior_information_used: bool = False
+    # 020 refactor routing: off = legacy queues (plus same-text semantic fix);
+    # shadow = write disposition/quality_state without changing type/queue;
+    # on = uncalibrated quality becomes calibration_hold (not transcription jobs).
+    refactor_020_mode: str = "off"
+    # 023: asr_anomaly_noise_v1 scores only ASR anomalies. legacy_full_quality_gate
+    # is the explicit rollback that still requires a full DNSMOS pass.
+    noise_policy: str = "legacy_full_quality_gate"
+    # 025: chinese_only_v1 is the shared classify-text pre-layer. Default legacy
+    # keeps historical v3.0 buckets; the shadow pipeline turns the new policy on.
+    classify_text_policy: str = "legacy"
+    classify_text_keep_digits: bool = True
+    classify_text_echo_missing: str = "fail"
+    classify_text_echo: dict[str, Any] = field(default_factory=dict)
+    classify_text_echo_fingerprint: str = ""
 
     def all_transcript_keys(self) -> list[str]:
         """Ordered unique keys expected across configured families."""
@@ -134,6 +172,16 @@ class SelectionV3Config:
             if key in keys:
                 return family
         return None
+
+    def uses_chinese_only_text(self) -> bool:
+        from audio_engine.core.selection_v3.classify_text import uses_chinese_only_text
+
+        return uses_chinese_only_text(self.classify_text_policy)
+
+    def echo_table_for(self, family: str | None):
+        from audio_engine.core.selection_v3.classify_text import echo_for_family
+
+        return echo_for_family(self.classify_text_echo, family)
 
     def ordered_families(self) -> list[str]:
         """Stable family order: teachers then target, then any extras."""
@@ -288,7 +336,16 @@ class SelectionV3Config:
 
         similarity = params.get("similarity") or {}
         short = params.get("short_utterance") or {}
+        speech_rate = params.get("speech_rate") or {}
         quality = params.get("quality") or {}
+        tolerance = params.get("tolerance") or {}
+        verifier = params.get("semantic_verifier") or {}
+        consensus_req = params.get("consensus") or {}
+        classify_text = params.get("classify_text") or {}
+        homophone_pairs = []
+        for item in tolerance.get("homophone_pairs") or []:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                homophone_pairs.append((str(item[0]), str(item[1])))
 
         negative: list[str] = []
         positive: list[str] = []
@@ -386,6 +443,27 @@ class SelectionV3Config:
             ),
             short_audio_sec=float(short.get("max_audio_sec", 2.0)),
             short_text_chars=int(short.get("max_text_chars", 6)),
+            max_chars_per_sec=float(
+                speech_rate.get(
+                    "max_chars_per_sec",
+                    params.get("max_chars_per_sec", 25.0),
+                )
+            ),
+            speech_rate_min_text_chars=int(
+                speech_rate.get(
+                    "min_text_chars",
+                    params.get("speech_rate_min_text_chars", 80),
+                )
+            ),
+            speech_rate_disposition=str(
+                speech_rate.get(
+                    "disposition",
+                    params.get("speech_rate_disposition", "exclude"),
+                )
+                or "exclude"
+            )
+            .strip()
+            .lower(),
             negative_phrases=negative,
             positive_phrases=positive,
             critical_tokens=critical,
@@ -398,8 +476,111 @@ class SelectionV3Config:
             voicemail_patterns_path=str(params.get("voicemail_patterns_path") or ""),
             semantic_lexicon_path=lexicon_path,
             quality_calibrated=bool(quality.get("calibrated", params.get("quality_calibrated", False))),
+            refactor_020_mode=_normalize_refactor_020_mode(
+                params.get("refactor_020_mode")
+                if params.get("refactor_020_mode") is not None
+                else quality.get("refactor_020_mode")
+            ),
+            recall_max_distance=float(
+                tolerance.get("recall_max_distance", params.get("recall_max_distance", 0.10))
+            ),
+            divergence_min_distance=float(
+                tolerance.get(
+                    "divergence_min_distance",
+                    params.get("divergence_min_distance", 0.25),
+                )
+            ),
+            min_support_ratio=float(
+                consensus_req.get("min_support_ratio", params.get("min_support_ratio", 2 / 3))
+            ),
+            min_support_families=int(
+                consensus_req.get("min_support_families", params.get("min_support_families", 2))
+            ),
+            short_pair_max_chars=int(
+                tolerance.get(
+                    "short_max_chars",
+                    short.get("max_text_chars", params.get("short_pair_max_chars", 6)),
+                )
+            ),
+            tolerance_version=str(
+                tolerance.get("version") or params.get("tolerance_version") or "text_tolerance_v1"
+            ),
+            homophone_pairs=homophone_pairs,
+            voicemail_strong_path=str(
+                params.get("voicemail_strong_path") or params.get("voicemail_strong_patterns_path") or ""
+            ),
+            semantic_verifier_mode=str(verifier.get("mode") or params.get("semantic_verifier_mode") or "local"),
+            semantic_verifier_endpoint=str(verifier.get("endpoint") or ""),
+            semantic_verifier_protocol=str(
+                verifier.get("protocol") or params.get("semantic_verifier_protocol") or "auto"
+            ),
+            semantic_verifier_model=str(verifier.get("model") or params.get("semantic_verifier_model") or ""),
+            semantic_verifier_timeout_sec=float(
+                verifier.get("timeout_sec", params.get("semantic_verifier_timeout_sec", 5.0)) or 5.0
+            ),
+            max_route_retries=int(params.get("max_route_retries", 1)),
+            prior_information_used=bool(params.get("prior_information_used", False)),
+            noise_policy=str(
+                params.get("noise_policy")
+                or quality.get("noise_policy")
+                or "legacy_full_quality_gate"
+            ),
+            classify_text_policy=str(
+                classify_text.get("policy")
+                or params.get("classify_text_policy")
+                or "legacy"
+            ),
+            classify_text_keep_digits=bool(
+                classify_text.get(
+                    "keep_digits",
+                    params.get("classify_text_keep_digits", True),
+                )
+            ),
+            classify_text_echo_missing=str(
+                classify_text.get("echo_missing")
+                or params.get("classify_text_echo_missing")
+                or "fail"
+            )
+            .strip()
+            .lower(),
         )
         cfg.validate_family_config()
+        disposition = cfg.speech_rate_disposition
+        if disposition not in {"exclude", "manual_review", "route_quarantine"}:
+            raise ValueError(
+                "speech_rate.disposition must be 'exclude', 'manual_review', or "
+                f"'route_quarantine', got {disposition!r}"
+            )
+        if cfg.refactor_020_mode not in {"off", "shadow", "on"}:
+            raise ValueError(
+                "refactor_020_mode must be 'off', 'shadow', or 'on', "
+                f"got {cfg.refactor_020_mode!r}"
+            )
+        from audio_engine.core.selection_v3.noise_trigger import normalize_noise_policy
+        from audio_engine.core.selection_v3.classify_text import (
+            echo_fingerprint,
+            load_echo_tables,
+            normalize_classify_text_policy,
+            uses_chinese_only_text,
+        )
+
+        cfg.noise_policy = normalize_noise_policy(cfg.noise_policy)
+        cfg.classify_text_policy = normalize_classify_text_policy(cfg.classify_text_policy)
+        if cfg.classify_text_echo_missing not in {"fail", "echo_list_missing"}:
+            raise ValueError(
+                "classify_text.echo_missing must be 'fail' or 'echo_list_missing', "
+                f"got {cfg.classify_text_echo_missing!r}"
+            )
+        if uses_chinese_only_text(cfg.classify_text_policy):
+            echo_cfg = classify_text.get("echo") or params.get("classify_text_echo") or {}
+            extra_exact = classify_text.get("extra_exact") or params.get("classify_text_extra_exact") or []
+            cfg.classify_text_echo = load_echo_tables(
+                families=cfg.ordered_families(),
+                echo_cfg=echo_cfg if isinstance(echo_cfg, dict) else {},
+                extra_exact=extra_exact,
+                missing=cfg.classify_text_echo_missing,
+            )
+            cfg.classify_text_echo_fingerprint = echo_fingerprint(cfg.classify_text_echo)
         return cfg
 
     @classmethod
@@ -408,6 +589,20 @@ class SelectionV3Config:
         if not isinstance(raw, dict):
             raise ValueError(f"config must be a mapping: {path}")
         return cls.from_params(raw)
+
+
+def _normalize_refactor_020_mode(value: Any) -> str:
+    """YAML ``on``/``off`` become bools; accept those and string forms."""
+    if value is None:
+        return "off"
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "1"}:
+        return "on"
+    if text in {"false", "no", "0", ""}:
+        return "off"
+    return text
 
 
 def _load_lexicon(path: str | Path) -> dict[str, list[str]]:

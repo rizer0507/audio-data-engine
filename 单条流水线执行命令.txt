@@ -291,6 +291,37 @@ audio-data pipeline run pipelines/classify_dataset_v3.yaml \
 
 
 -------------------------------------------------------
+2f-v3-025. 中文-only 分类前置层影子（classify_text_zh_only_v1）
+-------------------------------------------------------
+# 不重跑 ASR，不改①清洗，不覆盖 classified_v3_* / 022 / 023 / 024 / 审核包 / release。
+# 生产 selection_v3.0 默认仍是 classify_text_policy: legacy。本入口才打开 chinese_only_v1。
+# 空路不是已确认无语音。未听音前不要发布为训练集。
+# 前置：已有 prepared_asr_v3_<name>（0908 即 prepared_asr_v3_0908-30000）。
+# 产物：datasets/stage1/derived/classified_v3_<name>_zh_only_v1.parquet
+#
+# 0908-30000（PowerShell）：
+audio-data pipeline run pipelines/classify_dataset_v3_zh_only.yaml `
+  --source-name 0908-30000 `
+  --config configs/selection/zh_asr_v3_0908_30000_zh_only.yaml
+
+# Linux / Git Bash：
+# audio-data pipeline run pipelines/classify_dataset_v3_zh_only.yaml \
+#   --source-name 0908-30000 \
+#   --config configs/selection/zh_asr_v3_0908_30000_zh_only.yaml
+#
+# 续跑：同上命令加 --resume runs/<上次_shards或run目录>
+# 回退生产桶：pipelines/classify_dataset_v3.yaml + classify_text_policy: legacy
+# 可选对照报告（不覆盖旧 JSON；正式入口仍是上面一条 pipeline run）：
+# python scripts/shadow_classify_text_zh_only.py \
+#   --prepared datasets/stage1/derived/prepared_asr_v3_0908-30000.parquet \
+#   --config configs/selection/zh_asr_v3_0908_30000_zh_only.yaml \
+#   --old-022 datasets/stage1/derived/classified_v3_0908-30000_semantic_tolerant_20260911.jsonl \
+#   --old-024 datasets/stage1/derived/classified_v3_0908-30000_business_semantic_v4_phase2.jsonl \
+#   --output-json datasets/stage1/derived/shadow_classify_text_zh_only_v1_0908-30000.json \
+#   --output-jsonl datasets/stage1/derived/classified_v3_0908-30000_zh_only_v1.jsonl
+
+
+-------------------------------------------------------
 2g. 外源金标 → 正式 classified_*（工序一拆分 · B2）
 -------------------------------------------------------
 # 前置：①清洗 + ②同 family ASR（至少跑 base 权重，得到 {alias}_asr_<name>）
@@ -348,6 +379,7 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 [ ] （可选 GLM vLLM）先跑 probe_glm_vllm.py：短 WAV、目录并发、--repeat 2（不要 --pad）
 [ ] v3：V3_DATASET_CFG / V3_SELECTION_CFG；runs: register 后的 artifact_id
 [ ] （存量 0908）方案 B 配置 zh_asr_v3_0908_30000.yaml + run_identities/
+[ ] （025 影子）pipelines/classify_dataset_v3_zh_only.yaml + zh_asr_v3_0908_30000_zh_only.yaml；勿覆盖 classified_v3_*
 [ ] （legacy 诊断）multi_asr_aggregate.yaml 的 manifests / --join-manifest
 [ ] （外源金标）--external-gold / --aggregate-base / --label-col
 [ ] 本文件中的模型环境变量（含 KIMI_ASR_API_BASE / KIMI_ASR_API_BASES / KIMI_ASR_MODEL / KIMI_AUDIO_MODEL_PATH / GLM_ASR_API_BASE / GLM_ASR_MODEL）

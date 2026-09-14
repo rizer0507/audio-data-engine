@@ -582,11 +582,28 @@ def apply_source_name_to_single_pipeline(
             )
         resolved = resolve_existing_manifest(manifest_stem("prepared_asr_v3", name))
         sidecar = staged_manifest_path(manifest_stem("quality_sidecar", name))
+        # 020 shadow: write beside production classified, never overwrite it.
+        if "shadow_020" in key:
+            out = staged_manifest_path(f"classified_v3_{name}_shadow_020")
+        elif "zh_only" in key:
+            out = staged_manifest_path(f"classified_v3_{name}_zh_only_v1")
+        elif "business_semantic" in key:
+            out = staged_manifest_path(f"classified_v3_{name}_business_semantic_v4")
+        elif "semantic_tolerant" in key and "asr_anomaly" in key:
+            out = staged_manifest_path(
+                f"classified_v3_{name}_semantic_tolerant_20260911_asr_anomaly_noise_v1"
+            )
+        elif "semantic_tolerant" in key:
+            out = staged_manifest_path(f"classified_v3_{name}_semantic_tolerant_20260911")
+        elif "asr_anomaly_noise" in key:
+            out = staged_manifest_path(f"classified_v3_{name}_asr_anomaly_noise_v1")
+        else:
+            out = manifest_path("classified_v3", name)
         overrides = {
             "source_dir": None,
             "input_manifest": str(resolved),
             "source_id": None,
-            "output_manifest": _posix(manifest_path("classified_v3", name)),
+            "output_manifest": _posix(out),
             "aggregate_manifests": None,
             "asr_run": None,
             "aggregate_base": None,

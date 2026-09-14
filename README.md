@@ -82,6 +82,8 @@ audio-data pipeline run pipelines/classify_dataset_v3.yaml \
 audio-data review export classified_v3_<BATCH> --output review.xlsx --revision review_v1 --protocol v3
 ```
 
+文本相似度依赖 `rapidfuzz`（`pip install -e .` 已含；见 docs/04-改进需求/已完成/019-Levenshtein原生加速.md）。
+
 （legacy）`pipelines/classify_dataset.yaml`（v1）仅复现历史批次，不作新批次默认。
 
 审核完成后按说话人或会话分组拆分并冻结不可变 release。命令会校验每条数据都有 accepted Gold，

@@ -122,6 +122,17 @@ class Manifest:
         for col in json_cols:
             if col in df.columns:
                 df[col] = df[col].apply(lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+        # Flattened label_/quality_ dicts can be empty structs (e.g. acoustic versions={}).
+        # Parquet cannot write a struct with no child fields. JSON is the durable form;
+        # reload uses the canonical labels/quality columns, not these copies.
+        for col in df.columns:
+            if col in json_cols:
+                continue
+            if not df[col].map(lambda v: isinstance(v, (dict, list))).any():
+                continue
+            df[col] = df[col].map(
+                lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
+            )
         df.to_parquet(path, index=False)
 
     def to_dataframe(self) -> pd.DataFrame:

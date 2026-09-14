@@ -17,6 +17,7 @@ from audio_engine.core.selection_v3.text import (
     comparison_text,
     raw_transcript_text,
     text_similarity,
+    transcript_text,
 )
 from audio_engine.core.selection_v3.types import (
     FAMILY_INCOMPLETE,
@@ -39,6 +40,10 @@ class RouteView:
     status: str
     raw_text: str
     comparison_text: str
+    transcript_text: str = ""
+    classify_text: str = ""
+    empty_reason_codes: tuple[str, ...] = ()
+    pre_filter_language: str = ""
 
 
 @dataclass
@@ -59,19 +64,64 @@ def _entry(sample: Sample, key: str) -> Any:
 def collect_route_views(
     sample: Sample,
     config: SelectionV3Config,
+    *,
+    quarantine_run_ids: set[str] | frozenset[str] | None = None,
 ) -> list[RouteView]:
     views: list[RouteView] = []
     punct = config.punctuation_to_strip
+    blocked = set(quarantine_run_ids or ())
+    chinese_only = config.uses_chinese_only_text()
     for family in config.ordered_families():
         for key in config.model_families.get(family, []):
-            status = classify_run_status(sample, key)
+            status = classify_run_status(sample, key, config)
             entry = _entry(sample, key)
             raw = raw_transcript_text(entry) if entry is not None else ""
-            # comparison_text only meaningful for success routes with text
-            if status == RUN_STATUS_SUCCESS_TEXT:
-                cmp = comparison_text(raw or (entry.get("text") if isinstance(entry, dict) else raw), punctuation_to_strip=punct)
+            # Quarantined routes keep raw text for evidence but do not vote.
+            if str(key) in blocked:
+                views.append(
+                    RouteView(
+                        run_id=str(key),
+                        family=family,
+                        status=RUN_STATUS_FAILED,
+                        raw_text=raw,
+                        comparison_text="",
+                    )
+                )
+                continue
+            transcript = ""
+            classify = ""
+            reasons: tuple[str, ...] = ()
+            pre_lang = ""
+            if chinese_only:
+                from audio_engine.core.selection_v3.classify_text import prepare_classify_text
+
+                prepared = prepare_classify_text(
+                    raw or (entry.get("text") if isinstance(entry, dict) else raw),
+                    echo=config.echo_table_for(family),
+                    keep_digits=config.classify_text_keep_digits,
+                    policy=config.classify_text_policy,
+                )
+                transcript = prepared.transcript_text
+                classify = prepared.classify_text
+                reasons = prepared.empty_reason_codes
+                pre_lang = prepared.pre_filter_language
+                if status in {RUN_STATUS_FAILED, RUN_STATUS_MISSING}:
+                    cmp = ""
+                elif prepared.status == RUN_STATUS_SUCCESS_EMPTY:
+                    status = RUN_STATUS_SUCCESS_EMPTY
+                    cmp = ""
+                else:
+                    status = RUN_STATUS_SUCCESS_TEXT
+                    cmp = classify
+            elif status == RUN_STATUS_SUCCESS_TEXT:
+                cmp = comparison_text(
+                    raw or (entry.get("text") if isinstance(entry, dict) else raw),
+                    punctuation_to_strip=punct,
+                )
+                transcript = transcript_text(raw)
             elif status == RUN_STATUS_SUCCESS_EMPTY:
                 cmp = ""
+                transcript = transcript_text(raw)
             else:
                 cmp = ""
             views.append(
@@ -81,6 +131,10 @@ def collect_route_views(
                     status=status,
                     raw_text=raw,
                     comparison_text=cmp,
+                    transcript_text=transcript,
+                    classify_text=classify,
+                    empty_reason_codes=reasons,
+                    pre_filter_language=pre_lang,
                 )
             )
     return views
@@ -240,20 +294,29 @@ def analyze_families(
     patterns: LexiconPatterns,
     *,
     duration_sec: float | None,
+    quarantine_run_ids: set[str] | frozenset[str] | None = None,
+    routes: list[RouteView] | None = None,
 ) -> dict[str, FamilyEvidence]:
-    routes = collect_route_views(sample, config)
+    route_views = routes if routes is not None else collect_route_views(
+        sample, config, quarantine_run_ids=quarantine_run_ids
+    )
     short = is_short_utterance(
         duration_sec=duration_sec,
-        routes=routes,
+        routes=route_views,
         max_audio_sec=config.short_audio_sec,
         max_text_chars=config.short_text_chars,
     )
     result: dict[str, FamilyEvidence] = {}
     for family in config.ordered_families():
         result[family] = analyze_family(
-            family, routes, config, patterns, short=short
+            family, route_views, config, patterns, short=short
         )
     return result
+
+
+def active_family_count(families: dict[str, FamilyEvidence]) -> int:
+    """Families still usable after quarantine / failures (not incomplete)."""
+    return sum(1 for state in families.values() if state.status != FAMILY_INCOMPLETE)
 
 
 def voting_representatives(

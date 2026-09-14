@@ -272,7 +272,7 @@ output:
   manifest: datasets/manifests/cleaned_source_A_20260820.parquet
 
 pipeline:
-  - { operator: audio.pcm_to_wav, params: { sample_rate: 8000 } }
+  - { operator: audio.pcm_to_wav, params: { sample_rate: 16000, source_sample_rate: 16000 } }
   - { operator: audio.resample, params: { sample_rate: 16000, input_audio_key: raw, output_audio_key: resampled_16k } }
   - { operator: quality.probe, params: { input_audio_key: resampled_16k } }
   - { operator: quality.filter, params: { expr: "label_broken != True and duration > 0", label_key: audio_pass } }
@@ -561,7 +561,7 @@ pipeline:
   - name: pcm_convert
     operator: audio.pcm_to_wav
     params:
-      sample_rate: 8000
+      sample_rate: 16000
 
   - name: resample
     operator: audio.resample

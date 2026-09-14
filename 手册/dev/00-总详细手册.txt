@@ -12,9 +12,10 @@
   工序二「训练」            = 引擎④训练流水线（外部框架）
   工序三「评测」            = 引擎⑤评测（本版服务器手册为 Model Registry 入口）
 
-【现行默认 · 2026-09 / 014·015】
-  工序一③默认：prepare_dataset_v3 → attach_asr_v3 → audio_quality_sidecar → classify_dataset_v3
+【现行默认 · 2026-09 / 014·015·019】
+  工序一③默认：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_v3_asr_anomaly_noise
   家族契约：N≥3 × 每族双跑；四族/Kimi 为可选增强，非门票。
+  文本相似度：rapidfuzz（019；pip install -e . 已含）。
   一键命令以 手册/dev/01-工序一-数据清洗落库打标.txt 与 单条流水线执行命令.txt §2f-v3 为准。
   下文若仍出现 multi_asr_aggregate → classify_dataset（v1），一律视为 legacy / 诊断。
 
@@ -31,6 +32,7 @@
 工序③要点（现行默认 v3）：
 - classify 使用 `configs/selection/zh_asr_v3.yaml` 或三族/0908 方案 B 配置；产物 `classified_v3_*`
 - 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.0.md
+- 文本相似度：rapidfuzz（019）；分拣并发加速仍见进行中 017
 - （legacy）v1：`configs/selection/zh_asr_v1.yaml` + `pipelines/classify_dataset.yaml` 仅复现
 
 工序⑤要点：
@@ -105,6 +107,7 @@ export MKL_NUM_THREADS=1
 # 首次部署（内网 PyPI）：
 # pip install distillmos --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
 # pip install -e . --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
+#   # -e . 已含 rapidfuzz（019 · classify_v3 文本相似度；缺库导入失败）
 # pip install -e /data2/data-cp/lizi/Kimi-Audio --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
 # pip install 'audio-data-engine[kimi-audio]' --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
 # pip install -e ".[asr]"         # 仅 Qwen 本地推理需要；vLLM 客户端通常不需要
@@ -528,7 +531,7 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 5. 使用版本化策略自动分拣（现行默认 = v3）
 -------------------------------------------------------
 # 正式入口见 手册/dev/01-工序一-*.txt 与 单条流水线执行命令.txt §2f-v3：
-#   prepare_dataset_v3 → attach_asr_v3 → audio_quality_sidecar → classify_dataset_v3
+#   prepare_dataset_v3 → attach_asr_v3 → classify_dataset_v3_asr_anomaly_noise
 # 配置：configs/selection/zh_asr_v3.yaml（或 three_family / 0908_30000）
 # 产物：classified_v3_${BATCH}.parquet
 

@@ -278,7 +278,22 @@ def _apply_consensus_engine(
             result = classify_sample(
                 sample, selection_v1, voicemail_pattern=voicemail_pattern
             )
+        prior_gold = sample.labels.get("gold_text")
+        prior_human = sample.labels.get("is_human_verified") is True
         sample.labels.update(result.to_labels(policy_version))
+        if getattr(result, "rule_version", "").startswith("selection_business_semantic_v4"):
+            # Automatic selection must not replace an existing verbatim reference.
+            if prior_gold not in (None, ""):
+                sample.labels["gold_text"] = prior_gold
+            if prior_human:
+                sample.labels["is_human_verified"] = True
+                sample.labels["status"] = sample.labels.get("status")
+                sample.labels["usage_blocks"] = list(
+                    dict.fromkeys([*(sample.labels.get("usage_blocks") or []), "prior_human_gold_preserved"])
+                )
+        selected_raw = getattr(result, "selected_raw_text", None)
+        if selected_raw:
+            sample.labels["selected_raw_text"] = selected_raw
         sample.mark_completed(operator_name)
         sample.add_lineage(
             operator_name,
@@ -290,8 +305,19 @@ def _apply_consensus_engine(
                 "bucket": result.type,
                 "decision": result.decision,
                 "reason_codes": [result.reason],
+                "classify_text_policy": getattr(result, "classify_text_policy", "") or "",
+                "classify_text_version": getattr(result, "classify_text_version", "") or "",
+                "classify_text_echo_fingerprint": getattr(result, "classify_text_echo_fingerprint", "") or "",
             },
         )
+    if selection_v3 is not None:
+        from audio_engine.core.selection_v3.spot_audit import apply_spot_audit_flags
+        from audio_engine.core.selection_v3.types import is_business_semantic_rule, is_semantic_tolerant_rule
+
+        if is_semantic_tolerant_rule(selection_v3.rule_version) or is_business_semantic_rule(
+            selection_v3.rule_version
+        ):
+            apply_spot_audit_flags(updated)
     return updated
 
 

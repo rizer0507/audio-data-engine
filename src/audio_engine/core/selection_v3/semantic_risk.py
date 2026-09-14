@@ -98,6 +98,9 @@ def route_pair_has_semantic_conflict(
     """True when two comparison texts conflict on polarity / critical / filler / reject."""
     if not left or not right:
         return False
+    # Same comparison text cannot be an inter-route semantic conflict (020).
+    if left == right:
+        return False
     tags = conflict_tags_for_texts([left, right], patterns)
     return bool(
         tags
@@ -118,6 +121,15 @@ def conflict_tags_for_texts(
     tags: set[str] = set()
     nonempty = [t for t in texts if t]
     if len(nonempty) < 2:
+        return tags
+
+    # Identical comparison texts are not model-vs-model conflicts (020 / 0908).
+    # Single-utterance mixed polarity may still be content complexity for sampling.
+    if len(set(nonempty)) == 1:
+        if polarity_of_text(nonempty[0], patterns) == POLARITY_MIXED:
+            from audio_engine.core.selection_v3.types import RISK_CONTENT_COMPLEXITY
+
+            tags.add(RISK_CONTENT_COMPLEXITY)
         return tags
 
     polarities = [polarity_of_text(t, patterns) for t in nonempty]
@@ -216,28 +228,33 @@ def analyze_risks(
         tags.add(RISK_PRESENCE_CONFLICT)
     if short_utterance:
         tags.add(RISK_SHORT_UTTERANCE)
-    if family_unstable:
-        from audio_engine.core.selection_v3.types import RISK_FAMILY_INSTABILITY
+    from audio_engine.core.selection_v3.types import (
+        RISK_CONTENT_COMPLEXITY,
+        RISK_CROSSTALK_SUSPECTED,
+        RISK_FAMILY_INSTABILITY,
+        RISK_NOISY_AUDIO,
+        RISK_QUALITY_UNKNOWN,
+        SEMANTIC_RISK_TAGS,
+    )
 
-        tags.add(RISK_FAMILY_INSTABILITY)
     if noisy_audio:
-        from audio_engine.core.selection_v3.types import RISK_NOISY_AUDIO
-
         tags.add(RISK_NOISY_AUDIO)
     if quality_unknown:
-        from audio_engine.core.selection_v3.types import RISK_QUALITY_UNKNOWN
-
         tags.add(RISK_QUALITY_UNKNOWN)
     if crosstalk_suspected:
-        from audio_engine.core.selection_v3.types import RISK_CROSSTALK_SUSPECTED
-
         tags.add(RISK_CROSSTALK_SUSPECTED)
+    if family_unstable:
+        tags.add(RISK_FAMILY_INSTABILITY)
 
     polarities = [polarity_of_text(t, patterns) for t in comparison_texts if t]
+    distinct_texts = {t for t in comparison_texts if t}
+    same_comparison_text = len(distinct_texts) <= 1
     if not polarities:
         polarity = POLARITY_UNKNOWN
     elif POLARITY_MIXED in polarities:
         polarity = POLARITY_MIXED
+        if same_comparison_text:
+            tags.add(RISK_CONTENT_COMPLEXITY)
     else:
         distinct = {p for p in polarities if p not in {POLARITY_NEUTRAL, POLARITY_UNKNOWN}}
         if len(distinct) > 1:
@@ -247,10 +264,12 @@ def analyze_risks(
         else:
             polarity = POLARITY_UNKNOWN if POLARITY_UNKNOWN in polarities else POLARITY_NEUTRAL
 
-    from audio_engine.core.selection_v3.types import SEMANTIC_RISK_TAGS
-
     semantic_risk = bool(tags & SEMANTIC_RISK_TAGS)
-    critical_content = RISK_CRITICAL_TOKEN_CONFLICT in tags or polarity == POLARITY_MIXED
+    # Mixed polarity on identical comparison texts is content complexity, not
+    # inter-model critical_content_risk (020 / 0908 eighty-eight-sample class).
+    critical_content = RISK_CRITICAL_TOKEN_CONFLICT in tags or (
+        polarity == POLARITY_MIXED and not same_comparison_text
+    )
 
     return RiskAnalysis(
         risk_tags=sorted(tags),

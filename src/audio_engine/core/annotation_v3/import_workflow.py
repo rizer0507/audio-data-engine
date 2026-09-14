@@ -207,9 +207,15 @@ def _promote_gold(sample: Sample, draft: AnnotationDraft, *, state: str) -> bool
     sample.labels["human_crosstalk"] = draft.human_crosstalk
     sample.labels["verified_error_tags"] = list(draft.verified_error_tags)
     sample.labels["audio_event_tags"] = list(draft.audio_event_tags)
+    actor = str(draft.annotator_id or "").strip()
+    if not actor or actor in {"model", "model_consensus", "auto"}:
+        sample.labels["is_human_verified"] = False
+        sample.labels["status"] = "manual_review"
+        return False
     sample.labels["label_source"] = LABEL_SOURCE_HUMAN
     sample.labels["label_tier"] = LABEL_TIER_GOLD
     sample.labels["is_human_verified"] = True
+    sample.labels["status"] = "accepted"
     # Keep original type/risk_tags; do not rewrite to human_gold.
     return True
 

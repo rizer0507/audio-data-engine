@@ -7,6 +7,28 @@ from typing import Any
 
 from audio_engine.core.transcript_reconcile import clean_control_tags
 
+try:
+    from rapidfuzz.distance import Levenshtein as _RapidLevenshtein
+except ImportError as exc:  # pragma: no cover - hard dependency
+    raise ImportError(
+        "selection_v3 文本相似度需要 rapidfuzz（C++ Levenshtein）。"
+        "请安装项目依赖：pip install -e .  或  pip install 'rapidfuzz>=3.0'"
+    ) from exc
+
+
+def transcript_text(value: Any) -> str:
+    """Body text for people and training: strip model control tags, do not rewrite.
+
+    Punctuation and wording stay. ``<|zh|>`` and other FunASR control fields are
+    audit-only and must not appear in candidate or train targets.
+    """
+    if value is None:
+        return ""
+    cleaned = clean_control_tags(value if isinstance(value, str) else str(value))
+    if not isinstance(cleaned, str):
+        cleaned = "" if cleaned is None else str(cleaned)
+    return cleaned.strip()
+
 
 def raw_transcript_text(entry: Any) -> str:
     """Permanent raw text from a transcript entry (never mutated for voting)."""
@@ -76,19 +98,11 @@ def pairwise_min_similarity(texts: list[str]) -> float | None:
 
 
 def _levenshtein(left: str, right: str) -> int:
+    """Unicode character-level Levenshtein via rapidfuzz (no silent Python fallback)."""
     if left == right:
         return 0
     if not left:
         return len(right)
     if not right:
         return len(left)
-    prev = list(range(len(right) + 1))
-    for i, ch_l in enumerate(left, start=1):
-        curr = [i]
-        for j, ch_r in enumerate(right, start=1):
-            ins = curr[j - 1] + 1
-            delete = prev[j] + 1
-            sub = prev[j - 1] + (0 if ch_l == ch_r else 1)
-            curr.append(min(ins, delete, sub))
-        prev = curr
-    return prev[-1]
+    return int(_RapidLevenshtein.distance(left, right))

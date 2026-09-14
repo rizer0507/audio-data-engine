@@ -499,3 +499,144 @@ def test_hardcase_for_two_two_without_semantic():
     result = classify_sample(_sample(texts, quality=_clean_quality(), duration=4.0), _cfg())
     assert result.type in {TYPE_HARDCASE, "pseudo_medium"}
     assert result.type != TYPE_PSEUDO_HIGH
+
+
+# ---------------------------------------------------------------------------
+# 018: implausible speech rate
+# ---------------------------------------------------------------------------
+
+
+def test_implausible_speech_rate_excludes_and_blocks_pseudo():
+    from audio_engine.core.selection_v3.types import (
+        DECISION_EXCLUDE,
+        TYPE_IMPLAUSIBLE_SPEECH_RATE,
+        RISK_IMPLAUSIBLE_SPEECH_RATE,
+    )
+
+    # 3s audio + 5000-char hallucination on one route → ~1667 cps >> 25
+    long = "A" * 5000
+    texts = {k: "今天天气不错需要帮忙吗" for k in EIGHT}
+    texts["glm_1"] = long
+    texts["glm_2"] = long
+    result = classify_sample(
+        _sample(texts, quality=_clean_quality(), duration=3.0),
+        _cfg(),
+    )
+    assert result.type == TYPE_IMPLAUSIBLE_SPEECH_RATE
+    assert result.decision == DECISION_EXCLUDE
+    assert result.label_tier == "none"
+    assert RISK_IMPLAUSIBLE_SPEECH_RATE in result.risk_tags
+    assert "glm_1" in result.implausible_routes
+    labels = result.to_labels("selection_zh_asr_v3_0")
+    assert labels["type"] == TYPE_IMPLAUSIBLE_SPEECH_RATE
+    assert labels["decision"] == DECISION_EXCLUDE
+    assert labels["annotation_state"] == "excluded"
+    assert labels["max_chars_per_sec"] is not None
+    assert labels["max_chars_per_sec"] > 25
+
+
+def test_normal_rate_longish_text_not_flagged():
+    # 10s × 25 cps = 250 chars max; 100 chars → 10 cps, should pass rate gate
+    text = "今天" * 50  # 100 chars
+    result = classify_sample(
+        _sample(text, quality=_clean_quality(), duration=10.0),
+        _cfg(),
+    )
+    assert result.type != "implausible_speech_rate"
+    assert result.type == TYPE_PSEUDO_HIGH
+
+
+def test_short_text_skips_rate_gate_even_on_tiny_duration():
+    # Without min_text_chars gate, "你好啊" on 0.1s would look like 30 cps.
+    result = classify_sample(
+        _sample("你好啊", quality=_clean_quality(), duration=0.1),
+        _cfg(),
+    )
+    assert result.type != "implausible_speech_rate"
+
+
+def test_speech_rate_disposition_manual_review_override():
+    from audio_engine.core.selection_v3.types import (
+        DECISION_MANUAL_REVIEW,
+        TYPE_IMPLAUSIBLE_SPEECH_RATE,
+    )
+
+    long = "幻觉" * 200  # 400 chars on 2s → 200 cps
+    result = classify_sample(
+        _sample(long, quality=_clean_quality(), duration=2.0),
+        _cfg(speech_rate={"max_chars_per_sec": 25, "min_text_chars": 80, "disposition": "manual_review"}),
+    )
+    assert result.type == TYPE_IMPLAUSIBLE_SPEECH_RATE
+    assert result.decision == DECISION_MANUAL_REVIEW
+
+
+def test_speech_rate_route_quarantine_keeps_other_families():
+    from audio_engine.core.selection_v3.types import (
+        DECISION_EXCLUDE,
+        RISK_IMPLAUSIBLE_SPEECH_RATE,
+        TYPE_IMPLAUSIBLE_SPEECH_RATE,
+        TYPE_ROUTE_QUARANTINE,
+    )
+
+    long = "A" * 5000
+    texts = {k: "今天天气不错需要帮忙吗" for k in EIGHT}
+    texts["glm_1"] = long
+    texts["glm_2"] = long
+    # Legacy default still excludes whole sample.
+    legacy = classify_sample(_sample(texts, quality=_clean_quality(), duration=3.0), _cfg())
+    assert legacy.type == TYPE_IMPLAUSIBLE_SPEECH_RATE
+    assert legacy.decision == DECISION_EXCLUDE
+
+    # Quarantine mode: drop GLM, continue with remaining families.
+    result = classify_sample(
+        _sample(texts, quality=_clean_quality(), duration=3.0),
+        _cfg(
+            speech_rate={
+                "max_chars_per_sec": 25,
+                "min_text_chars": 80,
+                "disposition": "route_quarantine",
+            },
+            quality={"calibrated": True},
+            refactor_020_mode="on",
+        ),
+    )
+    assert result.type != TYPE_IMPLAUSIBLE_SPEECH_RATE
+    assert "glm_1" in result.implausible_routes
+    assert RISK_IMPLAUSIBLE_SPEECH_RATE in result.risk_tags
+    assert result.candidate_text  # evidence retained
+    assert result.family_status.get("glm") == "incomplete"
+    # With clean quality + remaining stable families, should not be whole-sample exclude.
+    assert result.decision != DECISION_EXCLUDE
+
+
+def test_speech_rate_route_quarantine_blocks_when_families_insufficient():
+    from audio_engine.core.selection_v3.types import (
+        DECISION_RETRY,
+        TYPE_ROUTE_QUARANTINE,
+    )
+
+    long = "幻觉输出" * 500
+    # All routes implausible → no active family left.
+    result = classify_sample(
+        _sample(long, quality=_clean_quality(), duration=2.0),
+        _cfg(
+            speech_rate={
+                "max_chars_per_sec": 25,
+                "min_text_chars": 80,
+                "disposition": "route_quarantine",
+            },
+            refactor_020_mode="on",
+        ),
+    )
+    assert result.type == TYPE_ROUTE_QUARANTINE
+    assert result.decision == DECISION_RETRY
+    assert result.disposition == "route_quarantine"
+
+
+def test_manual_branch_keeps_evidence_candidate():
+    texts = {k: "需要" for k in EIGHT}
+    texts["qwen_1"] = "不需要"
+    texts["qwen_2"] = "不需要"
+    result = classify_sample(_sample(texts, quality=_clean_quality()), _cfg())
+    assert result.type == TYPE_SEMANTIC_RISK
+    assert result.candidate_text  # provisional evidence, not empty

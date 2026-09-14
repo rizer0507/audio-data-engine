@@ -12,12 +12,16 @@ from audio_engine.core.selection_v3.types import (
     RISK_REJECTION_SANITIZATION,
     TYPE_ALL_EMPTY_UNVERIFIED,
     TYPE_AUDIO_QUALITY_RISK,
+    TYPE_CONTENT_COMPLEXITY,
     TYPE_CRITICAL_CONTENT_RISK,
     TYPE_FAMILY_UNSTABLE,
     TYPE_HARDCASE,
+    TYPE_IMPLAUSIBLE_SPEECH_RATE,
     TYPE_PSEUDO_HIGH,
     TYPE_PSEUDO_MEDIUM,
+    TYPE_QUALITY_UNCALIBRATED,
     TYPE_QWEN_CORRECTION_CANDIDATE,
+    TYPE_ROUTE_QUARANTINE,
     TYPE_SEMANTIC_RISK,
     TYPE_SPEECH_PRESENCE_DISAGREEMENT,
     TYPE_VOICEMAIL_CANDIDATE,
@@ -29,6 +33,7 @@ QUEUE_MANUAL = "manual_review"
 QUEUE_AUDIT = "pseudo_audit"
 QUEUE_RETRY = "retry"
 QUEUE_EXCLUDE = "exclude"
+QUEUE_CALIBRATION = "calibration_hold"
 
 
 def route_review(
@@ -45,7 +50,6 @@ def route_review(
 
     if type_ == TYPE_SPEECH_PRESENCE_DISAGREEMENT:
         if presence_has_affirmation or RISK_PRESENCE_CONFLICT in tags:
-            # P0 when non-empty contains affirmation; else P1
             if presence_has_affirmation:
                 return PRIORITY_P0, QUEUE_MANUAL
             return PRIORITY_P1, QUEUE_MANUAL
@@ -66,13 +70,24 @@ def route_review(
     if type_ == TYPE_AUDIO_QUALITY_RISK:
         return PRIORITY_P1, QUEUE_MANUAL
 
+    if type_ == TYPE_QUALITY_UNCALIBRATED:
+        return None, QUEUE_CALIBRATION
+
+    if type_ == TYPE_CONTENT_COMPLEXITY:
+        return PRIORITY_P2, QUEUE_MANUAL
+
+    if type_ == TYPE_ROUTE_QUARANTINE:
+        return None, QUEUE_RETRY
+
+    if type_ == TYPE_IMPLAUSIBLE_SPEECH_RATE:
+        return None, QUEUE_EXCLUDE
+
     if type_ == TYPE_PSEUDO_HIGH:
         return None, QUEUE_AUDIT
 
     if type_ in {TYPE_PSEUDO_MEDIUM, TYPE_HARDCASE}:
         return PRIORITY_P2, QUEUE_MANUAL
 
-    # Risk-tag overrides for semantic-ish cases already typed differently
     if tags & {RISK_NEGATION_FLIP, RISK_FILLER_AFFIRMATION, RISK_REJECTION_SANITIZATION}:
         return PRIORITY_P0, QUEUE_MANUAL
 

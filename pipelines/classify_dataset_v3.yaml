@@ -1,4 +1,6 @@
-# 012-B / 015：多家族双跑分拣（N≥3）— 消费已声明各族双跑 + DNSMOS 侧车 + reservation，只输出候选
+# 旧全量质量门禁回退。新默认是 classify_dataset_v3_asr_anomaly_noise.yaml。
+# 须显式 noise_policy: legacy_full_quality_gate。失败时禁止改回全量评分。
+# 012-B / 015：多家族双跑分拣（N≥3）— 消费已声明各族双跑 + 可选 DNSMOS 侧车 + reservation
 #
 #   # 四族推荐配置
 #   audio-data pipeline run pipelines/classify_dataset_v3.yaml \

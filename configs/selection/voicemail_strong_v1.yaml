@@ -1,0 +1,70 @@
+# 强模板信箱库。弱词只作召回，不能单独赋予自动 V。
+version: voicemail_strong_v1
+min_template_similarity: 0.90
+strong:
+  - id: unreachable_user
+    scene: unreachable
+    subtype: carrier
+    pattern: '(?:你|您)拨打的(?:用户|电话)(?:暂时)?(?:无人接听|无法接通|已关机)'
+    anchors: ["拨打"]
+    canonical: "你拨打的电话无人接听"
+  - id: leave_message_beep
+    scene: leave_message
+    subtype: mailbox
+    pattern: '(?:提示音|[滴嘀](?:一)?声)后.{0,6}(?:留言|留下)'
+    anchors: ["留言", "留下"]
+    canonical: "请在滴声后留言"
+  - id: phone_assistant
+    scene: assistant
+    subtype: assistant
+    pattern: '(?:我是|这里是).{0,6}(?:电话助[手理]|语音助[手理])'
+    anchors: ["助"]
+    canonical: "我是电话助理"
+  - id: unreachable_leave_message
+    scene: leave_message
+    subtype: mailbox
+    pattern: '(?:你|您)拨打的电话暂时不方便接听.{0,12}(?:留言|转达|转答)'
+    anchors: ["留言"]
+    canonical: "你拨打的电话暂时不方便接听请你留言"
+  - id: name_and_reason
+    scene: assistant
+    subtype: assistant
+    pattern: '请留下你的姓名和来电原因'
+    anchors: ["来电原因"]
+    canonical: "请留下你的姓名和来电原因"
+  - id: notify_owner
+    scene: assistant
+    subtype: assistant
+    pattern: '我们将尽快通知机主'
+    anchors: ["通知机主"]
+    canonical: "我们将尽快通知机主感谢你的来电"
+  - id: recording_timeout
+    scene: ivr_menu
+    subtype: ivr
+    pattern: '录音超时'
+    anchors: ["录音超时"]
+    canonical: "录音超时重新录制请按一"
+  - id: screen_mailbox
+    scene: leave_message
+    subtype: mailbox
+    pattern: '屏幕留言'
+    anchors: ["留言"]
+    canonical: "免费使用屏幕留言箱"
+  - id: ivr_press
+    scene: ivr_menu
+    subtype: ivr
+    pattern: '欢迎致电.{0,20}请按[0-9一二三四五六七八九]'
+    anchors: ["请按"]
+    canonical: "欢迎致电请按1"
+weak:
+  - 我是机主
+  - 总机
+  - 人工服务
+  - 你找他什么事
+  - 您找他什么事
+  - 正在转接
+negations:
+  - 不想留言
+  - 没有语音信箱
+  - 不是语音信箱
+  - 别留言

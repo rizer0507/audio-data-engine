@@ -38,9 +38,22 @@ short_utterance:
   max_audio_sec: 2.0
   max_text_chars: 6
 
-# 质量侧车消费：未校准前 risk/band 视为 unknown（分拣可送审，不可自动伪标签）
+# 018：相对时长的字率不可能（ASR 之后分拣栏；不在①音频清洗）
+# disposition: exclude | manual_review | route_quarantine
+# 默认 exclude（018 兼容）；020 影子/重构用 route_quarantine
+speech_rate:
+  max_chars_per_sec: 25
+  min_text_chars: 80
+  disposition: exclude
+
+# 质量：023 新默认不在此文件。本文件是旧全量门禁回退。
+# noise_policy=legacy_full_quality_gate 仍要求先跑 audio_quality_sidecar。
+# 新入口是 pipelines/classify_dataset_v3_asr_anomaly_noise.yaml（noise_policy 由流水线覆盖）。
 quality:
   calibrated: false
+  noise_policy: legacy_full_quality_gate
+
+# refactor_020_mode: off
 
 semantic_lexicon_path: configs/selection/semantic_lexicon_zh_v3.yaml
 voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml

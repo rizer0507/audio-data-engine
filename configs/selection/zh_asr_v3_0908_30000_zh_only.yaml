@@ -1,0 +1,96 @@
+# 025 / 0908-30000 中文-only 影子。不覆盖 classified_v3_*、022/023/024 影子、审核包、release。
+# 本批在规则设计中已被观察，prior_information_used 必须保留。
+policy_version: selection_zh_asr_v3_0908_30000_zh_only_v1
+engine: consensus_v3
+rule_version: selection_business_semantic_v4
+target_family: qwen
+prior_information_used: true
+
+model_families:
+  glm:
+    - glm-asr-1
+    - glm-asr-2
+  sensevoice:
+    - sensevoice-asr-1
+    - sensevoice-asr-2
+  qwen:
+    - qwen3-asr-1
+    - qwen3-asr-2
+
+teacher_families:
+  - glm
+  - sensevoice
+
+expected_runs_per_family: 2
+
+run_aliases:
+  glm-asr-1: glm
+  glm-asr-2: glm
+  sensevoice-asr-1: sensevoice
+  sensevoice-asr-2: sensevoice
+  qwen3-asr-1: qwen
+  qwen3-asr-2: qwen
+
+similarity:
+  family_threshold: 0.98
+  teacher_consensus_threshold: 0.98
+  pseudo_high_min_similarity: 0.98
+  pseudo_medium_min_similarity: 0.95
+  pseudo_medium_min_stable_families: 3
+
+short_utterance:
+  max_audio_sec: 2.0
+  max_text_chars: 6
+
+speech_rate:
+  max_chars_per_sec: 25
+  min_text_chars: 80
+  disposition: route_quarantine
+
+quality:
+  calibrated: false
+  noise_policy: asr_anomaly_noise_v1
+
+tolerance:
+  version: text_tolerance_v1
+  recall_max_distance: 0.10
+  divergence_min_distance: 0.25
+  short_max_chars: 6
+  homophone_pairs:
+    - [先声, 先生]
+    - [嘀声, 滴声]
+    - [嘀一声, 滴一声]
+
+consensus:
+  min_support_families: 2
+  min_support_ratio: 0.6666667
+
+semantic_verifier:
+  mode: business_local
+  endpoint: ""
+  protocol: auto
+  model: ""
+  timeout_sec: 5
+
+classify_text:
+  policy: chinese_only_v1
+  keep_digits: true
+  echo_missing: fail
+  echo:
+    qwen:
+      asr_config: configs/asr/qwen_asr.yaml
+      blank_exact: configs/normalization/blank_exact_qwen_v1.yaml
+    glm:
+      asr_config: configs/asr/glm.yaml
+    kimi:
+      asr_config: configs/asr/kimi.yaml
+    sensevoice:
+      asr_config: configs/asr/sensevoice.yaml
+
+semantic_lexicon_path: configs/selection/semantic_lexicon_zh_v3.yaml
+voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml
+voicemail_strong_path: configs/selection/voicemail_strong_v1.yaml
+max_route_retries: 1
+
+defaults:
+  label_broken: false

@@ -1,10 +1,12 @@
 # DNSMOS P.835 质量侧车（012-B / 009）
-# 模型文件需自行放置到 model_path（官方 primary ONNX）；缺文件时算子启动失败。
-# calibrated: false → 可输出分数，但 noise_band/noise_risk 为 unknown/null。
+# 023 之后这是研究/历史全量评分工具，不得被新分拣入口隐式调用。
+# 新默认入口：pipelines/classify_dataset_v3_asr_anomaly_noise.yaml
+# 模型文件需自行放置到 model_path；缺文件只影响被触发的异常子集，不阻断正常中文分拣。
+# calibrated: false → 可输出分数，但 noise_band/noise_risk 为 unknown/null。禁止改 true。
 
 quality_policy_version: quality_policy_v3.0
 input_audio_key: resampled_16k
-model_path: third_party/dnsmos/sig_bak_ovr.onnx
+model_path: 'D:/Work/DNS-Challenge-master/DNSMOS/DNSMOS/sig_bak_ovr.onnx'
 preprocess_version: p835_official_nonpersonalized_v2
 providers:
   - CPUExecutionProvider

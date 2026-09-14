@@ -293,6 +293,18 @@ def compute_cer_speech(
         from audio_engine.core.selection_v3.text import raw_transcript_text
         reference = normalize_text(gold.gold_text)
         hypothesis = normalize_text(raw_transcript_text(_transcript_entry(sample, model)))
+        from audio_engine.core.selection_v3.text_tolerance import (
+            detect_language,
+            languages_char_comparable,
+        )
+
+        if reference and hypothesis and not languages_char_comparable(
+            detect_language(reference), detect_language(hypothesis)
+        ):
+            excluded_non_speech += 1
+            continue
+        if not reference:
+            continue
         eligible += 1
         ops = align_characters(reference, hypothesis)
         subs += sum(op["operation"] == "substitution" for op in ops)

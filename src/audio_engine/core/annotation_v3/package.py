@@ -23,6 +23,39 @@ from audio_engine.core.annotation_v3.types import (
 )
 from audio_engine.core.artifacts import atomic_write_json
 from audio_engine.core.sample import Sample
+from audio_engine.core.selection_v3.types import PRIORITY_P0, PRIORITY_P1, PRIORITY_P2
+
+
+def _assert_selection_matches_filters(
+    selected: list[Sample],
+    *,
+    priorities: list[str],
+    queues: list[str] | None,
+) -> None:
+    """Fail closed when rows would disagree with declared priority/queue filters (020)."""
+    wanted_prio = set(priorities or [PRIORITY_P0, PRIORITY_P1, PRIORITY_P2])
+    wanted_queues = set(queues) if queues else None
+    full_prio = {PRIORITY_P0, PRIORITY_P1, PRIORITY_P2}
+    allow_empty_priority = wanted_prio >= full_prio
+    for sample in selected:
+        priority = str(sample.labels.get("review_priority") or "")
+        queue = str(sample.labels.get("review_queue") or "")
+        if priority:
+            if priority not in wanted_prio:
+                raise ValueError(
+                    f"export filter mismatch: sample {sample.id} has review_priority={priority!r} "
+                    f"but pack declares priorities={sorted(wanted_prio)}"
+                )
+        elif not allow_empty_priority:
+            raise ValueError(
+                f"export filter mismatch: sample {sample.id} has empty review_priority "
+                f"under restricted priorities={sorted(wanted_prio)}"
+            )
+        if wanted_queues is not None and queue not in wanted_queues:
+            raise ValueError(
+                f"export filter mismatch: sample {sample.id} has review_queue={queue!r} "
+                f"but pack declares queues={sorted(wanted_queues)}"
+            )
 
 
 def _original_sha(sample: Sample) -> str:
@@ -92,6 +125,7 @@ def build_export_rows(
         seed=f"{config.blind_seed_salt}|{revision}",
         view=view,
     )
+    _assert_selection_matches_filters(selected, priorities=priorities, queues=queues)
     qid = queue_id_v3(
         dataset_path,
         revision=revision,
@@ -101,6 +135,9 @@ def build_export_rows(
     )
     identity = [(s.id, _original_sha(s), s.labels.get("type"), s.labels.get("candidate_text"),
                  s.labels.get("rule_version"), s.labels.get("leakage_group_id")) for s in sorted(selected, key=lambda s: s.id)]
+    sample_set_digest = hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
     qid = "review_v3_" + hashlib.sha256(json.dumps([qid, identity], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
     rows: list[dict[str, Any]] = []
     for sample in selected:
@@ -112,6 +149,13 @@ def build_export_rows(
             "queue_revision": revision,
             "source_path": sample.source_path,
             "type": sample.labels.get("type") or sample.labels.get("classification_bucket") or "",
+            "category": sample.labels.get("category") or "",
+            "status": sample.labels.get("status") or "",
+            "label_tier": sample.labels.get("label_tier") or sample.labels.get("label_grade") or "",
+            "label_grade": sample.labels.get("label_grade") or sample.labels.get("label_tier") or "",
+            "coverage_bucket": sample.labels.get("coverage_bucket") or "",
+            "commitment": sample.labels.get("commitment") or "",
+            "usage_blocks": ",".join(str(item) for item in (sample.labels.get("usage_blocks") or [])),
             "risk_tags": _risk_tags_cell(sample),
             "review_priority": sample.labels.get("review_priority") or "",
             "review_queue": sample.labels.get("review_queue") or "",
@@ -180,6 +224,7 @@ def build_export_rows(
         "priorities": list(priorities),
         "queues": list(queues or []),
         "sample_count": len(rows),
+        "sample_set_digest": sample_set_digest,
         "immutable_rows": {r["sample_id"]: {k: r.get(k) for k in IMMUTABLE_EXPORT_COLUMNS} for r in rows},
         "dual_review_count": sum(1 for r in rows if r["requires_dual_review"] == "true"),
         "empty_gold_sentinel": EMPTY_GOLD_SENTINEL,
@@ -187,7 +232,8 @@ def build_export_rows(
         "notes": (
             "Blind pack: listen to original unpadded audio before filling fields. "
             "gold_text: __NULL__=incomplete, __EMPTY__=confirmed non_speech empty. "
-            "Candidate check is a separate view after independent transcription."
+            "Candidate check is a separate view after independent transcription. "
+            "priorities∩queues: rows must match declared filters (020)."
         ),
     }
     return qid, rows, meta

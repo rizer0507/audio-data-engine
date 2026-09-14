@@ -609,7 +609,45 @@ def assign_eval_core_stratum(sample: Sample) -> str:
     return "other"
 
 
+def blocked_speech_train_target(sample: Sample) -> str | None:
+    """022 gate. Auto candidates, noise, and unreviewed S/H are not speech train labels.
+
+    Hold counts are not usable gold. Missing category means an older rule row.
+    """
+    labels = sample.labels
+    category = labels.get("category")
+    status = labels.get("status")
+    tier = str(labels.get("label_tier") or labels.get("label_grade") or "")
+    # 024: a business label is not a verbatim train target, even if a real
+    # sentence was selected. Auto rows are never accepted.
+    if tier in {"semantic_only", "no_transcript"}:
+        return "semantic_layer_not_verbatim"
+    if tier == "pseudo_verbatim_high" and not labels.get("pseudo_audit_passed"):
+        return "pseudo_verbatim_pending_audit"
+    if str(status or "") == "auto_classified" and not labels.get("is_human_verified"):
+        return "auto_classified_not_accepted"
+    if category in {"business_consistent", "non_speech"} and not labels.get("is_human_verified"):
+        return "auto_business_not_verbatim"
+    if category is None and status is None:
+        return None
+    if category == "noise" and not labels.get("is_human_verified"):
+        return "noise_not_speech_target"
+    if category in {"semantic_risk", "hardcase"} and not labels.get("is_human_verified"):
+        return "unreviewed_manual"
+    if status in {"hold", "retry", "excluded", "manual_review", "candidate"} and not labels.get(
+        "is_human_verified"
+    ):
+        return f"status_{status}_not_accepted"
+    if str(labels.get("label_source") or "") == "model_consensus" and not labels.get(
+        "is_human_verified"
+    ):
+        return "model_candidate_not_human"
+    return None
+
+
 def assign_train_pool(sample: Sample, cfg: SamplingConfig) -> str | None:
+    if blocked_speech_train_target(sample):
+        return None
     if is_human_train_gold(sample, allow_non_speech=cfg.allow_non_speech_train):
         if qwen_has_confirmed_error(sample, cfg.qwen_run_keys):
             return "qwen_error_fix"
@@ -1205,8 +1243,16 @@ def apply_sampling_plan_to_samples(
                 pool = plan.train_pool_assignment.get(sample.id)
                 sample.labels["train_pool"] = pool
                 # Target text: human gold vs audited pseudo candidate
-                if pool == "pseudo_high_audited":
-                    sample.labels["train_target_text"] = sample.labels.get("candidate_text")
+                if blocked_speech_train_target(sample):
+                    sample.labels["split"] = "excluded"
+                    sample.labels["exclude_reason"] = blocked_speech_train_target(sample)
+                    sample.labels["train_target_text"] = None
+                    sample.labels["train_target_source"] = "blocked"
+                elif pool == "pseudo_high_audited":
+                    from audio_engine.core.selection_v3.text import transcript_text
+
+                    body = transcript_text(sample.labels.get("candidate_text") or "")
+                    sample.labels["train_target_text"] = body
                     sample.labels["train_target_source"] = "pseudo_high_candidate"
                     # Never write pseudo into human gold fields
                 else:

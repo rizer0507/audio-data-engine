@@ -344,6 +344,45 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
     )
 
 
+def test_classify_v3_shadow_outputs_stay_beside_production(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    class _Step:
+        def __init__(self, operator: str) -> None:
+            self.operator = operator
+            self.params: dict = {}
+
+    monkeypatch.chdir(tmp_path)
+    manifests = tmp_path / "datasets" / "manifests"
+    manifests.mkdir(parents=True)
+    Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(
+        manifests / "prepared_asr_v3_mt3000.parquet"
+    )
+    production = apply_source_name_to_single_pipeline(
+        pipeline_name="classify_dataset_v3",
+        steps=[_Step("quality.classify")],
+        source_name="mt3000",
+    )
+    zh_only = apply_source_name_to_single_pipeline(
+        pipeline_name="classify_dataset_v3_zh_only",
+        steps=[_Step("quality.classify")],
+        source_name="mt3000",
+    )
+    v4 = apply_source_name_to_single_pipeline(
+        pipeline_name="classify_dataset_v3_business_semantic_v4",
+        steps=[_Step("quality.classify")],
+        source_name="mt3000",
+    )
+    assert Path(production["output_manifest"]).as_posix() == (
+        "datasets/stage1/derived/classified_v3_mt3000.parquet"
+    )
+    assert Path(zh_only["output_manifest"]).as_posix() == (
+        "datasets/stage1/derived/classified_v3_mt3000_zh_only_v1.parquet"
+    )
+    assert Path(v4["output_manifest"]).as_posix() == (
+        "datasets/stage1/derived/classified_v3_mt3000_business_semantic_v4.parquet"
+    )
+    assert zh_only["output_manifest"] != production["output_manifest"]
+
+
 def test_parse_and_rewrite_join_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     manifests = tmp_path / "datasets" / "manifests"

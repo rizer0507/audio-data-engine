@@ -7,7 +7,8 @@ pipeline:
   - name: pcm_convert
     operator: audio.pcm_to_wav
     params:
-      sample_rate: 8000
+      sample_rate: 16000
+      source_sample_rate: 16000
       input_audio_key: raw
       output_audio_key: pcm_to_wav
 

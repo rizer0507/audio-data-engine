@@ -29,6 +29,22 @@ def candidate_signature(sample: Sample) -> str:
     })
 
 
+def _requires_legacy_dnsmos_gate(sample: Sample) -> bool:
+    """Legacy full-batch quality gate only. not_required is not a missing score."""
+    labels = sample.labels if isinstance(sample.labels, dict) else {}
+    quality = sample.quality if isinstance(sample.quality, dict) else {}
+    policy = str(labels.get("noise_policy") or quality.get("noise_policy") or "")
+    status = str(
+        labels.get("noise_diagnosis_status")
+        or quality.get("noise_diagnosis_status")
+        or quality.get("dnsmos_status")
+        or ""
+    )
+    if policy == "asr_anomaly_noise_v1" or status == "not_required":
+        return False
+    return True
+
+
 def freeze_audit_plan(samples: Sequence[Sample], config: AnnotationConfig) -> dict[str, Any]:
     from audio_engine.core.dataset_v3.audit import _match_layer, sample_group_balanced
     pool = [s for s in samples if s.labels.get("type") == "pseudo_high"
@@ -42,10 +58,11 @@ def freeze_audit_plan(samples: Sequence[Sample], config: AnnotationConfig) -> di
             raise ValueError("audit candidate requires audio hash and leakage group")
         if not sample.labels.get("run_identities_digest") or sample.labels.get("run_identities_verified") is not True:
             raise ValueError("audit candidate requires verified eight-run identities from prepare")
-        if not all(sample.quality.get(k) for k in ("dnsmos_model_digest", "dnsmos_preprocess_version", "quality_policy_version")):
-            raise ValueError("audit candidate requires versioned DNSMOS evidence")
-        if sample.quality.get("noise_band") not in {"clean", "moderate"} or sample.quality.get("noise_risk") is not False:
-            raise ValueError("audit candidate requires calibrated clean/moderate quality")
+        if _requires_legacy_dnsmos_gate(sample):
+            if not all(sample.quality.get(k) for k in ("dnsmos_model_digest", "dnsmos_preprocess_version", "quality_policy_version")):
+                raise ValueError("audit candidate requires versioned DNSMOS evidence")
+            if sample.quality.get("noise_band") not in {"clean", "moderate"} or sample.quality.get("noise_risk") is not False:
+                raise ValueError("audit candidate requires calibrated clean/moderate quality")
     # Protected strata are predicted strata, never selected using audit outcomes.
     views = []
     for sample in pool:

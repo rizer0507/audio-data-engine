@@ -11,13 +11,24 @@ from audio_engine.core.selection_v3.consensus import (
     analyze_consensus,
     eight_route_full_agreement,
 )
+from audio_engine.core.selection_v3.disposition import decide_disposition
 from audio_engine.core.selection_v3.family_evidence import (
+    active_family_count,
     analyze_families,
     is_short_utterance,
     collect_route_views,
 )
 from audio_engine.core.selection_v3.input_contract import (
     is_physically_invalid,
+)
+from audio_engine.core.selection_v3.noise_trigger import (
+    ensure_trigger_record,
+    quality_state_for_diagnosis,
+    uses_asr_anomaly_noise,
+)
+from audio_engine.core.selection_v3.quality_gate import (
+    derive_quality_state,
+    is_governance_hold,
 )
 from audio_engine.core.selection_v3.result import ClassificationResultV3
 from audio_engine.core.selection_v3.review_router import route_review
@@ -26,10 +37,15 @@ from audio_engine.core.selection_v3.semantic_risk import (
     compile_lexicon,
     polarity_of_text,
 )
+from audio_engine.core.selection_v3.speech_rate import assess_speech_rate
+from audio_engine.core.selection_v3.classify_text import apply_route_audit
 from audio_engine.core.selection_v3.text import text_similarity
 from audio_engine.core.selection_v3.types import (
+    is_business_semantic_rule,
+    is_semantic_tolerant_rule,
     DECISION_AUDIT_PENDING,
     DECISION_EXCLUDE,
+    DECISION_HOLD,
     DECISION_MANUAL_REVIEW,
     DECISION_RETRY,
     FAMILY_INCOMPLETE,
@@ -40,26 +56,39 @@ from audio_engine.core.selection_v3.types import (
     LABEL_SOURCE_MODEL,
     LABEL_TIER_PSEUDO_HIGH,
     LABEL_TIER_PSEUDO_MEDIUM,
+    MIN_MODEL_FAMILIES,
     NOISE_BAND_CLEAN,
     NOISE_BAND_MODERATE,
     NOISE_BAND_NOISY,
     NOISE_BAND_UNKNOWN,
     POLARITY_MIXED,
     POLARITY_POSITIVE,
+    QUALITY_STATE_FAILED,
+    QUALITY_STATE_SCORED_NOISY,
+    QUALITY_STATE_UNCALIBRATED,
+    QUALITY_STATE_UNSUPPORTED,
     RISK_CONSENSUS_AMBIGUOUS,
+    RISK_CONTENT_COMPLEXITY,
+    RISK_IMPLAUSIBLE_SPEECH_RATE,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_MISSING,
     RUN_STATUS_SUCCESS_EMPTY,
     RUN_STATUS_SUCCESS_TEXT,
     SEMANTIC_RISK_TAGS,
     TYPE_ALL_EMPTY_UNVERIFIED,
     TYPE_AUDIO_QUALITY_RISK,
+    TYPE_CONTENT_COMPLEXITY,
     TYPE_CRITICAL_CONTENT_RISK,
     TYPE_FAMILY_UNSTABLE,
     TYPE_HARDCASE,
+    TYPE_IMPLAUSIBLE_SPEECH_RATE,
     TYPE_INFERENCE_INCOMPLETE,
     TYPE_INVALID_AUDIO,
     TYPE_PSEUDO_HIGH,
     TYPE_PSEUDO_MEDIUM,
+    TYPE_QUALITY_UNCALIBRATED,
     TYPE_QWEN_CORRECTION_CANDIDATE,
+    TYPE_ROUTE_QUARANTINE,
     TYPE_SEMANTIC_RISK,
     TYPE_SPEECH_PRESENCE_DISAGREEMENT,
     TYPE_VOICEMAIL_CANDIDATE,
@@ -177,8 +206,31 @@ def classify_sample(
     *,
     voicemail_pattern: re.Pattern[str] | None = None,
 ) -> ClassificationResultV3:
+    if is_business_semantic_rule(config.rule_version):
+        from audio_engine.core.selection_v3.business_semantic import classify_business_semantic
+
+        return classify_business_semantic(
+            sample, config, voicemail_pattern=voicemail_pattern
+        )
+    if is_semantic_tolerant_rule(config.rule_version):
+        from audio_engine.core.selection_v3.semantic_tolerant import classify_semantic_tolerant
+
+        return classify_semantic_tolerant(
+            sample, config, voicemail_pattern=voicemail_pattern
+        )
     patterns = compile_lexicon(config)
+    anomaly = uses_asr_anomaly_noise(config)
+    diagnosis = ensure_trigger_record(sample, config) if anomaly else None
     quality = _quality_fields(sample)
+    if anomaly and diagnosis is not None:
+        # Historical low scores stay in quality.legacy_dnsmos. They do not
+        # reopen the admission gate for a sample that did not need scoring.
+        quality = {
+            **quality,
+            "noise_band": None if diagnosis.get("status") == "not_required" else quality.get("noise_band"),
+            "noise_risk": None,
+            "dnsmos_status": diagnosis.get("status"),
+        }
     duration = _duration_sec(sample)
     routes = collect_route_views(sample, config)
     short = is_short_utterance(
@@ -187,21 +239,130 @@ def classify_sample(
         max_audio_sec=config.short_audio_sec,
         max_text_chars=config.short_text_chars,
     )
-    families = analyze_families(sample, config, patterns, duration_sec=duration)
+
+    # 018: speech-rate guard — before family similarity / Levenshtein work.
+    # Physical invalid still wins; checked next with cheap fields only.
+    if is_physically_invalid(sample):
+        result = ClassificationResultV3(
+            type=TYPE_INVALID_AUDIO,
+            decision=DECISION_EXCLUDE,
+            reason="broken_or_invalid_audio",
+            candidate_text="",
+            risk_tags=[],
+            short_utterance=short,
+            noise_band=quality["noise_band"],
+            noise_risk=quality["noise_risk"],
+            dnsmos_status=quality["dnsmos_status"],
+            configured_family_count=len(config.model_families),
+            rule_version=config.rule_version,
+            quality_state=(
+                quality_state_for_diagnosis(diagnosis)
+                if anomaly
+                else derive_quality_state(
+                    noise_band=quality["noise_band"],
+                    noise_risk=quality["noise_risk"],
+                    dnsmos_status=quality["dnsmos_status"],
+                    quality_calibrated=config.quality_calibrated,
+                )
+            ),
+            disposition="audio_exclude",
+            noise_diagnosis=dict(diagnosis or {}),
+        )
+        return apply_route_audit(result, config, routes)
+
+    rate = assess_speech_rate(
+        routes,
+        duration_sec=duration,
+        max_chars_per_sec=config.max_chars_per_sec,
+        min_text_chars=config.speech_rate_min_text_chars,
+    )
+    use_route_quarantine = rate.triggered and (
+        config.speech_rate_disposition == "route_quarantine"
+        or config.refactor_020_mode in {"on", "shadow"}
+    )
+    quarantine_ids: set[str] = set()
+    if rate.triggered and not use_route_quarantine:
+        disposition = config.speech_rate_disposition
+        decision = (
+            DECISION_MANUAL_REVIEW
+            if disposition == "manual_review"
+            else DECISION_EXCLUDE
+        )
+        return apply_route_audit(
+            ClassificationResultV3(
+            type=TYPE_IMPLAUSIBLE_SPEECH_RATE,
+            decision=decision,
+            reason="chars_per_sec_exceeds_human_speech",
+            review_queue="exclude" if decision == DECISION_EXCLUDE else "manual_review",
+            review_reason="implausible_speech_rate",
+            candidate_text="",
+            risk_tags=[RISK_IMPLAUSIBLE_SPEECH_RATE],
+            short_utterance=short,
+            noise_band=quality["noise_band"],
+            noise_risk=quality["noise_risk"],
+            dnsmos_status=quality["dnsmos_status"],
+            configured_family_count=len(config.model_families),
+            max_chars_per_sec=rate.max_chars_per_sec_observed,
+            implausible_routes=rate.implausible_routes,
+            rule_version=config.rule_version,
+            quality_state=(
+                quality_state_for_diagnosis(diagnosis)
+                if anomaly
+                else derive_quality_state(
+                    noise_band=quality["noise_band"],
+                    noise_risk=quality["noise_risk"],
+                    dnsmos_status=quality["dnsmos_status"],
+                    quality_calibrated=config.quality_calibrated,
+                )
+            ),
+            disposition="audio_exclude",
+            noise_diagnosis=dict(diagnosis or {}),
+            ),
+            config,
+            routes,
+        )
+
+    if use_route_quarantine:
+        quarantine_ids = set(rate.implausible_routes)
+        routes = collect_route_views(
+            sample, config, quarantine_run_ids=quarantine_ids
+        )
+        short = is_short_utterance(
+            duration_sec=duration,
+            routes=routes,
+            max_audio_sec=config.short_audio_sec,
+            max_text_chars=config.short_text_chars,
+        )
+
+    families = analyze_families(
+        sample,
+        config,
+        patterns,
+        duration_sec=duration,
+        quarantine_run_ids=quarantine_ids or None,
+        routes=routes,
+    )
     family_status = {name: state.status for name, state in families.items()}
 
     success_text_routes = [
         r for r in routes if r.status == RUN_STATUS_SUCCESS_TEXT and r.comparison_text
     ]
-    success_empty_routes = [
-        r
-        for r in routes
-        if r.status == RUN_STATUS_SUCCESS_EMPTY
-        or (r.status == RUN_STATUS_SUCCESS_TEXT and not r.comparison_text)
-    ]
     # Treat explicit success_empty only for presence
     success_empty_routes = [r for r in routes if r.status == RUN_STATUS_SUCCESS_EMPTY]
-    incomplete = any(s.status == FAMILY_INCOMPLETE for s in families.values())
+    # Quarantine-only family incompleteness is handled by active_family_count gate,
+    # not by sample-level inference_incomplete (020 route quarantine).
+    incomplete = False
+    for state in families.values():
+        if state.status != FAMILY_INCOMPLETE:
+            continue
+        bad = [
+            r
+            for r in state.routes
+            if r.status in {RUN_STATUS_FAILED, RUN_STATUS_MISSING}
+        ]
+        if quarantine_ids and bad and all(r.run_id in quarantine_ids for r in bad):
+            continue
+        incomplete = True
     family_unstable = any(
         s.status
         in {
@@ -212,13 +373,26 @@ def classify_sample(
         for s in families.values()
     )
 
-    noisy = quality["noise_band"] == NOISE_BAND_NOISY or quality["noise_risk"] is True
-    quality_unknown = (
-        quality["noise_band"] in {NOISE_BAND_UNKNOWN, None}
-        or quality["dnsmos_status"] in {"failed", "unsupported", None}
-        or quality["noise_risk"] is None
-    )
+    if anomaly:
+        # Missing, historical-low, unknown, and uncalibrated scores are not gates.
+        noisy = False
+        quality_unknown = False
+        quality_state = quality_state_for_diagnosis(diagnosis)
+    else:
+        noisy = quality["noise_band"] == NOISE_BAND_NOISY or quality["noise_risk"] is True
+        quality_unknown = (
+            quality["noise_band"] in {NOISE_BAND_UNKNOWN, None}
+            or quality["dnsmos_status"] in {"failed", "unsupported", None}
+            or quality["noise_risk"] is None
+        )
+        quality_state = derive_quality_state(
+            noise_band=quality["noise_band"],
+            noise_risk=quality["noise_risk"],
+            dnsmos_status=quality["dnsmos_status"],
+            quality_calibrated=config.quality_calibrated,
+        )
     crosstalk = bool(quality["crosstalk_trusted"] and quality["crosstalk_suspected"])
+    governance_hold = is_governance_hold(sample)
 
     risks = analyze_risks(
         comparison_texts=[r.comparison_text for r in success_text_routes],
@@ -231,6 +405,10 @@ def classify_sample(
         crosstalk_suspected=crosstalk,
         patterns=patterns,
     )
+    if quarantine_ids:
+        risks.risk_tags = sorted(
+            set(risks.risk_tags) | {RISK_IMPLAUSIBLE_SPEECH_RATE}
+        )
 
     # Teacher consensus at 0.98 for Qwen correction detection
     teacher_consensus = analyze_consensus(
@@ -255,6 +433,23 @@ def classify_sample(
     qwen_fields = _qwen_value_fields(
         families, config, teacher_primary, patterns
     )
+
+    # Evidence-first: provisional candidate for human/hold branches (020).
+    evidence_consensus = analyze_consensus(
+        families,
+        config,
+        threshold=config.pseudo_medium_min_similarity,
+        short=short,
+    )
+    evidence_candidate: str | None = None
+    if evidence_consensus.primary is not None:
+        evidence_candidate = evidence_consensus.primary.candidate_text
+    if not evidence_candidate:
+        for name in config.ordered_families():
+            state = families.get(name)
+            if state and state.representative and state.representative.comparison_text:
+                evidence_candidate = state.representative.comparison_text
+                break
 
     def _finish(
         *,
@@ -285,7 +480,11 @@ def classify_sample(
             priority, queue = None, "retry"
         if decision == DECISION_EXCLUDE:
             priority, queue = None, "exclude"
-        return ClassificationResultV3(
+        if decision == DECISION_HOLD:
+            priority, queue = None, "calibration_hold"
+        if candidate_text is None and evidence_candidate:
+            candidate_text = evidence_candidate
+        result = ClassificationResultV3(
             type=type_,
             decision=decision,
             reason=reason,
@@ -312,16 +511,40 @@ def classify_sample(
             short_utterance=short,
             rule_version=config.rule_version,
             review_reason=review_reason,
+            quality_state=quality_state,
+            noise_diagnosis=dict(diagnosis or {}),
+            max_chars_per_sec=rate.max_chars_per_sec_observed if quarantine_ids else None,
+            implausible_routes=sorted(quarantine_ids) if quarantine_ids else [],
+            evidence_gap_reason=(
+                "routes_quarantined_for_implausible_speech_rate"
+                if quarantine_ids
+                else None
+            ),
             **qwen_fields,
         )
+        result.disposition = decide_disposition(
+            type_=result.type,
+            decision=result.decision,
+            risk_tags=result.risk_tags,
+            quality_state=quality_state,
+            governance_hold=governance_hold,
+            review_queue=result.review_queue,
+        )
+        if quarantine_ids and result.disposition == "audio_exclude":
+            result.disposition = "route_quarantine"
+        return apply_route_audit(result, config, routes)
 
-    # 1. invalid_audio
-    if is_physically_invalid(sample):
+    # 1. invalid_audio already returned above
+
+    # 1b. route quarantine left too few independent families (020 / evolve 018)
+    min_families = max(MIN_MODEL_FAMILIES, 1)
+    if quarantine_ids and active_family_count(families) < min_families:
         return _finish(
-            type_=TYPE_INVALID_AUDIO,
-            decision=DECISION_EXCLUDE,
-            reason="broken_or_invalid_audio",
-            candidate_text="",
+            type_=TYPE_ROUTE_QUARANTINE,
+            decision=DECISION_RETRY,
+            reason="implausible_routes_quarantined_insufficient_families",
+            review_reason="route_quarantine_retry",
+            extra_tags=[RISK_IMPLAUSIBLE_SPEECH_RATE],
         )
 
     # 2. inference_incomplete
@@ -331,9 +554,10 @@ def classify_sample(
             decision=DECISION_RETRY,
             reason="configured_runs_incomplete",
             review_reason="retry_missing_or_failed_runs",
+            extra_tags=[RISK_IMPLAUSIBLE_SPEECH_RATE] if quarantine_ids else None,
         )
 
-    # 3. semantic_risk (P0)
+    # 3. semantic_risk (P0) — inter-model only
     if risks.semantic_risk or (set(risks.risk_tags) & SEMANTIC_RISK_TAGS):
         return _finish(
             type_=TYPE_SEMANTIC_RISK,
@@ -343,13 +567,23 @@ def classify_sample(
             # Preserve Qwen correction flag even under higher-priority bucket
         )
 
-    # 4. critical_content_risk
-    if risks.critical_content_risk or risks.polarity == POLARITY_MIXED:
+    # 4. critical_content_risk — inter-model only (same-text mixed → content_complexity)
+    if risks.critical_content_risk:
         return _finish(
             type_=TYPE_CRITICAL_CONTENT_RISK,
             decision=DECISION_MANUAL_REVIEW,
             reason="critical_token_or_mixed_polarity",
             review_reason="p0_critical",
+        )
+
+    # 4b. identical-text content complexity (not model conflict; sampled P2)
+    if RISK_CONTENT_COMPLEXITY in set(risks.risk_tags) and not risks.critical_content_risk:
+        return _finish(
+            type_=TYPE_CONTENT_COMPLEXITY,
+            decision=DECISION_MANUAL_REVIEW,
+            reason="identical_text_content_complexity",
+            review_reason="content_complexity_sample",
+            extra_tags=[RISK_CONTENT_COMPLEXITY],
         )
 
     # 5. all_empty_unverified
@@ -425,12 +659,35 @@ def classify_sample(
             review_reason="family_instability",
         )
 
-    # 10. audio_quality_risk
+    # 10. audio quality — legacy full-batch gate only.
+    # asr_anomaly_noise_v1 keeps DNSMOS as anomaly evidence, not an admission rule.
+    if not anomaly and quality_state == QUALITY_STATE_FAILED and config.refactor_020_mode == "on":
+        return _finish(
+            type_=TYPE_INFERENCE_INCOMPLETE,
+            decision=DECISION_RETRY,
+            reason="dnsmos_scoring_failed",
+            review_reason="retry_quality_scoring",
+        )
     if (
+        not anomaly
+        and quality_state
+        in {QUALITY_STATE_UNCALIBRATED, QUALITY_STATE_UNSUPPORTED}
+        and config.refactor_020_mode == "on"
+    ):
+        return _finish(
+            type_=TYPE_QUALITY_UNCALIBRATED,
+            decision=DECISION_HOLD,
+            reason="dnsmos_uncalibrated_or_unsupported",
+            review_reason="calibration_hold",
+        )
+    if (not anomaly) and (
         quality["noise_band"] in {NOISE_BAND_NOISY, NOISE_BAND_UNKNOWN}
         or quality_unknown
         or crosstalk
+        or quality_state == QUALITY_STATE_SCORED_NOISY
     ):
+        # Legacy / shadow: keep audio_quality_risk so production packs unchanged
+        # unless refactor_020_mode=on (handled above for uncalibrated).
         return _finish(
             type_=TYPE_AUDIO_QUALITY_RISK,
             decision=DECISION_MANUAL_REVIEW,
@@ -462,16 +719,19 @@ def classify_sample(
         threshold=config.pseudo_high_min_similarity,
         short=short,
     )
-    quality_ok = (
-        quality["dnsmos_status"] == "success"
-        and quality["noise_band"] in {NOISE_BAND_CLEAN, NOISE_BAND_MODERATE}
-        and quality["noise_risk"] is False
-        and not crosstalk
-    )
+    if anomaly:
+        quality_ok = True
+    else:
+        quality_ok = (
+            quality["dnsmos_status"] == "success"
+            and quality["noise_band"] in {NOISE_BAND_CLEAN, NOISE_BAND_MODERATE}
+            and quality["noise_risk"] is False
+            and not crosstalk
+        )
     critical_ok = (
         not risks.critical_content_risk
         and not risks.semantic_risk
-        and risks.polarity != POLARITY_MIXED
+        and RISK_CONTENT_COMPLEXITY not in set(risks.risk_tags)
     )
     if (
         all_stable_text

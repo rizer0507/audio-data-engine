@@ -33,6 +33,11 @@ def requires_dual_review(sample: Sample, config: AnnotationConfig) -> bool:
     priority = str(labels.get("review_priority") or "")
     if dual.priority_p0 and priority == PRIORITY_P0:
         return True
+    # 022/024: unresolved business risk and unexplained hardcase stay mandatory.
+    if str(labels.get("category") or "") in {"semantic_risk", "hardcase"}:
+        return True
+    if str(labels.get("coverage_bucket") or "") == "H":
+        return True
     queue = str(labels.get("review_queue") or "")
     if dual.pseudo_audit_samples and queue == "pseudo_audit":
         return True
@@ -73,13 +78,31 @@ def select_review_batch(
     limit: int | None = None,
     seed: str = "review_batch_v3",
     view: str | None = None,
+    include_unprioritized: bool | None = None,
 ) -> list[Sample]:
     """Select a review batch: P0 all, then P1 by budget priority, then stratified P2.
+
+    When both ``priorities`` and ``queues`` are set, selection is their **intersection**.
+    Samples without ``review_priority`` (e.g. ``pseudo_audit``) are never admitted by
+    matching queue alone while a narrower priority filter is active — that former
+    exception incorrectly pulled P1/P2 into P0 packs (020 / 0908 replay).
+
+    Unprioritized queues are included only when ``include_unprioritized`` is true
+    (default: caller asked for the full P0+P1+P2 set). Pass
+    ``include_unprioritized=True`` for a dedicated ``pseudo_audit`` / ``retry`` /
+    ``exclude`` export under a narrower priority list.
 
     Unselected samples remain in the pool — backlog must not relax auto-admit.
     """
     wanted_prio = set(priorities or [PRIORITY_P0, PRIORITY_P1, PRIORITY_P2])
     wanted_queues = set(queues) if queues else None
+    if include_unprioritized is None:
+        # Full P0+P1+P2 set may still carry pseudo_audit/retry/exclude in "other".
+        # A narrower priority filter is a true intersection: empty priority ≠ P0/P1/P2.
+        # Dedicated unprioritized export must pass include_unprioritized=True (or use the
+        # full priority set with --queue pseudo_audit).
+        full_prio = {PRIORITY_P0, PRIORITY_P1, PRIORITY_P2}
+        include_unprioritized = wanted_prio >= full_prio
     pool: list[Sample] = []
     for sample in samples:
         queue = str(sample.labels.get("review_queue") or "")
@@ -98,10 +121,11 @@ def select_review_batch(
                 queue = "manual_review"
             else:
                 continue
-        if priority and priority not in wanted_prio:
-            # pseudo_audit has priority None — include when queues ask for it
-            if not (wanted_queues and queue in wanted_queues):
+        if priority:
+            if priority not in wanted_prio:
                 continue
+        elif not include_unprioritized:
+            continue
         if wanted_queues is not None and queue not in wanted_queues:
             continue
         state = str(sample.labels.get("annotation_state") or "")

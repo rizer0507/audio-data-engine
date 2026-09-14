@@ -15,6 +15,7 @@ from audio_engine.operators.quality.split_dataset import SplitDatasetOperator
 from audio_engine.operators.quality.evaluation_report import EvaluationReportOperator
 from audio_engine.operators.quality.prepare_dataset_v3 import PrepareDatasetV3Operator
 from audio_engine.operators.quality.dnsmos import DnsmosOperator
+from audio_engine.operators.quality.asr_anomaly_noise import AsrAnomalyNoiseOperator
 from audio_engine.operators.quality.build_dataset_v3 import BuildDatasetV3Operator
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "EvaluationReportOperator",
     "PrepareDatasetV3Operator",
     "DnsmosOperator",
+    "AsrAnomalyNoiseOperator",
     "BuildDatasetV3Operator",
     "AttachAsrV3Operator",
 ]

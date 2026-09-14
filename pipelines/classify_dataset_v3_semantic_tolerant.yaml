@@ -1,0 +1,25 @@
+# 022 语义容错影子分拣。独立产物，不覆盖 classified_v3_* / 审核包 / release。
+#
+#   audio-data pipeline run pipelines/classify_dataset_v3_semantic_tolerant.yaml \
+#     --source-name 0908-30000 \
+#     --config configs/selection/zh_asr_v3_0908_30000_semantic_tolerant.yaml
+#
+# 回退仍用 pipelines/classify_dataset_v3.yaml + 旧 selection 配置。
+# 业务听音校准未完成前，不要把本产物发布为训练集。
+
+name: classify_dataset_v3_semantic_tolerant
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_v3_source_A_semantic_tolerant_20260911.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_v3_semantic_tolerant.yaml
+      quality:
+        calibrated: false

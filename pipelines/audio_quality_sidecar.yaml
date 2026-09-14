@@ -1,3 +1,5 @@
+# 研究/历史复现：全量 DNSMOS。023 新分拣入口不得隐式调用本文件。
+# 新默认：pipelines/classify_dataset_v3_asr_anomaly_noise.yaml
 # 012-B：音频质量侧车 — 仅 DNSMOS（与 ASR 独立，分拣前按 ID+原音频哈希合并）
 #
 #   audio-data pipeline run pipelines/audio_quality_sidecar.yaml \

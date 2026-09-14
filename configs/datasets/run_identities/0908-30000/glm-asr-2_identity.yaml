@@ -1,0 +1,10 @@
+run_id: glm-asr-2
+family: glm
+model_checkpoint_digest: e4c888a69bfc43b063aacf995842402e0f1012e301f353fece9bce9261c889d0
+decode_config_digest: e4097978fa00f935772dbc585060c5a7fc52c214cb5f4f2e49347b7d73f05d8e
+prompt_digest: 5cb8df8315a1110dfb613ffaa30438e4828294a6000a35832fe7ae34f4db108f
+input_audio_digest: 681cc36ac9c510f392b7e909495fecfa6ac1a45c21ef6c92896e640951613b1b
+input_audio_key: resampled_16k
+created_at: '2026-09-10T05:32:33+00:00'
+transcript_key: glm-asr-2
+execution_id: pilot_glm-asr-2_40f0897f8505

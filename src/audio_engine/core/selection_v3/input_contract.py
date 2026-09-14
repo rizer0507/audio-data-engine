@@ -71,7 +71,11 @@ def _explicit_failed(entry: dict[str, Any], sample: Sample, key: str) -> bool:
     return False
 
 
-def classify_run_status(sample: Sample, transcript_key: str) -> str:
+def classify_run_status(
+    sample: Sample,
+    transcript_key: str,
+    config: SelectionV3Config | None = None,
+) -> str:
     """Map one ASR route to success_text | success_empty | failed | missing."""
     entry = _transcript_entry(sample, transcript_key)
     if entry is None:
@@ -84,7 +88,20 @@ def classify_run_status(sample: Sample, transcript_key: str) -> str:
     if text is None:
         return RUN_STATUS_MISSING
     from audio_engine.core.selection_v3.text import raw_transcript_text
-    if raw_transcript_text(entry).strip() == "":
+
+    raw = raw_transcript_text(entry)
+    if config is not None and config.uses_chinese_only_text():
+        from audio_engine.core.selection_v3.classify_text import prepare_classify_text
+
+        family = config.family_of_key(transcript_key)
+        prepared = prepare_classify_text(
+            raw,
+            echo=config.echo_table_for(family),
+            keep_digits=config.classify_text_keep_digits,
+            policy=config.classify_text_policy,
+        )
+        return prepared.status
+    if raw.strip() == "":
         return RUN_STATUS_SUCCESS_EMPTY
     return RUN_STATUS_SUCCESS_TEXT
 
@@ -274,7 +291,7 @@ def evaluate_sample_contract(
     missing: list[str] = []
     failed: list[str] = []
     for key in config.all_transcript_keys():
-        status = classify_run_status(sample, key)
+        status = classify_run_status(sample, key, config)
         statuses[key] = status
         if status == RUN_STATUS_MISSING:
             missing.append(key)

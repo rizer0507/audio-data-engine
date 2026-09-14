@@ -4,6 +4,7 @@
 # 详解：手册/dev/00-总详细手册.txt（正文若仍写 v1 classify，以本文件与 014 为准）
 # 分拣默认：v3（014）；家族数 N≥3×双跑（015），三族无需补 Kimi
 # 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.0.md
+# 依赖：classify_v3 文本相似度需 rapidfuzz（019；pip install -e . 已含）
 # 前置：另开终端已起好所需 ASR 服务
 # 改批次只改 BATCH / SOURCE_DIR / V3_*_CFG 与 runs 登记
 
@@ -52,7 +53,8 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
 
 # 2b) 每路 register-asr-run 后写入 $V3_DATASET_CFG 的 runs:（见 012-A）
 
-# 3) v3：prepare → attach → DNSMOS 侧车 → classify
+# 3) v3：prepare → attach → classify_dataset_v3_asr_anomaly_noise
+#    正常中文不跑 DNSMOS。全量 audio_quality_sidecar 只作研究/历史复现，不是新默认。
 audio-data pipeline run pipelines/prepare_dataset_v3.yaml \
   --source-name "$BATCH" \
   --config "$V3_DATASET_CFG" \
@@ -63,15 +65,30 @@ audio-data pipeline run pipelines/attach_asr_v3.yaml \
   --config "$V3_DATASET_CFG" \
   --force
 
-audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
+audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml \
   --source-name "$BATCH" \
-  --config configs/quality/dnsmos_p835.yaml \
-  --force
+  --config "$V3_SELECTION_CFG"
 
-audio-data pipeline run pipelines/classify_dataset_v3.yaml \
-  --source-name "$BATCH" \
-  --config "$V3_SELECTION_CFG" \
-  --force
+# 研究全量评分（不是新默认，不得在分拣失败时自动改跑）：
+# audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
+#   --source-name "$BATCH" --config configs/quality/dnsmos_p835.yaml --force
+# 旧全量质量门禁回退：
+# audio-data pipeline run pipelines/classify_dataset_v3.yaml \
+#   --source-name "$BATCH" --config "$V3_SELECTION_CFG" --force
+
+# 022 新规则是显式影子，不替换上一行。回退就是上一行（selection_v3.0）。
+# 产物名含 semantic_tolerant_20260911，不要覆盖历史 classified。hold/retry 不是可用金标。
+# audio-data pipeline run pipelines/classify_dataset_v3_semantic_tolerant.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/selection/zh_asr_v3_0908_30000_semantic_tolerant.yaml
+# 024 业务语义影子（不覆盖 022 产物）。自动类不是金标；人审≤3000 未达标。
+# audio-data pipeline run pipelines/classify_dataset_v3_business_semantic_v4.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/selection/zh_asr_v3_0908_30000_business_semantic_v4.yaml
+# 025 中文-only 文本前置层影子（不覆盖 classified_v3_* / 022 / 024）。空路不是无语音金标。
+# audio-data pipeline run pipelines/classify_dataset_v3_zh_only.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/selection/zh_asr_v3_0908_30000_zh_only.yaml
 
 audio-data review export-summary "datasets/stage1/derived/classified_v3_${BATCH}.parquet" \
   --output "data/exports/summary_v3_${BATCH}.xlsx" \

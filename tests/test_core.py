@@ -74,7 +74,7 @@ def test_pcm_and_resample_passthrough(sample_wav: Path):
     pcm = OperatorRegistry.get("audio.pcm_to_wav")
     pcm_cfg = OperatorConfig(
         params={
-            "sample_rate": 8000,
+            "sample_rate": 16000,
             "input_audio_key": "raw",
             "output_audio_key": "pcm_wav",
         },

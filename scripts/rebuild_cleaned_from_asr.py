@@ -45,12 +45,14 @@ def process_sample(sample: Sample) -> Sample:
             out.labels.pop(key, None)
     if out.sha256 and not out.labels.get("original_audio_sha256"):
         out.labels["original_audio_sha256"] = str(out.sha256)
-    out.lineage = list(out.lineage or [])
-    out.lineage.append(
-        {
-            "op": "rebuild_cleaned_from_asr",
-            "note": "derived from ASR parquet; not a fresh cleaning pass",
-        }
+    if not isinstance(out.quality, dict):
+        out.quality = {}
+    if not isinstance(out.labels, dict):
+        out.labels = {}
+    out.add_lineage(
+        "rebuild_cleaned_from_asr",
+        "1.0.0",
+        {"note": "derived from ASR parquet; not a fresh cleaning pass"},
     )
     return out
 

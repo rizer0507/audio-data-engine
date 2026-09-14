@@ -1,0 +1,11 @@
+run_id: qwen3-asr-2
+family: qwen
+model_checkpoint_digest: bc4c21d26a8fedbe7d30785dd96fa90785c12d0bcfabaf2fccfa7f37022486d2
+decode_config_digest: d0e1d77ee86745fb82137a6c5cde157021f0eb90a2e34346b433438d28e542b1
+prompt_digest: e1cffbfcd8d6d4076c7651e3e2dd0bdebb191458b2bbd0c14f8910132b9f6a9c
+input_audio_digest: 681cc36ac9c510f392b7e909495fecfa6ac1a45c21ef6c92896e640951613b1b
+input_audio_key: resampled_16k
+created_at: '2026-09-10T05:30:57+00:00'
+transcript_key: qwen3-asr-2
+artifact_id: manifest_1138f2aba2ee_555f6fda
+execution_id: pilot_qwen3-asr-2_39d9a6e97bad

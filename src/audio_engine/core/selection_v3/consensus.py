@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 
 from audio_engine.core.selection_v3.config import SelectionV3Config
 from audio_engine.core.selection_v3.family_evidence import FamilyEvidence, RouteView
-from audio_engine.core.selection_v3.text import pairwise_min_similarity, text_similarity
+from audio_engine.core.selection_v3.text import (
+    pairwise_min_similarity,
+    text_similarity,
+    transcript_text,
+)
 from audio_engine.core.selection_v3.types import FAMILY_STABLE_TEXT, RISK_CONSENSUS_AMBIGUOUS
 
 
@@ -21,6 +25,8 @@ class ConsensusCluster:
     min_similarity: float
     candidate_text: str
     candidate_run_id: str
+    # Audit copy of the selected route. May still contain control tags.
+    candidate_raw_text: str = ""
     ambiguous: bool = False
     configured_family_count: int = 0
 
@@ -126,6 +132,9 @@ def _build_cluster(
     # Also verify all original comparison_text of supporting families' both routes
     # are consistent with the cluster threshold when both are in members.
     medoid = _family_balanced_medoid(members, family_order=config.ordered_families())
+    raw = medoid.raw_text or ""
+    # 021: visible candidate is tag-stripped body, never the model control prefix.
+    cleaned = transcript_text(raw) or transcript_text(medoid.comparison_text)
     return ConsensusCluster(
         members=list(members),
         families=families,
@@ -133,7 +142,8 @@ def _build_cluster(
         support_ratio_of_4=len(families) / max(configured_family_count, 1),
         teacher_support_count=teacher_count,
         min_similarity=min_sim,
-        candidate_text=medoid.raw_text or medoid.comparison_text,
+        candidate_text=cleaned,
+        candidate_raw_text=raw,
         candidate_run_id=medoid.run_id,
         configured_family_count=configured_family_count,
     )
