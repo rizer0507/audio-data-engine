@@ -42,6 +42,7 @@ from audio_engine.core.selection_v3.classify_text import apply_route_audit
 from audio_engine.core.selection_v3.text import text_similarity
 from audio_engine.core.selection_v3.types import (
     is_business_semantic_rule,
+    is_five_class_rule,
     is_semantic_tolerant_rule,
     DECISION_AUDIT_PENDING,
     DECISION_EXCLUDE,
@@ -206,6 +207,12 @@ def classify_sample(
     *,
     voicemail_pattern: re.Pattern[str] | None = None,
 ) -> ClassificationResultV3:
+    if is_five_class_rule(config.rule_version):
+        from audio_engine.core.selection_v3.five_class import classify_five_class
+
+        return classify_five_class(
+            sample, config, voicemail_pattern=voicemail_pattern
+        )
     if is_business_semantic_rule(config.rule_version):
         from audio_engine.core.selection_v3.business_semantic import classify_business_semantic
 

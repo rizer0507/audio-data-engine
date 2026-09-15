@@ -573,7 +573,11 @@ def apply_source_name_to_single_pipeline(
             "aggregate_base": None,
         }
 
-    if "classify_dataset_v3" in key or key in {"classify_v3", "classified_v3"}:
+    if (
+        "classify_dataset_v3" in key
+        or "classify_dataset_five_class" in key
+        or key in {"classify_v3", "classified_v3", "classify_five_class_v1"}
+    ):
         if run_alias is not None:
             raise ValueError("--asr-run is only valid for ASR inference pipelines")
         if base_alias is not None:
@@ -585,6 +589,8 @@ def apply_source_name_to_single_pipeline(
         # 020 shadow: write beside production classified, never overwrite it.
         if "shadow_020" in key:
             out = staged_manifest_path(f"classified_v3_{name}_shadow_020")
+        elif "five_class" in key:
+            out = staged_manifest_path(f"classified_five_class_v1_{name}")
         elif "zh_only" in key:
             out = staged_manifest_path(f"classified_v3_{name}_zh_only_v1")
         elif "business_semantic" in key:

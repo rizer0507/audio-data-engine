@@ -1,0 +1,80 @@
+# 027 selection_five_class_v1 — 通用三族模板（契约别名方案 A）
+# 正式业务规则见 docs/04-改进需求/进行中/027-五类分拣重构正式需求.md
+# 不覆盖历史 classified_v3_* / 审核包 / release。
+policy_version: selection_five_class_v1
+engine: consensus_v3
+rule_version: selection_five_class_v1
+target_family: qwen
+
+model_families:
+  glm:
+    - glm_1
+    - glm_2
+  sensevoice:
+    - sensevoice_1
+    - sensevoice_2
+  qwen:
+    - qwen_1
+    - qwen_2
+
+teacher_families:
+  - glm
+  - sensevoice
+
+expected_runs_per_family: 2
+
+run_aliases:
+  glm_1: glm
+  glm_2: glm
+  sensevoice_1: sensevoice
+  sensevoice_2: sensevoice
+  qwen_1: qwen
+  qwen_2: qwen
+
+similarity:
+  family_threshold: 0.98
+  teacher_consensus_threshold: 0.98
+  pseudo_high_min_similarity: 0.98
+  pseudo_medium_min_similarity: 0.95
+  pseudo_medium_min_stable_families: 3
+
+short_utterance:
+  max_audio_sec: 2.0
+  max_text_chars: 6
+
+speech_rate:
+  max_chars_per_sec: 25
+  min_text_chars: 80
+  disposition: exclude
+
+quality:
+  calibrated: false
+  noise_policy: asr_anomaly_noise_v1
+
+selection:
+  seed: selection_five_class_v1
+  min_stable_families: 3
+  short_polarity_max_han_chars: 4
+  family_weights:
+    qwen: 2
+    glm: 1
+    sensevoice: 1
+
+classify_text:
+  policy: five_class_v1
+  keep_digits: true
+  echo_missing: fail
+  echo:
+    qwen:
+      asr_config: configs/asr/qwen_asr.yaml
+      blank_exact: configs/normalization/blank_exact_qwen_v1.yaml
+    glm:
+      asr_config: configs/asr/glm.yaml
+    sensevoice:
+      asr_config: configs/asr/sensevoice.yaml
+
+semantic_lexicon_path: configs/selection/semantic_lexicon_zh_v3.yaml
+voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml
+
+defaults:
+  label_broken: false

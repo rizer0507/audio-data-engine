@@ -7,11 +7,15 @@ RULE_VERSION = "selection_v3.0"
 RULE_VERSION_SEMANTIC_TOLERANT = "selection_v3_semantic_tolerant_20260911"
 # 024 opt-in. Does not replace 022 or the production default.
 RULE_VERSION_BUSINESS_SEMANTIC = "selection_business_semantic_v4"
+# 027 five-class refactor. Opt-in via rule_version; legacy paths stay unchanged.
+RULE_VERSION_FIVE_CLASS = "selection_five_class_v1"
 TOLERANCE_VERSION = "text_tolerance_v1"
 # 025 opt-in text pre-layer. Production default stays legacy until an explicit switch.
 CLASSIFY_TEXT_VERSION = "classify_text_zh_only_v1"
+CLASSIFY_TEXT_VERSION_FIVE_CLASS = "classify_text_five_class_v1"
 CLASSIFY_TEXT_POLICY_LEGACY = "legacy"
 CLASSIFY_TEXT_POLICY_CHINESE_ONLY = "chinese_only_v1"
+CLASSIFY_TEXT_POLICY_FIVE_CLASS = "five_class_v1"
 VERIFIER_VERSION_LOCAL = "local_semantic_verifier_v1"
 ANNOTATION_VERSION = "annotation_v3.0"
 DATASET_POLICY_VERSION = "dataset_policy_v3.0"
@@ -92,6 +96,9 @@ CATEGORY_SEMANTIC_RISK = "semantic_risk"
 CATEGORY_NOISE = "noise"
 CATEGORY_HARDCASE = "hardcase"
 CATEGORY_VOICEMAIL = "voicemail"
+# 027 five business classes. Not a silent rename of 022 gold/noise.
+CATEGORY_GOLD_CANDIDATE = "gold_candidate"
+CATEGORY_ENVIRONMENT_NOISE = "environment_noise"
 # 024 business-first classes. Not a silent rename of the 022 five-class schema.
 CATEGORY_BUSINESS_CONSISTENT = "business_consistent"
 CATEGORY_NON_SPEECH = "non_speech"
@@ -114,6 +121,56 @@ BUSINESS_CATEGORIES_V4 = frozenset(
         CATEGORY_VOICEMAIL,
     }
 )
+BUSINESS_CATEGORIES_FIVE_CLASS = frozenset(
+    {
+        CATEGORY_VOICEMAIL,
+        CATEGORY_GOLD_CANDIDATE,
+        CATEGORY_SEMANTIC_RISK,
+        CATEGORY_HARDCASE,
+        CATEGORY_ENVIRONMENT_NOISE,
+    }
+)
+
+# 027 sample-level exits (mutually exclusive, ID-conserving).
+OUTCOME_EXCLUDED = "excluded"
+OUTCOME_CLASSIFIED = "classified"
+OUTCOME_MANUAL_ANNOTATION = "manual_annotation"
+OUTCOMES_FIVE_CLASS = frozenset(
+    {OUTCOME_EXCLUDED, OUTCOME_CLASSIFIED, OUTCOME_MANUAL_ANNOTATION}
+)
+
+# Per-route disposition under five_class (distinct from success_empty).
+ROUTE_ELIGIBLE = "eligible"
+ROUTE_EXCLUDED = "excluded"
+ROUTE_FAILED = "failed"
+ROUTE_MISSING = "missing"
+ROUTE_DISPOSITIONS = frozenset(
+    {ROUTE_ELIGIBLE, ROUTE_EXCLUDED, ROUTE_FAILED, ROUTE_MISSING}
+)
+
+EXCLUSION_FOREIGN = "foreign_transcript"
+EXCLUSION_HOTWORD_ECHO = "hotword_echo"
+EXCLUSION_PROMPT_ECHO = "prompt_echo"
+EXCLUSION_REASONS = frozenset(
+    {EXCLUSION_FOREIGN, EXCLUSION_HOTWORD_ECHO, EXCLUSION_PROMPT_ECHO}
+)
+
+# Strict semantic subtypes (027). Old risk tags must not assign the main class.
+SUBTYPE_SEMANTIC_REVERSAL = "semantic_reversal"
+SUBTYPE_HALLUCINATED_ASSERTION = "hallucinated_assertion"
+SUBTYPE_SHORT_POLARITY_AMBIGUITY = "short_polarity_ambiguity"
+SEMANTIC_SUBTYPES_STRICT = frozenset(
+    {
+        SUBTYPE_SEMANTIC_REVERSAL,
+        SUBTYPE_HALLUCINATED_ASSERTION,
+        SUBTYPE_SHORT_POLARITY_AMBIGUITY,
+    }
+)
+
+# Direct annotation task kinds (027 §8).
+TASK_TRANSCRIBE = "transcribe"
+TASK_RESOLVE_SEMANTICS = "resolve_semantics"
+TASK_VERIFY_TARGET_SPEECH = "verify_target_speech"
 
 # Processing lifecycle. Classification never writes accepted.
 STATUS_CANDIDATE = "candidate"
@@ -260,3 +317,9 @@ def is_business_semantic_rule(rule_version: str | None) -> bool:
     return text == RULE_VERSION_BUSINESS_SEMANTIC or text.startswith(
         "selection_business_semantic_v4"
     )
+
+
+def is_five_class_rule(rule_version: str | None) -> bool:
+    """True only for the explicit 027 five-class rule id."""
+    text = str(rule_version or "").strip()
+    return text == RULE_VERSION_FIVE_CLASS or text.startswith("selection_five_class_")

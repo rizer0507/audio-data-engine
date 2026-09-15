@@ -142,6 +142,12 @@ class SelectionV3Config:
     classify_text_echo_missing: str = "fail"
     classify_text_echo: dict[str, Any] = field(default_factory=dict)
     classify_text_echo_fingerprint: str = ""
+    # 027 five-class: reproducible weighted gold selection (Qwen=2, others=1).
+    selection_seed: str = "selection_five_class_v1"
+    family_selection_weights: dict[str, float] = field(default_factory=dict)
+    gold_min_stable_families: int = 3
+    short_polarity_max_han_chars: int = 4
+    noise_call_counter: list[int] | None = field(default=None, repr=False)
 
     def all_transcript_keys(self) -> list[str]:
         """Ordered unique keys expected across configured families."""
@@ -342,10 +348,21 @@ class SelectionV3Config:
         verifier = params.get("semantic_verifier") or {}
         consensus_req = params.get("consensus") or {}
         classify_text = params.get("classify_text") or {}
+        selection = params.get("selection") or params.get("gold_selection") or {}
         homophone_pairs = []
         for item in tolerance.get("homophone_pairs") or []:
             if isinstance(item, (list, tuple)) and len(item) == 2:
                 homophone_pairs.append((str(item[0]), str(item[1])))
+
+        weight_raw = (
+            selection.get("family_weights")
+            or params.get("family_selection_weights")
+            or {}
+        )
+        family_weights = {
+            str(k): float(v)
+            for k, v in (weight_raw.items() if isinstance(weight_raw, dict) else {})
+        }
 
         negative: list[str] = []
         positive: list[str] = []
@@ -543,6 +560,24 @@ class SelectionV3Config:
             )
             .strip()
             .lower(),
+            selection_seed=str(
+                selection.get("seed")
+                or params.get("selection_seed")
+                or "selection_five_class_v1"
+            ),
+            family_selection_weights=family_weights,
+            gold_min_stable_families=int(
+                selection.get(
+                    "min_stable_families",
+                    params.get("gold_min_stable_families", 3),
+                )
+            ),
+            short_polarity_max_han_chars=int(
+                selection.get(
+                    "short_polarity_max_han_chars",
+                    params.get("short_polarity_max_han_chars", 4),
+                )
+            ),
         )
         cfg.validate_family_config()
         disposition = cfg.speech_rate_disposition
@@ -566,6 +601,10 @@ class SelectionV3Config:
 
         cfg.noise_policy = normalize_noise_policy(cfg.noise_policy)
         cfg.classify_text_policy = normalize_classify_text_policy(cfg.classify_text_policy)
+        from audio_engine.core.selection_v3.types import is_five_class_rule
+
+        if is_five_class_rule(cfg.rule_version) and cfg.classify_text_policy == "legacy":
+            cfg.classify_text_policy = normalize_classify_text_policy("five_class_v1")
         if cfg.classify_text_echo_missing not in {"fail", "echo_list_missing"}:
             raise ValueError(
                 "classify_text.echo_missing must be 'fail' or 'echo_list_missing', "

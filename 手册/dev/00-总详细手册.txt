@@ -12,11 +12,13 @@
   工序二「训练」            = 引擎④训练流水线（外部框架）
   工序三「评测」            = 引擎⑤评测（本版服务器手册为 Model Registry 入口）
 
-【现行默认 · 2026-09 / 014·015·019】
-  工序一③默认：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_v3_asr_anomaly_noise
+【现行默认 · 2026-09 / 014·015·019·023·027】
+  工序一③正式：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v1
+  legacy 回退：classify_dataset_v3_asr_anomaly_noise + selection_v3.0
+  噪声：分拣 YAML 内嵌按需 DNSMOS（diagnose_asr_anomaly）；全量 sidecar 仅研究。见下文「5b. 噪声打分」。
   家族契约：N≥3 × 每族双跑；四族/Kimi 为可选增强，非门票。
   文本相似度：rapidfuzz（019；pip install -e . 已含）。
-  一键命令以 手册/dev/01-工序一-数据清洗落库打标.txt 与 单条流水线执行命令.txt §2f-v3 为准。
+  一键命令以 手册/dev/01-工序一-数据清洗落库打标.txt 与 单条流水线执行命令.txt §2f-v3-027 / §2f-noise 为准。
   下文若仍出现 multi_asr_aggregate → classify_dataset（v1），一律视为 legacy / 诊断。
 
 工序总览原文（历史快照；分拣入口已由上框覆盖）：
@@ -29,11 +31,13 @@
 - v3 正式路径不经 multi_asr_aggregate；须 catalog register 后 attach_asr_v3
 - （legacy 诊断）聚拢+字准：`--aggregate-base` / `--join-manifest` / `asr_metric_pipeline`
 
-工序③要点（现行默认 v3）：
-- classify 使用 `configs/selection/zh_asr_v3.yaml` 或三族/0908 方案 B 配置；产物 `classified_v3_*`
-- 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.0.md
-- 文本相似度：rapidfuzz（019）；分拣并发加速仍见进行中 017
-- （legacy）v1：`configs/selection/zh_asr_v1.yaml` + `pipelines/classify_dataset.yaml` 仅复现
+工序③要点（现行默认）：
+- 正式：`classify_dataset_five_class_v1` + `selection_five_class_v1`；产物 `classified_five_class_v1_*`
+- legacy：`classify_dataset_v3_asr_anomaly_noise` + `selection_v3.0`；产物 `classified_v3_*_asr_anomaly_noise_v1`
+- 规则 SSOT：docs/02-规范规则/数据挑选规则_v1.md；legacy 见旧 v3.0 文档（已废止作业务依据）
+- 噪声：按需 DNSMOS（023/027），正常中文 not_required；未校准不得自动定 environment_noise
+- 文本相似度：rapidfuzz（019）
+- （更旧 legacy）v1：`pipelines/classify_dataset.yaml` 仅复现
 
 工序⑤要点：
 - **与④训练无依赖**：只要评测集与各推理结果 id 对齐即可，不强制 Model Registry
@@ -528,13 +532,27 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 ================================================================================
 
 -------------------------------------------------------
-5. 使用版本化策略自动分拣（现行默认 = v3）
+5. 使用版本化策略自动分拣（现行正式 = 五类 v1）
 -------------------------------------------------------
-# 正式入口见 手册/dev/01-工序一-*.txt 与 单条流水线执行命令.txt §2f-v3：
-#   prepare_dataset_v3 → attach_asr_v3 → classify_dataset_v3_asr_anomaly_noise
-# 配置：configs/selection/zh_asr_v3.yaml（或 three_family / 0908_30000）
-# 产物：classified_v3_${BATCH}.parquet
+# 正式入口见 手册/dev/01-工序一-*.txt 与 单条流水线执行命令.txt §2f-v3-027：
+#   prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v1
+# 配置：configs/selection/zh_asr_five_class_v1.yaml（或批次专用）
+# 产物：classified_five_class_v1_${BATCH}.parquet（勿覆盖 classified_v3_*）
+#
+# YAML 内两步（噪声按需诊断已内嵌，无需先跑全量 sidecar）：
+#   1) diagnose_asr_anomaly  = quality.asr_anomaly_noise + dnsmos_p835.yaml
+#   2) classify              = quality.classify（rule_version=selection_five_class_v1）
 
+# audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/selection/zh_asr_five_class_v1.yaml
+
+# ---- legacy 回退：ASR 异常噪声 + selection_v3.0 ----
+# audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/selection/zh_asr_v3_three_family.yaml
+
+# ---- 更旧：全量质量门禁（须显式 legacy_full_quality_gate）----
 # audio-data pipeline run pipelines/classify_dataset_v3.yaml \
 #   --source-name "$BATCH" \
 #   --config configs/selection/zh_asr_v3_three_family.yaml \
@@ -547,6 +565,65 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 #   --force
 # 注意：agreement CER 只是模型间一致程度，不是真实准确率。
 # 修改阈值前必须在人审校准集上验证，并同步升级 policy_version。
+
+
+-------------------------------------------------------
+5b. 噪声打分（DNSMOS）— 工序、步骤与边界
+-------------------------------------------------------
+# 权威需求：009（侧车接入）/ 023（按需触发）/ 027 §9（五类下噪声职责）
+# 规则：docs/02-规范规则/数据挑选规则_v1.md §6.5 / §9
+# 配置：configs/quality/dnsmos_p835.yaml（默认 calibrated: false）
+
+【在整条链中的位置】
+  ① 清洗落库（不跑 DNSMOS、不跑 VAD）
+    → ② 多族 ASR + register + prepare/attach
+    → ③′【噪声诊断】按需 DNSMOS（内嵌于分拣 YAML 的 diagnose 步）
+    → ③ 五类/文本分拣（消费分数作旁证；未校准不能单独定 environment_noise）
+
+【两条路径】
+  A. 生产主路径（推荐）
+     pipelines/classify_dataset_five_class_v1.yaml
+       或 legacy：classify_dataset_v3_asr_anomaly_noise.yaml
+     步骤：diagnose_asr_anomaly → classify
+     正常中文 → not_required（不加载推理、不写假干净分）
+  B. 研究/历史全量（非默认）
+     pipelines/audio_quality_sidecar.yaml
+     输入 cleaned_* → 输出 quality_sidecar_*
+     分拣失败时禁止自动改跑本路径冒充修复
+
+【执行前检查清单】
+  [ ] dnsmos_p835.yaml 的 model_path 指向真实 ONNX（缺文件 → 被触发样本 failed，不阻断 not_required）
+  [ ] 已安装 onnxruntime（或 pip install '.[dnsmos]'）
+  [ ] resampled_16k 在本机可读（/data2 路径须在可读服务器跑）
+  [ ] calibrated 仍为 false（听音校准完成前禁止改 true）
+
+【触发条件】
+  selection_v3.0（023）：
+    1) 全部配置家族均无有效转写
+    2) 任一成功路次正文含非中文话语
+  selection_five_class_v1（027）：
+    · 外语 / 热词全文回声 / 提示词全文回声 → 路级排除，不作为噪声触发
+    · 全族无有效转写等仍可诊断
+    · 空/有字+肯否、短应答冲突等 → 作旁证或 verify_target_speech，不因低分自动进噪声类
+
+【状态与字段】
+  noise_diagnosis_status: not_required | pending | success | failed | unsupported
+  分数: dnsmos_sig / dnsmos_bak / dnsmos_ovrl
+  未校准: noise_band=unknown；success ≠ 已证实环境噪声
+  五类 environment_noise: 仅校准声学或人工听音确认后；否则人工任务，禁止 pending_evidence 池
+
+【命令示例】
+# 主路径：随五类/legacy 分拣一起跑（见 §5），无需单独命令。
+
+# 研究全量侧车：
+# audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/quality/dnsmos_p835.yaml \
+#   --force
+
+# 依赖（内网示例，可选）：
+# pip install distillmos --index-url http://maven.paic.com.cn/repository/pypi/simple \
+#   --trusted-host maven.paic.com.cn
 
 
 -------------------------------------------------------
@@ -970,5 +1047,15 @@ wav/pcm（例：/data2/data-cp/lizi/mt3000）
 # 2d 字准
 # audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name test_local
 
-# 噪声评分依赖（清洗相关）
-# pip install distillmos --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
+# ---------------------------------------------------------------------------
+# 噪声打分依赖与速查（与正文 §5b 一致）
+# ---------------------------------------------------------------------------
+# 主路径：随 classify_dataset_five_class_v1 / classify_dataset_v3_asr_anomaly_noise 内嵌 diagnose
+# 研究全量：pipelines/audio_quality_sidecar.yaml + configs/quality/dnsmos_p835.yaml
+# ONNX：配置 model_path；缺文件只影响被触发子集
+# pip：onnxruntime 或 pip install '.[dnsmos]'
+# 内网可选：
+# pip install distillmos --index-url http://maven.paic.com.cn/repository/pypi/simple \
+#   --trusted-host maven.paic.com.cn
+# calibrated:false；未校准不得自动定 environment_noise / 不得改 true 冒充已校准
+# 详解：手册/dev/01 §3b；docs/04-改进需求/已完成/009、进行中/023、027 §9

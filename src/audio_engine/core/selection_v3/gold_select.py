@@ -2,11 +2,15 @@
 
 ``D`` uses the versioned tolerant distance. Exact-transcript support does not
 merge 你/您 or other tolerance mappings. Dual-run never adds a second vote.
+
+027 adds reproducible family-weighted random selection after eligibility.
 """
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
+from typing import Mapping
 
 from audio_engine.core.selection_v3.text_tolerance import tolerant_distance
 
@@ -34,6 +38,11 @@ class SelectionResult:
     family_order: list[str] = field(default_factory=list)
     run_order: list[str] = field(default_factory=list)
     tolerance_version: str = ""
+    selection_policy: str = "min_mean_tolerant_distance"
+    selection_weights: dict[str, float] = field(default_factory=dict)
+    selection_draw: float | None = None
+    selection_seed: str = ""
+    selection_version: str = ""
 
 
 def _round6(value: float) -> float:
@@ -121,6 +130,99 @@ def select_representative_text(
         family_order=list(family_order),
         run_order=list(run_order or []),
         tolerance_version=tolerance_version,
+        selection_policy="min_mean_tolerant_distance",
+    )
+
+
+def default_family_weight(family: str, weights: Mapping[str, float] | None = None) -> float:
+    configured = dict(weights or {})
+    if family in configured:
+        return float(configured[family])
+    if family.lower() == "qwen":
+        return 2.0
+    return 1.0
+
+
+def stable_unit_interval(seed: str, sample_id: str, rule_version: str) -> float:
+    """Reproducible U(0,1) from seed/sample/version. Independent of process hash/order."""
+    digest = hashlib.sha256(
+        f"{seed}\0{sample_id}\0{rule_version}".encode("utf-8")
+    ).hexdigest()
+    value = int(digest[:13], 16)
+    return value / float(1 << 52)
+
+
+def select_weighted_family_text(
+    reps: list[FamilyRep],
+    *,
+    sample_id: str,
+    rule_version: str,
+    seed: str = "selection_five_class_v1",
+    family_weights: Mapping[str, float] | None = None,
+    family_order: list[str] | None = None,
+) -> SelectionResult | None:
+    """Weighted random among eligible family reps. Dual-run never doubles weight.
+
+    Candidates are sorted by configured family order then run_id so shard/input
+    order cannot change which interval a family occupies.
+    """
+    if not reps:
+        return None
+    order = list(family_order or [])
+    ordered = sorted(
+        reps,
+        key=lambda item: (
+            order.index(item.family) if item.family in order else 10_000,
+            item.family,
+            item.run_id,
+        ),
+    )
+    weights: dict[str, float] = {}
+    cumulative: list[tuple[FamilyRep, float, float, float]] = []
+    total = 0.0
+    for item in ordered:
+        weight = default_family_weight(item.family, family_weights)
+        if weight <= 0:
+            continue
+        start = total
+        total += weight
+        cumulative.append((item, weight, start, total))
+        weights[item.family] = weight
+    if total <= 0 or not cumulative:
+        return None
+    draw = stable_unit_interval(seed, sample_id, rule_version)
+    target = draw * total
+    chosen: FamilyRep | None = None
+    for item, weight, start, end in cumulative:
+        if start <= target < end or (item is cumulative[-1][0] and abs(target - total) < 1e-15):
+            chosen = item
+            break
+    if chosen is None:
+        chosen = cumulative[-1][0]
+    return SelectionResult(
+        transcript_text=chosen.transcript_text,
+        raw_text=chosen.raw_text,
+        family=chosen.family,
+        run_id=chosen.run_id,
+        distance=0.0,
+        transcript_support_count=transcript_support_count(chosen, ordered),
+        tie_break_reason="weighted_random",
+        representatives=[
+            {
+                "family": item.family,
+                "run_id": item.run_id,
+                "transcript_text": item.transcript_text,
+                "weight": str(weights.get(item.family, 0.0)),
+            }
+            for item in ordered
+        ],
+        family_order=order,
+        tolerance_version="",
+        selection_policy="family_weighted_random_v1",
+        selection_weights=dict(weights),
+        selection_draw=draw,
+        selection_seed=seed,
+        selection_version=rule_version,
     )
 
 

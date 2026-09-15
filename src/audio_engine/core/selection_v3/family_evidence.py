@@ -26,6 +26,9 @@ from audio_engine.core.selection_v3.types import (
     FAMILY_UNSTABLE_PRESENCE,
     FAMILY_UNSTABLE_SEMANTIC,
     FAMILY_UNSTABLE_TEXT,
+    ROUTE_EXCLUDED,
+    ROUTE_FAILED,
+    ROUTE_MISSING,
     RUN_STATUS_FAILED,
     RUN_STATUS_MISSING,
     RUN_STATUS_SUCCESS_EMPTY,
@@ -44,6 +47,9 @@ class RouteView:
     classify_text: str = ""
     empty_reason_codes: tuple[str, ...] = ()
     pre_filter_language: str = ""
+    body_text: str = ""
+    route_disposition: str = "eligible"
+    exclusion_reasons: tuple[str, ...] = ()
 
 
 @dataclass
@@ -92,6 +98,9 @@ def collect_route_views(
             classify = ""
             reasons: tuple[str, ...] = ()
             pre_lang = ""
+            body = ""
+            disposition = "eligible"
+            exclusions: tuple[str, ...] = ()
             if chinese_only:
                 from audio_engine.core.selection_v3.classify_text import prepare_classify_text
 
@@ -102,11 +111,20 @@ def collect_route_views(
                     policy=config.classify_text_policy,
                 )
                 transcript = prepared.transcript_text
+                body = prepared.body_text or prepared.transcript_text
                 classify = prepared.classify_text
                 reasons = prepared.empty_reason_codes
                 pre_lang = prepared.pre_filter_language
+                disposition = prepared.route_disposition
+                exclusions = prepared.exclusion_reasons
                 if status in {RUN_STATUS_FAILED, RUN_STATUS_MISSING}:
                     cmp = ""
+                    disposition = ROUTE_FAILED if status == RUN_STATUS_FAILED else ROUTE_MISSING
+                elif prepared.is_excluded:
+                    # Excluded routes keep audit text but never vote or count as empty.
+                    status = RUN_STATUS_SUCCESS_EMPTY
+                    cmp = ""
+                    classify = ""
                 elif prepared.status == RUN_STATUS_SUCCESS_EMPTY:
                     status = RUN_STATUS_SUCCESS_EMPTY
                     cmp = ""
@@ -119,11 +137,16 @@ def collect_route_views(
                     punctuation_to_strip=punct,
                 )
                 transcript = transcript_text(raw)
+                body = transcript
             elif status == RUN_STATUS_SUCCESS_EMPTY:
                 cmp = ""
                 transcript = transcript_text(raw)
+                body = transcript
             else:
                 cmp = ""
+                disposition = ROUTE_FAILED if status == RUN_STATUS_FAILED else (
+                    ROUTE_MISSING if status == RUN_STATUS_MISSING else disposition
+                )
             views.append(
                 RouteView(
                     run_id=str(key),
@@ -135,6 +158,9 @@ def collect_route_views(
                     classify_text=classify,
                     empty_reason_codes=reasons,
                     pre_filter_language=pre_lang,
+                    body_text=body,
+                    route_disposition=disposition,
+                    exclusion_reasons=exclusions,
                 )
             )
     return views

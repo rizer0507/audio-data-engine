@@ -2,10 +2,12 @@
 ================================================================================
 # 对齐：docs/01-项目架构/工序总览.md · 工序一
 # 详解：手册/dev/00-总详细手册.txt（正文若仍写 v1 classify，以本文件与 014 为准）
-# 分拣默认：v3（014）；家族数 N≥3×双跑（015），三族无需补 Kimi
-# 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.0.md
-# 依赖：classify_v3 文本相似度需 rapidfuzz（019；pip install -e . 已含）
-# 前置：另开终端已起好所需 ASR 服务
+# 分拣默认：selection_five_class_v1（027）；legacy 回退 asr_anomaly + selection_v3.0
+# 家族数 N≥3×双跑（015），三族无需补 Kimi
+# 规则 SSOT：docs/02-规范规则/数据挑选规则_v1.md
+# 噪声：按需 DNSMOS（内嵌 diagnose 步）；全量 sidecar 仅研究。详解见下方 §3b 与 00 总手册「噪声打分」
+# 依赖：classify 文本相似度需 rapidfuzz（019；pip install -e . 已含）
+# 前置：另开终端已起好所需 ASR 服务；按需评分前确认 DNSMOS ONNX + 音频路径可读
 # 改批次只改 BATCH / SOURCE_DIR / V3_*_CFG 与 runs 登记
 
 cd /data2/data-cp/lizi/audio-data-engine
@@ -53,8 +55,11 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
 
 # 2b) 每路 register-asr-run 后写入 $V3_DATASET_CFG 的 runs:（见 012-A）
 
-# 3) v3：prepare → attach → classify_dataset_v3_asr_anomaly_noise
-#    正常中文不跑 DNSMOS。全量 audio_quality_sidecar 只作研究/历史复现，不是新默认。
+# 3) prepare → attach → 分拣（内嵌噪声按需诊断）
+#    正式五类：classify_dataset_five_class_v1（selection_five_class_v1）
+#    legacy：classify_dataset_v3_asr_anomaly_noise（selection_v3.0）
+#    正常中文 → noise_diagnosis_status=not_required，不跑 DNSMOS。
+#    全量 audio_quality_sidecar 只作研究/历史复现，不是新默认；分拣失败勿自动改跑全量。
 audio-data pipeline run pipelines/prepare_dataset_v3.yaml \
   --source-name "$BATCH" \
   --config "$V3_DATASET_CFG" \
@@ -65,14 +70,48 @@ audio-data pipeline run pipelines/attach_asr_v3.yaml \
   --config "$V3_DATASET_CFG" \
   --force
 
+# 3a) 正式：五类分拣（YAML 内两步：diagnose_asr_anomaly → classify）
+#     配置示例：configs/selection/zh_asr_five_class_v1.yaml 或批次专用 *_0914_*.yaml
+# audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/selection/zh_asr_five_class_v1.yaml
+
+# 3a') legacy 回退：ASR 异常触发噪声 + selection_v3.0
 audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml \
   --source-name "$BATCH" \
   --config "$V3_SELECTION_CFG"
 
+# ---------------------------------------------------------------------------
+# 3b) 噪声打分（DNSMOS）— 工序说明与可选命令
+# ---------------------------------------------------------------------------
+# 落点：工序一③，ASR attach 之后；清洗①不跑 DNSMOS，也不引入 VAD。
+# 主路径：分拣 YAML 内嵌 quality.asr_anomaly_noise（按需），读 configs/quality/dnsmos_p835.yaml。
+# 旁路：pipelines/audio_quality_sidecar.yaml（全量，研究/复现 only）。
+#
+# 依赖（按需评分前检查）：
+#   1) ONNX：configs/quality/dnsmos_p835.yaml → model_path（例 third_party/dnsmos/sig_bak_ovr.onnx）
+#   2) pip：onnxruntime 或 pip install '.[dnsmos]'；内网可另装 distillmos（见 00 附录）
+#   3) 音频：sample.audio.resampled_16k 在本机可读（路径在 /data2 时须在可读机跑）
+#   4) calibrated: false（未听音校准禁止改 true；未校准不得自动定 environment_noise）
+#
+# 何时真正调用 DNSMOS（主路径）：
+#   · selection_v3.0 / asr_anomaly：全族无有效转写，或任意成功路非中文话语
+#   · selection_five_class_v1：外语/热词/提示词回声已前置排除，不因外语触发评分；
+#     触发侧重全族无有效转写，以及空/有字+肯否、短应答冲突等（作旁证/送标，非定噪声类）
+#   · 未触发 → not_required（分数保持 null，不能填干净分，不能挡金标）
+#   · 触发失败 → failed/unsupported；不造 pending_evidence 池，五类下直接人工任务
+#
+# 状态字段：noise_diagnosis_status = not_required | pending | success | failed | unsupported
+# 分数字段：dnsmos_sig / dnsmos_bak / dnsmos_ovrl；未校准 → noise_band=unknown
+# 五类规则：低 DNSMOS / 全空 / VAD 未检出 均不能单独入 environment_noise；
+#           需校准声学或人工听音回填（任务类型常为 verify_target_speech）
+#
 # 研究全量评分（不是新默认，不得在分拣失败时自动改跑）：
 # audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
 #   --source-name "$BATCH" --config configs/quality/dnsmos_p835.yaml --force
-# 旧全量质量门禁回退：
+# 产物：datasets/stage1/derived/quality_sidecar_${BATCH}.parquet
+#
+# 旧全量质量门禁回退（须显式 legacy_full_quality_gate）：
 # audio-data pipeline run pipelines/classify_dataset_v3.yaml \
 #   --source-name "$BATCH" --config "$V3_SELECTION_CFG" --force
 

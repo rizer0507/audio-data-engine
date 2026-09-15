@@ -20,6 +20,13 @@ import yaml
 
 from audio_engine.core.selection_v3.text import transcript_text
 from audio_engine.core.selection_v3.types import (
+    CLASSIFY_TEXT_POLICY_FIVE_CLASS,
+    CLASSIFY_TEXT_VERSION_FIVE_CLASS,
+    EXCLUSION_FOREIGN,
+    EXCLUSION_HOTWORD_ECHO,
+    EXCLUSION_PROMPT_ECHO,
+    ROUTE_ELIGIBLE,
+    ROUTE_EXCLUDED,
     RUN_STATUS_SUCCESS_EMPTY,
     RUN_STATUS_SUCCESS_TEXT,
 )
@@ -27,12 +34,19 @@ from audio_engine.core.selection_v3.types import (
 CLASSIFY_TEXT_VERSION = "classify_text_zh_only_v1"
 POLICY_LEGACY = "legacy"
 POLICY_CHINESE_ONLY = "chinese_only_v1"
+POLICY_FIVE_CLASS = CLASSIFY_TEXT_POLICY_FIVE_CLASS
 
 EMPTY_CONTROL_TAG_ONLY = "control_tag_only"
 EMPTY_PUNCT_OR_SYMBOL = "punctuation_or_symbol_only"
 EMPTY_NON_CHINESE = "non_chinese_discarded"
 EMPTY_PROMPT_ECHO = "prompt_echo"
 EMPTY_HOTWORD_ECHO = "hotword_echo"
+
+# 027 exclusion reason ids (route_disposition=excluded). Distinct from empty reasons.
+_ECHO_REASON_MAP = {
+    EMPTY_PROMPT_ECHO: EXCLUSION_PROMPT_ECHO,
+    EMPTY_HOTWORD_ECHO: EXCLUSION_HOTWORD_ECHO,
+}
 
 _VOCAB_PREFIX_RE = re.compile(r"^\s*vocabulary\s*:\s*", re.IGNORECASE)
 _HOTWORD_SPLIT_RE = re.compile(r"[/，,|]+")
@@ -51,8 +65,21 @@ _DEFAULT_ECHO_FILES = {
 
 
 def uses_chinese_only_text(policy: str | None) -> bool:
+    """True for 025 chinese_only and 027 five_class pre-layers."""
     text = str(policy or POLICY_LEGACY).strip().lower()
-    return text in {POLICY_CHINESE_ONLY, "chinese_only", CLASSIFY_TEXT_VERSION}
+    return text in {
+        POLICY_CHINESE_ONLY,
+        "chinese_only",
+        CLASSIFY_TEXT_VERSION,
+        POLICY_FIVE_CLASS,
+        "five_class",
+        CLASSIFY_TEXT_VERSION_FIVE_CLASS,
+    }
+
+
+def uses_five_class_text(policy: str | None) -> bool:
+    text = str(policy or POLICY_LEGACY).strip().lower()
+    return text in {POLICY_FIVE_CLASS, "five_class", CLASSIFY_TEXT_VERSION_FIVE_CLASS}
 
 
 def normalize_classify_text_policy(value: Any) -> str:
@@ -61,8 +88,10 @@ def normalize_classify_text_policy(value: Any) -> str:
         return POLICY_LEGACY
     if text in {POLICY_CHINESE_ONLY, "chinese_only", CLASSIFY_TEXT_VERSION, "on", "true", "1"}:
         return POLICY_CHINESE_ONLY
+    if text in {POLICY_FIVE_CLASS, "five_class", CLASSIFY_TEXT_VERSION_FIVE_CLASS}:
+        return POLICY_FIVE_CLASS
     raise ValueError(
-        "classify_text_policy must be 'legacy' or 'chinese_only_v1', "
+        "classify_text_policy must be 'legacy', 'chinese_only_v1', or 'five_class_v1', "
         f"got {value!r}"
     )
 
@@ -127,14 +156,20 @@ def pre_filter_language(body_no_tag: str) -> str:
     return str(assess_speech_language(body_no_tag).get("label") or "empty")
 
 
-def _latin_triggers_discard(compact: str) -> bool:
-    """Latin/other letters empty the route; 2–6 uppercase abbrevs beside CJK do not."""
+def _latin_triggers_discard(compact: str, *, strict: bool = False) -> bool:
+    """Latin/other letters empty or exclude the route.
+
+    ``strict=True`` (027): any non-CJK letter (incl. uppercase abbrevs / mixed) triggers.
+    ``strict=False`` (025): 2–6 uppercase abbrevs beside CJK are kept.
+    """
     if any(is_other_letter_script(ch) for ch in compact):
         return True
     has_cjk = any(is_cjk_ideograph(ch) for ch in compact)
     runs = _LATIN_RUN_RE.findall(compact)
     if not runs:
         return False
+    if strict:
+        return True
     for token in runs:
         if has_cjk and token.isupper() and 2 <= len(token) <= 6:
             continue
@@ -217,10 +252,19 @@ class ClassifyTextResult:
     policy: str
     version: str = CLASSIFY_TEXT_VERSION
     had_control_tags: bool = False
+    body_text: str = ""
+    route_disposition: str = ROUTE_ELIGIBLE
+    exclusion_reasons: tuple[str, ...] = ()
+    echo_match_source: str = ""
+    echo_match_fingerprint: str = ""
 
     @property
     def is_empty(self) -> bool:
         return self.status == RUN_STATUS_SUCCESS_EMPTY or not self.classify_text
+
+    @property
+    def is_excluded(self) -> bool:
+        return self.route_disposition == ROUTE_EXCLUDED
 
 
 def prepare_classify_text(
@@ -230,55 +274,108 @@ def prepare_classify_text(
     keep_digits: bool = True,
     policy: str = POLICY_CHINESE_ONLY,
 ) -> ClassifyTextResult:
-    """Apply the 025 order to one route. Does not mutate ``raw``."""
+    """Apply shared NFKC / tag / echo / foreign pre-layer. Does not mutate ``raw``.
+
+    ``chinese_only_v1`` (025): foreign/echo become success_empty votes.
+    ``five_class_v1`` (027): foreign/echo become route_disposition=excluded and
+    must not vote, trigger noise, or count as presence-empty.
+    """
+    normalized_policy = normalize_classify_text_policy(policy)
+    five_class = uses_five_class_text(normalized_policy)
+    version = CLASSIFY_TEXT_VERSION_FIVE_CLASS if five_class else CLASSIFY_TEXT_VERSION
+
     raw_text = "" if raw is None else str(raw)
     had_tags = bool(_HAS_CONTROL_TAG_RE.search(raw_text))
     body_no_tag = transcript_text(raw_text)
     language = pre_filter_language(body_no_tag)
     echo_norm = echo_form(body_no_tag)
     reasons: list[str] = []
+    exclusion: list[str] = []
+    echo_source = ""
+    echo_fp = ""
 
     if echo is not None:
-        reasons.extend(echo.match(echo_norm))
+        echo_hits = echo.match(echo_norm)
+        reasons.extend(echo_hits)
+        for hit in echo_hits:
+            mapped = _ECHO_REASON_MAP.get(hit)
+            if mapped:
+                exclusion.append(mapped)
+        if echo_hits:
+            echo_source = ",".join(echo_hits)
+            echo_fp = echo.fingerprint or ""
 
     nfkc = unicodedata.normalize("NFKC", body_no_tag)
     compact = strip_punct_symbols(nfkc)
+    empty_only: list[str] = []
     if not compact and not reasons:
         if had_tags or (raw_text and not body_no_tag):
-            reasons.append(EMPTY_CONTROL_TAG_ONLY)
+            empty_only.append(EMPTY_CONTROL_TAG_ONLY)
         if raw_text.strip() and (body_no_tag or had_tags):
-            reasons.append(EMPTY_PUNCT_OR_SYMBOL)
-        if not reasons:
-            reasons.append(EMPTY_PUNCT_OR_SYMBOL)
+            empty_only.append(EMPTY_PUNCT_OR_SYMBOL)
+        if not empty_only:
+            empty_only.append(EMPTY_PUNCT_OR_SYMBOL)
 
-    if compact and _latin_triggers_discard(compact):
+    foreign = bool(compact and _latin_triggers_discard(compact, strict=five_class))
+    if foreign:
         reasons.append(EMPTY_NON_CHINESE)
+        exclusion.append(EXCLUSION_FOREIGN)
 
-    chinese = classify_chars(compact, keep_digits=keep_digits) if not reasons else ""
-    if not reasons and not chinese:
-        reasons.append(EMPTY_PUNCT_OR_SYMBOL)
+    # Exclusion reasons (foreign / echo) win over punctuation-only emptiness.
+    if five_class and exclusion:
+        unique_excl = tuple(dict.fromkeys(exclusion))
+        return ClassifyTextResult(
+            raw_text=raw_text,
+            transcript_text=body_no_tag,
+            body_text=body_no_tag,
+            classify_text="",
+            empty_reason_codes=tuple(dict.fromkeys(reasons)),
+            pre_filter_language=language,
+            status=RUN_STATUS_SUCCESS_EMPTY,
+            policy=normalized_policy,
+            version=version,
+            had_control_tags=had_tags,
+            route_disposition=ROUTE_EXCLUDED,
+            exclusion_reasons=unique_excl,
+            echo_match_source=echo_source,
+            echo_match_fingerprint=echo_fp,
+        )
 
-    unique = tuple(dict.fromkeys(reasons))
+    chinese = classify_chars(compact, keep_digits=keep_digits) if not reasons and not empty_only else ""
+    if not reasons and not empty_only and not chinese:
+        empty_only.append(EMPTY_PUNCT_OR_SYMBOL)
+
+    unique = tuple(dict.fromkeys([*reasons, *empty_only]))
     if unique:
         return ClassifyTextResult(
             raw_text=raw_text,
             transcript_text=body_no_tag,
+            body_text=body_no_tag,
             classify_text="",
             empty_reason_codes=unique,
             pre_filter_language=language,
             status=RUN_STATUS_SUCCESS_EMPTY,
-            policy=normalize_classify_text_policy(policy),
+            policy=normalized_policy,
+            version=version,
             had_control_tags=had_tags,
+            route_disposition=ROUTE_ELIGIBLE,
+            exclusion_reasons=(),
+            echo_match_source=echo_source,
+            echo_match_fingerprint=echo_fp,
         )
     return ClassifyTextResult(
         raw_text=raw_text,
         transcript_text=body_no_tag,
+        body_text=body_no_tag,
         classify_text=chinese,
         empty_reason_codes=(),
         pre_filter_language=language,
         status=RUN_STATUS_SUCCESS_TEXT,
-        policy=normalize_classify_text_policy(policy),
+        policy=normalized_policy,
+        version=version,
         had_control_tags=had_tags,
+        route_disposition=ROUTE_ELIGIBLE,
+        exclusion_reasons=(),
     )
 
 
@@ -436,16 +533,26 @@ def attach_classify_text_fields(
     empty_reason_by_run: Mapping[str, list[str]] | Mapping[str, tuple[str, ...]],
     pre_filter_language_by_run: Mapping[str, str],
     classify_text_by_run: Mapping[str, str] | None = None,
+    route_disposition_by_run: Mapping[str, str] | None = None,
+    exclusion_reasons_by_run: Mapping[str, list[str]] | Mapping[str, tuple[str, ...]] | None = None,
 ) -> dict[str, Any]:
+    normalized = normalize_classify_text_policy(policy)
+    version = ""
+    if uses_five_class_text(normalized):
+        version = CLASSIFY_TEXT_VERSION_FIVE_CLASS
+    elif uses_chinese_only_text(normalized):
+        version = CLASSIFY_TEXT_VERSION
     payload = {
-        "classify_text_policy": normalize_classify_text_policy(policy),
-        "classify_text_version": CLASSIFY_TEXT_VERSION
-        if uses_chinese_only_text(policy)
-        else "",
+        "classify_text_policy": normalized,
+        "classify_text_version": version,
         "classify_text_echo_fingerprint": fingerprint or "",
         "empty_reason_by_run": {key: list(value) for key, value in empty_reason_by_run.items()},
         "pre_filter_language_by_run": dict(pre_filter_language_by_run),
         "classify_text_by_run": dict(classify_text_by_run or {}),
+        "route_disposition_by_run": dict(route_disposition_by_run or {}),
+        "exclusion_reasons_by_run": {
+            key: list(value) for key, value in (exclusion_reasons_by_run or {}).items()
+        },
     }
     if hasattr(labels_or_result, "classify_text_policy"):
         labels_or_result.classify_text_policy = payload["classify_text_policy"]
@@ -454,6 +561,10 @@ def attach_classify_text_fields(
         labels_or_result.empty_reason_by_run = payload["empty_reason_by_run"]
         labels_or_result.pre_filter_language_by_run = payload["pre_filter_language_by_run"]
         labels_or_result.classify_text_by_run = payload["classify_text_by_run"]
+        if hasattr(labels_or_result, "route_disposition_by_run"):
+            labels_or_result.route_disposition_by_run = payload["route_disposition_by_run"]
+        if hasattr(labels_or_result, "exclusion_reasons_by_run"):
+            labels_or_result.exclusion_reasons_by_run = payload["exclusion_reasons_by_run"]
     return payload
 
 
@@ -461,6 +572,8 @@ def audit_routes(config: Any, routes: Iterable[Any]) -> dict[str, Any]:
     empty_reason: dict[str, list[str]] = {}
     pre_lang: dict[str, str] = {}
     classify_map: dict[str, str] = {}
+    disposition: dict[str, str] = {}
+    exclusions: dict[str, list[str]] = {}
     for route in routes:
         run_id = str(getattr(route, "run_id", "") or "")
         if not run_id:
@@ -470,10 +583,18 @@ def audit_routes(config: Any, routes: Iterable[Any]) -> dict[str, Any]:
             empty_reason[run_id] = list(getattr(layers, "empty_reason_codes", ()) or ())
             pre_lang[run_id] = str(getattr(layers, "pre_filter_language", "") or "")
             classify_map[run_id] = str(getattr(layers, "classify_text", "") or "")
+            disposition[run_id] = str(getattr(layers, "route_disposition", "") or getattr(route, "route_disposition", "") or "")
+            exclusions[run_id] = list(
+                getattr(layers, "exclusion_reasons", ())
+                or getattr(route, "exclusion_reasons", ())
+                or ()
+            )
         else:
             empty_reason[run_id] = list(getattr(route, "empty_reason_codes", ()) or ())
             pre_lang[run_id] = str(getattr(route, "pre_filter_language", "") or "")
             classify_map[run_id] = str(getattr(route, "classify_text", "") or "")
+            disposition[run_id] = str(getattr(route, "route_disposition", "") or "")
+            exclusions[run_id] = list(getattr(route, "exclusion_reasons", ()) or ())
     return attach_classify_text_fields(
         None,
         policy=str(getattr(config, "classify_text_policy", POLICY_LEGACY) or POLICY_LEGACY),
@@ -481,6 +602,8 @@ def audit_routes(config: Any, routes: Iterable[Any]) -> dict[str, Any]:
         empty_reason_by_run=empty_reason,
         pre_filter_language_by_run=pre_lang,
         classify_text_by_run=classify_map,
+        route_disposition_by_run=disposition,
+        exclusion_reasons_by_run=exclusions,
     )
 
 
@@ -493,5 +616,7 @@ def apply_route_audit(result: Any, config: Any, routes: Iterable[Any]) -> Any:
         empty_reason_by_run=payload["empty_reason_by_run"],
         pre_filter_language_by_run=payload["pre_filter_language_by_run"],
         classify_text_by_run=payload["classify_text_by_run"],
+        route_disposition_by_run=payload["route_disposition_by_run"],
+        exclusion_reasons_by_run=payload["exclusion_reasons_by_run"],
     )
     return result

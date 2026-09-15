@@ -7,9 +7,9 @@
 | --- | --- | --- |
 | **工序一** 数据清洗落库打标 | [数据源落入流水线](./数据源落入流水线.md)（前置） | `resources/manifest.yaml` 登记 |
 | | [数据清洗流水线](./数据清洗流水线.md) | `data_cleaning_source_A.yaml` |
-| | （ASR / 分拣见工序总览工序一表） | `*_asr_batch.yaml`、**默认** `prepare_dataset_v3` / `attach_asr_v3` / `classify_dataset_v3_asr_anomaly_noise`；影子：`classify_dataset_v3_semantic_tolerant` / `classify_dataset_v3_business_semantic_v4` / `classify_dataset_v3_zh_only`；研究全量 `audio_quality_sidecar`；legacy：`classify_dataset_v3` / `classify_dataset` |
+| | （ASR / 分拣见工序总览工序一表） | `*_asr_batch.yaml`、`prepare_dataset_v3` / `attach_asr_v3`；**正式** `classify_dataset_five_class_v1`（内嵌按需 DNSMOS）；**legacy** `classify_dataset_v3_asr_anomaly_noise`；研究全量 `audio_quality_sidecar`；影子：`classify_dataset_v3_semantic_tolerant` / `business_semantic_v4` / `zh_only`；更旧 legacy：`classify_dataset_v3` / `classify_dataset` |
 | **工序二** 训练 | （细节见工序总览；引擎未完整集成） | `training run` / 可选 `build_training_set.yaml` |
 | **工序三** 评测 | [评测流水线](./评测流水线.md) | 场景1：`eval register` → 跑批 → `eval_aggregate` → `eval_metric_pipeline`；场景2：`classify_external_gold` → `classified_` → 同上（[006](../04-改进需求/已完成/006-工序一清洗引擎拆分需求.md)） |
 
-操作级命令：`手册/dev/`、`手册/local/` 对应 `01` / `02` / `03` 分册。  
+操作级命令：`手册/dev/`、`手册/local/` 对应 `01` / `02` / `03` 分册；噪声打分见各环境 `01` §3b、`00` §5b，以及根目录 `单条流水线执行命令.txt` §2f-noise。  
 模型识别操作细节：`docs/07-操作手册/`。

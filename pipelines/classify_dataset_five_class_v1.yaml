@@ -1,0 +1,34 @@
+# 027 五类分拣正式入口（selection_five_class_v1）。
+# 独立产物，不覆盖 classified_v3_* / 022 / 023 / 024 / 025 / 审核包 / release。
+# 不重跑 ASR。legacy 回退：pipelines/classify_dataset_v3_asr_anomaly_noise.yaml
+#
+#   audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml \
+#     --source-name 0914-mixed-30000 \
+#     --config configs/selection/zh_asr_five_class_v1_0914_mixed_30000.yaml
+
+name: classify_dataset_five_class_v1
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_five_class_v1_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: diagnose_asr_anomaly
+    operator: quality.asr_anomaly_noise
+    params:
+      config_path: configs/selection/zh_asr_five_class_v1.yaml
+      selection_config: configs/selection/zh_asr_five_class_v1.yaml
+      dnsmos_config: configs/quality/dnsmos_p835.yaml
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_five_class_v1.yaml
+      rule_version: selection_five_class_v1
+      noise_policy: asr_anomaly_noise_v1
+      classify_text_policy: five_class_v1
+      quality:
+        calibrated: false
+        noise_policy: asr_anomaly_noise_v1

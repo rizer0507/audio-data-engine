@@ -1,0 +1,10 @@
+run_id: sv-base-2
+family: sensevoice
+transcript_key: sv-base-2
+execution_id: "0914_sv-base-2_2a87a4578c1a"
+model_checkpoint_digest: "a9e4619f76cd796a1600d44c90c36b1615e9a05ce0c1f0a1907de39e2ee5737e"
+decode_config_digest: "8a1e3058ddaeea38bdbcd5bf30bfda5b1eddbe1b0d7979c9ed0803659cdaad0c"
+prompt_digest: "4b1c221077fcd3618fa55e91fbd76febcb365229834e0e0f575a36d6ac051865"
+input_audio_digest: ""
+input_audio_key: resampled_16k
+created_at: "2026-09-15T00:55:49.430000+00:00"

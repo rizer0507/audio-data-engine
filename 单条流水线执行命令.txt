@@ -3,9 +3,10 @@
 用途：维护生产入口命令；分片/并行/合并由 YAML sharding 自动完成。
 改批次：用 --source-name（+ 清洗时的 --source-dir），一般不用改 YAML 路径。
 改并行度 / 卡号：改对应 pipelines/*.yaml 的 sharding。
-分拣默认：工序一③ = classify_dataset_v3（014）；家族数 N≥3×双跑（015），不要求补 Kimi。
-执行顺序：1 清洗 → 2 ASR（≥3 族双跑 + register）→ 3 prepare/attach/sidecar/classify_v3。
-         聚合+字准（2d/2e）与 classify_dataset(v1) 仅为诊断 / legacy。
+分拣默认：工序一③ = classify_dataset_five_class_v1（027）；legacy = asr_anomaly + selection_v3.0。
+执行顺序：1 清洗 → 2 ASR（≥3 族双跑 + register）→ 3 prepare/attach → 分拣（内嵌按需噪声诊断）。
+         噪声全量 sidecar 仅研究；聚合+字准（2d/2e）与 classify_dataset(v1) 仅为诊断 / legacy。
+噪声速查：§2f-noise；五类入口：§2f-v3-027。
 
 
 -------------------------------------------------------
@@ -231,24 +232,27 @@ python scripts/export_multi_asr_xlsx.py \
   → cleaned_mt3000.parquet|.jsonl
   → {qwen_1,qwen_2,glm_1,glm_2,sensevoice_1,sensevoice_2}_asr_*.parquet  # ≥3 族双跑
   →（可选）kimi_1/kimi_2 第四族增强
-  → prepared_v3_mt3000 → prepared_asr_v3_mt3000 → quality_sidecar_mt3000
-  → classified_v3_mt3000.parquet          # 工序一③唯一默认分拣产物
+  → prepared_v3_mt3000 → prepared_asr_v3_mt3000
+  →（按需噪声内嵌于分拣 diagnose；研究全量才有 quality_sidecar_*）
+  → classified_five_class_v1_mt3000.parquet   # 正式；或 legacy classified_v3_*_asr_anomaly_noise_v1
   → (可选) datasets/exports/...
   → (legacy 诊断) multi_asr_aggregate / multi_asr_metrics / classified_* (v1)
 
 
 -------------------------------------------------------
-2f-v3. 分拣（consensus_v3 · 工序一③唯一默认；015：N≥3 族双跑）
+2f-v3. 分拣（legacy selection_v3.0 / asr_anomaly；正式五类见 §2f-v3-027）
 -------------------------------------------------------
 # 前置：cleaned 底表 + 已声明各族双跑 ASR（≥3 族，共 2N 路）已 register
-#        → prepare_dataset_v3 → attach_asr_v3 → audio_quality_sidecar
+#        → prepare_dataset_v3 → attach_asr_v3 → classify_*（内嵌按需 DNSMOS，见 §2f-noise）
+# 正式五类：§2f-v3-027（classify_dataset_five_class_v1）
+# 本小节：legacy 回退 classify_dataset_v3_asr_anomaly_noise（正常中文 not_required）
 # 配置：四族 configs/selection/zh_asr_v3.yaml
 #       三族 configs/selection/zh_asr_v3_three_family.yaml（无需补 Kimi）
 #       0908 存量别名 configs/selection/zh_asr_v3_0908_30000.yaml（方案 B）
-# 产物：classified_v3_<name>.parquet（勿写无 _v3_ 的 classified_*）
-# 契约：docs/04-改进需求/进行中/015-*.md · 默认切换：014-*.md
+# 产物：classified_v3_<name>_asr_anomaly_noise_v1.parquet（勿写无 _v3_ 的 classified_*）
+# 契约：docs/04-改进需求/进行中/015-*.md · 默认切换：014-*.md · 噪声：023 / §2f-noise
 #
-# --- 标准新批次（契约别名方案 A）---
+# --- 标准新批次（契约别名方案 A；legacy 分拣）---
 # export BATCH=mt3000
 # export V3_DATASET_CFG=configs/datasets/zh_asr_v3_three_family.yaml
 # export V3_SELECTION_CFG=configs/selection/zh_asr_v3_three_family.yaml
@@ -257,10 +261,14 @@ python scripts/export_multi_asr_xlsx.py \
 #   --source-name "$BATCH" --config "$V3_DATASET_CFG" --force
 # audio-data pipeline run pipelines/attach_asr_v3.yaml \
 #   --source-name "$BATCH" --config "$V3_DATASET_CFG" --force
-# audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
-#   --source-name "$BATCH" --config configs/quality/dnsmos_p835.yaml --force
-# audio-data pipeline run pipelines/classify_dataset_v3.yaml \
-#   --source-name "$BATCH" --config "$V3_SELECTION_CFG" --force
+# # 按需噪声已内嵌；勿默认先跑全量 sidecar（研究才开，见 §2f-noise）
+# audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml \
+#   --source-name "$BATCH" --config "$V3_SELECTION_CFG"
+# # 旧全量质量门禁回退（须显式 legacy_full_quality_gate；可先 sidecar）：
+# # audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
+# #   --source-name "$BATCH" --config configs/quality/dnsmos_p835.yaml --force
+# # audio-data pipeline run pipelines/classify_dataset_v3.yaml \
+# #   --source-name "$BATCH" --config "$V3_SELECTION_CFG" --force
 #
 # --- 0908-30000 试点（存量别名方案 B；三族六路，无需 Kimi）---
 # export BATCH=0908-30000
@@ -288,6 +296,90 @@ audio-data pipeline run pipelines/classify_dataset_v3.yaml \
   --force
 
 # legacy 复现 only（勿作新批次正式分拣）：pipelines/classify_dataset.yaml（v1）
+
+
+-------------------------------------------------------
+2f-v3-027. 五类分拣正式入口（selection_five_class_v1）
+-------------------------------------------------------
+# 027 最终业务规则。先排除外语/热词全文回声/提示词全文回声，再分五类；
+# 无法自动定类直接生成可执行人工任务，无 pending_evidence。
+# 不重跑 ASR，不覆盖 classified_v3_* / 022~025 影子 / 审核包 / release。
+# 前置：已有 prepared_asr_v3_<name>（0914 即 prepared_asr_v3_0914-mixed-30000）。
+# 产物：datasets/stage1/derived/classified_five_class_v1_<name>.parquet
+# YAML 内两步：diagnose_asr_anomaly（按需 DNSMOS）→ classify；详见 §2f-noise。
+#
+# 0914-mixed-30000（PowerShell；正式影子，不覆盖旧 classified_v3_*）：
+audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml `
+  --source-name 0914-mixed-30000 `
+  --config configs/selection/zh_asr_five_class_v1_0914_mixed_30000.yaml
+
+# 若当前 CLI 对短名 remapping 有限制，可显式指定 Manifest：
+# audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml `
+#   --input-manifest datasets/stage1/asr/prepared_asr_v3_0914-mixed-30000.parquet `
+#   --output-manifest datasets/stage1/derived/classified_five_class_v1_0914-mixed-30000.parquet `
+#   --config configs/selection/zh_asr_five_class_v1_0914_mixed_30000.yaml
+
+# Linux / Git Bash：
+# audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml \
+#   --source-name 0914-mixed-30000 \
+#   --config configs/selection/zh_asr_five_class_v1_0914_mixed_30000.yaml
+#
+# 续跑：同上命令加 --resume runs/<上次目录>
+# legacy 回退（旧 asr_anomaly + selection_v3.0）：
+#   audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml \
+#     --source-name 0914-mixed-30000 \
+#     --config configs/selection/zh_asr_v3_0914_mixed_30000.yaml
+# 规则测试：pytest tests/test_selection_five_class_v1.py -q
+# 汇总 xlsx：可用 export-summary，或含 outcome/category 的五类汇总脚本
+
+
+-------------------------------------------------------
+2f-noise. 噪声打分（DNSMOS）— 工序与步骤
+-------------------------------------------------------
+# 落点：工序一③（ASR attach 之后）。清洗①不跑 DNSMOS、不引入 VAD。
+# 需求：009 侧车 / 023 按需触发 / 027 §9 五类边界
+# 规则：docs/02-规范规则/数据挑选规则_v1.md §6.5、§9
+# 配置：configs/quality/dnsmos_p835.yaml（calibrated: false）
+#
+# 【链路上的位置】
+#   清洗 → 多族 ASR + prepare/attach
+#     → ③′ diagnose_asr_anomaly（按需 DNSMOS，内嵌于分拣 YAML）
+#     → ③ classify（五类或 selection_v3.0）
+#
+# 【路径 A · 生产主路径（推荐，无需单独命令）】
+#   classify_dataset_five_class_v1.yaml
+#     或 legacy classify_dataset_v3_asr_anomaly_noise.yaml
+#   步骤：diagnose_asr_anomaly → classify
+#   正常中文 → noise_diagnosis_status=not_required（不推理、不写假干净分）
+#
+# 【路径 B · 研究/历史全量（非默认）】
+#   输入 cleaned_*；输出 quality_sidecar_*
+#   分拣失败时禁止自动改跑本路径冒充修复
+# audio-data pipeline run pipelines/audio_quality_sidecar.yaml `
+#   --source-name 0914-mixed-30000 `
+#   --config configs/quality/dnsmos_p835.yaml `
+#   --force
+# Linux:
+# audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
+#   --source-name "$BATCH" --config configs/quality/dnsmos_p835.yaml --force
+#
+# 【执行前检查】
+#   [ ] model_path ONNX 存在（缺文件 → 仅被触发子集 failed）
+#   [ ] onnxruntime 或 pip install '.[dnsmos]'
+#   [ ] resampled_16k 本机可读（路径在 /data2 须在可读机跑）
+#   [ ] calibrated 仍为 false（听音校准前禁止改 true）
+#
+# 【触发】
+#   selection_v3.0：全族无有效转写；或成功路非中文话语
+#   selection_five_class_v1：外语/热词/提示词回声先排除，不因外语触发；
+#     全空及空/有字·短应答冲突作旁证或 verify_target_speech
+#   未校准低分 / 全空 / VAD 未检出 ≠ 自动 environment_noise
+#
+# 【验看字段】
+#   noise_diagnosis_status / dnsmos_sig|bak|ovrl / calibrated / noise_band
+#   success + 未校准 → noise_band=unknown（旁证，非噪声类定论）
+#
+# 手册：手册/*/01 §3b；手册/*/00 §5b
 
 
 -------------------------------------------------------
@@ -379,6 +471,9 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 [ ] （可选 GLM vLLM）先跑 probe_glm_vllm.py：短 WAV、目录并发、--repeat 2（不要 --pad）
 [ ] v3：V3_DATASET_CFG / V3_SELECTION_CFG；runs: register 后的 artifact_id
 [ ] （存量 0908）方案 B 配置 zh_asr_v3_0908_30000.yaml + run_identities/
+[ ] （027 五类）pipelines/classify_dataset_five_class_v1.yaml + zh_asr_five_class_v1_*.yaml；产物 classified_five_class_v1_*；勿覆盖 classified_v3_*
+[ ] （噪声）dnsmos_p835.yaml 的 model_path ONNX 可读；onnxruntime 已装；calibrated:false；音频路径本机可读
+[ ] （噪声·研究全量）仅显式跑 audio_quality_sidecar；分拣失败勿自动改跑全量
 [ ] （025 影子）pipelines/classify_dataset_v3_zh_only.yaml + zh_asr_v3_0908_30000_zh_only.yaml；勿覆盖 classified_v3_*
 [ ] （legacy 诊断）multi_asr_aggregate.yaml 的 manifests / --join-manifest
 [ ] （外源金标）--external-gold / --aggregate-base / --label-col

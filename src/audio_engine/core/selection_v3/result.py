@@ -14,6 +14,7 @@ from audio_engine.core.selection_v3.types import (
     LABEL_TIER_NONE,
     RULE_VERSION,
     is_business_semantic_rule,
+    is_five_class_rule,
 )
 
 
@@ -98,6 +99,14 @@ class ClassificationResultV3:
     empty_reason_by_run: dict[str, list[str]] = field(default_factory=dict)
     pre_filter_language_by_run: dict[str, str] = field(default_factory=dict)
     classify_text_by_run: dict[str, str] = field(default_factory=dict)
+    # 027 five-class exits and annotation tasks.
+    outcome: str | None = None
+    semantic_subtype: str | None = None
+    annotation_tasks: list[dict[str, Any]] = field(default_factory=list)
+    route_disposition_by_run: dict[str, str] = field(default_factory=dict)
+    exclusion_reasons_by_run: dict[str, list[str]] = field(default_factory=dict)
+    selection_policy: str | None = None
+    noise_kind: str | None = None
 
     def to_labels(self, policy_version: str) -> dict[str, Any]:
         labels: dict[str, Any] = {
@@ -182,7 +191,21 @@ class ClassificationResultV3:
             "empty_reason_by_run": dict(self.empty_reason_by_run or {}),
             "pre_filter_language_by_run": dict(self.pre_filter_language_by_run or {}),
             "classify_text_by_run": dict(self.classify_text_by_run or {}),
+            "outcome": self.outcome,
+            "semantic_subtype": self.semantic_subtype or self.subtype,
+            "annotation_tasks": list(self.annotation_tasks or []),
+            "route_disposition_by_run": dict(self.route_disposition_by_run or {}),
+            "exclusion_reasons_by_run": {
+                key: list(value)
+                for key, value in (self.exclusion_reasons_by_run or {}).items()
+            },
+            "selection_policy": self.selection_policy or "",
+            "noise_kind": self.noise_kind or "",
         }
+        if self.annotation_tasks:
+            first = self.annotation_tasks[0]
+            labels["annotation_task_id"] = first.get("annotation_task_id") or ""
+            labels["annotation_task_type"] = first.get("task_type") or ""
         if is_business_semantic_rule(self.rule_version):
             # Do not wipe a previously accepted gold_text. The auto body stays
             # in candidate_text and cannot become the formal verbatim reference.
@@ -191,8 +214,10 @@ class ClassificationResultV3:
             labels["is_human_verified"] = False
         if self.annotation_state:
             labels["annotation_state"] = self.annotation_state
-        elif self.decision == DECISION_EXCLUDE:
+        elif self.outcome == "excluded" or self.decision == DECISION_EXCLUDE:
             labels["annotation_state"] = "excluded"
+        elif self.outcome == "manual_annotation":
+            labels["annotation_state"] = "manual_annotation"
         elif self.decision == DECISION_RETRY:
             labels["annotation_state"] = "retry"
         elif self.decision == DECISION_AUDIT_PENDING:
@@ -203,6 +228,13 @@ class ClassificationResultV3:
             labels["annotation_state"] = "calibration_hold"
         else:
             labels["annotation_state"] = self.decision
+        if is_five_class_rule(self.rule_version):
+            labels["is_human_verified"] = False
+            if self.outcome == "manual_annotation" and not self.annotation_tasks:
+                raise ValueError(
+                    "five_class manual_annotation requires annotation_tasks "
+                    f"(sample outcome={self.outcome!r})"
+                )
         return labels
 
 
