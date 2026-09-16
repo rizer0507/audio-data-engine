@@ -81,3 +81,6 @@ GLM-4-Voice/
 # Windows 保留设备名；误创建后 git add 会失败
 scripts/nul
 scripts/NUL
+
+#数据集
+0914-30000
