@@ -1,0 +1,158 @@
+dataset_policy_version: dataset_policy_v3.0
+engine: consensus_v3
+rule_version: selection_v3.0
+target_family: qwen
+model_families:
+  glm:
+  - glm_1
+  - glm_2
+  sensevoice:
+  - sensevoice_1
+  - sensevoice_2
+  qwen:
+  - qwen_1
+  - qwen_2
+teacher_families:
+- glm
+- sensevoice
+expected_runs_per_family: 2
+grouping:
+  call_id_fields:
+  - call_id
+  - conversation_id
+  speaker_id_fields:
+  - customer_id
+  - speaker_id
+  require_reliable_speaker: true
+  source_audio_id_fields:
+  - source_audio_id
+  file_hash_fields:
+  - original_audio_sha256
+  - sha256
+  pcm_hash_fields:
+  - pcm_sha256
+  - normalized_pcm_sha256
+  confirmed_near_duplicate_field: near_duplicate_group_id
+  uncertain_near_duplicate_field: near_duplicate_uncertain_id
+  source_index_fields:
+  - source_snapshot_id
+  - source_audio_id
+  - call_id
+  - conversation_id
+  require_source_index: true
+reservation:
+  seed: 42
+  eval_random_target: 2000
+  eval_core_reserve_ratio: 0.15
+  dev_ratio_of_dev_pool: 0.1
+  calibration_target: 3000
+  isolate_missing_group_meta: true
+  policy_version: dataset_policy_v3.0
+  design_formed_at: ''
+  prior_information_used: []
+build:
+  release_id: ''
+  train_size: 10000
+  sampling_seed: 42
+  normalization_version: zh_v1
+  gold_revision: annotation_v3.0
+  group_key: leakage_group_id
+  allow_non_speech_train: false
+  max_per_call: 3
+  exact_duplicate_fields:
+  - duplicate_group_id
+  - original_audio_sha256
+  - pcm_sha256
+  fail_on_shortfall: true
+  require_dual_review_for_eval: true
+  require_pseudo_audit_for_pseudo_train: true
+  require_reservation: true
+eval_random:
+  target: 2000
+eval_core:
+  target: 2000
+  strata:
+    negative_reject: 500
+    filler_neutral: 300
+    confirmed_non_speech: 300
+    noisy_crosstalk_speech: 300
+    positive: 300
+    other: 300
+train_pools:
+  qwen_error_fix: 0.4
+  human_high_risk: 0.2
+  human_ordinary: 0.2
+  pseudo_high_audited: 0.2
+train_cross_constraints:
+  min_positive_ratio: 0.15
+  min_negative_ratio: 0.15
+  min_noisy_crosstalk_ratio: 0.1
+  max_non_speech_ratio: 0.1
+  max_pseudo_high_ratio: 0.2
+runs:
+- run_id: qwen_1
+  family: qwen
+  transcript_key: qwen_1
+  execution_id: qwen_1_e00f43e4597461f6e92a75d1
+  model_checkpoint_digest: 40f2b3a48b58b326ebe20c40371b609993b2a3990500d2193af66ba8d0f47e90
+  decode_config_digest: f038aa8420fed6fcb2713079b11d3c9769aae3723d7f4596405d2cdae919fc53
+  prompt_digest: f45e995f8efb1fc8bb5839905d9603d92bee0a17fb3eac8c15719b21a7976678
+  input_audio_digest: ''
+  input_audio_key: resampled_16k
+  created_at: '2026-09-16T05:33:40+00:00'
+  artifact_id: dryrun_qwen_1
+- run_id: qwen_2
+  family: qwen
+  transcript_key: qwen_2
+  execution_id: qwen_2_6bdccb548c35687747439547
+  model_checkpoint_digest: 40f2b3a48b58b326ebe20c40371b609993b2a3990500d2193af66ba8d0f47e90
+  decode_config_digest: f038aa8420fed6fcb2713079b11d3c9769aae3723d7f4596405d2cdae919fc53
+  prompt_digest: f45e995f8efb1fc8bb5839905d9603d92bee0a17fb3eac8c15719b21a7976678
+  input_audio_digest: ''
+  input_audio_key: resampled_16k
+  created_at: '2026-09-16T05:33:40+00:00'
+  artifact_id: dryrun_qwen_2
+- run_id: glm_1
+  family: glm
+  transcript_key: glm_1
+  execution_id: glm_1_674bc4bc8d18e946829af0ba
+  model_checkpoint_digest: 9b5300d6fd806a4f50ade8b125eeec30ff30fea7a87890aa90171865c79c1e25
+  decode_config_digest: 1d35e7ec4a83d2a8ed14f1955732b2a2948b23a84c8d45b998f040dd49944d1c
+  prompt_digest: 747dafcfded9b494eb70535901a2dd9d597db95b04854873309bc9dd17bb119a
+  input_audio_digest: ''
+  input_audio_key: resampled_16k
+  created_at: '2026-09-16T05:33:40+00:00'
+  artifact_id: dryrun_glm_1
+- run_id: glm_2
+  family: glm
+  transcript_key: glm_2
+  execution_id: glm_2_362254e0bc8845aba90d61a0
+  model_checkpoint_digest: 9b5300d6fd806a4f50ade8b125eeec30ff30fea7a87890aa90171865c79c1e25
+  decode_config_digest: 1d35e7ec4a83d2a8ed14f1955732b2a2948b23a84c8d45b998f040dd49944d1c
+  prompt_digest: 747dafcfded9b494eb70535901a2dd9d597db95b04854873309bc9dd17bb119a
+  input_audio_digest: ''
+  input_audio_key: resampled_16k
+  created_at: '2026-09-16T05:33:40+00:00'
+  artifact_id: dryrun_glm_2
+- run_id: sensevoice_1
+  family: sensevoice
+  transcript_key: sensevoice_1
+  execution_id: sensevoice_1_05d7a5f57169c3468a8e2db6
+  model_checkpoint_digest: 54f07de5357a839ce9d09699a985728f87531831c34ece0ffdc1ffbfbfdb7092
+  decode_config_digest: bc5d1d0b0b4be987dd15be67b50d3c23de3b05737b9cc024f3c7003e8afc0825
+  prompt_digest: d6cb2ee3a421a9fd603282c4ce8c84c0024923cc7fa04429537a44271effdee6
+  input_audio_digest: ''
+  input_audio_key: resampled_16k
+  created_at: '2026-09-16T05:33:40+00:00'
+  artifact_id: dryrun_sensevoice_1
+- run_id: sensevoice_2
+  family: sensevoice
+  transcript_key: sensevoice_2
+  execution_id: sensevoice_2_da77da37a2aae7cc659a9c8c
+  model_checkpoint_digest: 54f07de5357a839ce9d09699a985728f87531831c34ece0ffdc1ffbfbfdb7092
+  decode_config_digest: bc5d1d0b0b4be987dd15be67b50d3c23de3b05737b9cc024f3c7003e8afc0825
+  prompt_digest: d6cb2ee3a421a9fd603282c4ce8c84c0024923cc7fa04429537a44271effdee6
+  input_audio_digest: ''
+  input_audio_key: resampled_16k
+  created_at: '2026-09-16T05:33:40+00:00'
+  artifact_id: dryrun_sensevoice_2

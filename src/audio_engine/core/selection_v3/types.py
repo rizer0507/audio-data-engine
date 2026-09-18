@@ -9,6 +9,10 @@ RULE_VERSION_SEMANTIC_TOLERANT = "selection_v3_semantic_tolerant_20260911"
 RULE_VERSION_BUSINESS_SEMANTIC = "selection_business_semantic_v4"
 # 027 five-class refactor. Opt-in via rule_version; legacy paths stay unchanged.
 RULE_VERSION_FIVE_CLASS = "selection_five_class_v1"
+# 028 auto noise + mutual-exclusion fix. Independent of v1; do not overwrite v1.
+RULE_VERSION_FIVE_CLASS_V2 = "selection_five_class_v2_auto_noise"
+# 029 DNSMOS joint evidence. Independent of v2; do not silently change v2 semantics.
+RULE_VERSION_FIVE_CLASS_V2_2 = "selection_five_class_v2_2_auto_noise"
 TOLERANCE_VERSION = "text_tolerance_v1"
 # 025 opt-in text pre-layer. Production default stays legacy until an explicit switch.
 CLASSIFY_TEXT_VERSION = "classify_text_zh_only_v1"
@@ -320,6 +324,71 @@ def is_business_semantic_rule(rule_version: str | None) -> bool:
 
 
 def is_five_class_rule(rule_version: str | None) -> bool:
-    """True only for the explicit 027 five-class rule id."""
+    """True only for 027 ``selection_five_class_v1`` (not v2)."""
     text = str(rule_version or "").strip()
-    return text == RULE_VERSION_FIVE_CLASS or text.startswith("selection_five_class_")
+    return text == RULE_VERSION_FIVE_CLASS or text.startswith("selection_five_class_v1")
+
+
+def is_five_class_v2_2_rule(rule_version: str | None) -> bool:
+    """True only for 029 ``selection_five_class_v2_2_auto_noise``."""
+    text = str(rule_version or "").strip()
+    return text == RULE_VERSION_FIVE_CLASS_V2_2 or text.startswith(
+        "selection_five_class_v2_2"
+    )
+
+
+def is_five_class_v2_rule(rule_version: str | None) -> bool:
+    """True only for 028 ``selection_five_class_v2_auto_noise`` (not v2.2)."""
+    text = str(rule_version or "").strip()
+    if is_five_class_v2_2_rule(text):
+        return False
+    return text == RULE_VERSION_FIVE_CLASS_V2 or text.startswith(
+        "selection_five_class_v2"
+    )
+
+
+def is_any_five_class_rule(rule_version: str | None) -> bool:
+    """True for five-class strategies (v1, v2, or v2.2)."""
+    return (
+        is_five_class_rule(rule_version)
+        or is_five_class_v2_rule(rule_version)
+        or is_five_class_v2_2_rule(rule_version)
+    )
+
+
+# 028 family dual-run states (exactly one per configured family).
+FAMILY_STATE_STABLE_TEXT = "stable_text"
+FAMILY_STATE_STABLE_EMPTY = "stable_empty"
+FAMILY_STATE_UNSTABLE = "unstable"
+FAMILY_STATE_UNAVAILABLE = "unavailable"
+FAMILY_STATES_V2 = frozenset(
+    {
+        FAMILY_STATE_STABLE_TEXT,
+        FAMILY_STATE_STABLE_EMPTY,
+        FAMILY_STATE_UNSTABLE,
+        FAMILY_STATE_UNAVAILABLE,
+    }
+)
+
+# 028 lightweight audio energy states.
+ENERGY_STATE_TOO_SHORT = "too_short"
+ENERGY_STATE_INAUDIBLE = "inaudible"
+ENERGY_STATE_AUDIBLE = "audible"
+ENERGY_STATE_BORDERLINE = "borderline"
+ENERGY_STATE_FAILED = "failed"
+ENERGY_STATES = frozenset(
+    {
+        ENERGY_STATE_TOO_SHORT,
+        ENERGY_STATE_INAUDIBLE,
+        ENERGY_STATE_AUDIBLE,
+        ENERGY_STATE_BORDERLINE,
+        ENERGY_STATE_FAILED,
+    }
+)
+
+# 028 environment_noise subtypes.
+NOISE_KIND_BACKGROUND = "background"
+NOISE_KIND_HUMAN_NOISE = "human_noise"
+NOISE_KIND_SILENCE = "silence"
+NOISE_KIND_AUDIO_TOO_SHORT = "audio_too_short"
+NOISE_KIND_CROSSTALK = "crosstalk"

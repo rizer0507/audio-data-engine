@@ -1,0 +1,95 @@
+# 工序一服务器 runtime 配置（030 第一步）
+#
+# 已填字段来自 2026-09-16 实际成功启动基线（模型路径、模板、GLM 独立环境与参数）。
+# 下列 REQUIRED 项禁止猜测，部署前必须显式补齐；`audio-data stage1 check-config` 会报缺：
+#   - authorized_gpus
+#   - engine_python
+#   - families.qwen.vllm_bin
+#   - dnsmos.onnx_path
+#
+# 授权卡编号不能照抄历史 CUDA_VISIBLE_DEVICES=4；本机有 8 张 A800，仅使用用户授权的两张。
+
+authorized_gpus: null  # REQUIRED，例如 [4, 5]；也可写 UUID 字符串列表，见 authorized_gpu_uuids
+authorized_gpu_uuids: null  # 可选；第四步调度用。若填写，须与授权卡一一对应
+
+# 第四步：双卡调度 / 租约（利用率≠空闲；默认禁止 Qwen+GLM 同卡）
+scheduler:
+  dual_gpu: true
+  lease_root: runs/stage1/gpu_leases
+  poll_interval_s: 5
+  sensevoice_reserve_fraction: 0.35  # SenseVoice 显存预算占比（须实测后可调）
+
+# 运行 audio-data 客户端及 SenseVoice 本地加载的解释器（REQUIRED，勿猜测 conda 路径）
+engine_python: null
+
+dnsmos:
+  onnx_path: null  # REQUIRED；后续分类步骤使用，部署预检一并校验
+
+probe:
+  # 可选默认探针音频；start --probe 未指定时使用
+  audio_path: null
+  ready_timeout_s: 300
+  ready_poll_s: 2.0
+
+session:
+  root: runs/stage1/serve
+
+families:
+  qwen:
+    enabled: true
+    model_path: /data2/data-cp/zcl/models/Qwen3-ASR-1___7B
+    chat_template: /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+    served_model_name: qwen3-asr
+    # REQUIRED：含 vllm 的可执行文件，例如 /path/to/envs/qwenasr/bin/vllm
+    # 历史成功命令为激活环境后的 `vllm serve`；此处必须写绝对路径，禁止依赖当前 PATH 猜测
+    vllm_bin: null
+    host: 127.0.0.1
+    port: 5555
+    gpu_memory_utilization: 0.5
+    tensor_parallel_size: 1
+    api_key: dummy
+    pipeline: pipelines/qwen_asr_batch.yaml
+
+  glm:
+    enabled: true
+    model_path: /data2/data-cp/models/GLM-ASR-Nano-2512
+    # 独立环境根目录（已验证）；python / vllm 默认取 {env_root}/bin/{python,vllm}
+    env_root: /data2/data-cp/lizi/env_hub/glm_asr_vllm
+    python_bin: null  # 可选覆盖；默认 {env_root}/bin/python
+    vllm_bin: null    # 可选覆盖；默认 {env_root}/bin/vllm
+    served_model_name: glm-asr
+    host: 0.0.0.0
+    client_host: 127.0.0.1
+    port: 5570
+    tensor_parallel_size: 1
+    dtype: bfloat16
+    max_model_len: 4096
+    max_num_seqs: 8
+    gpu_memory_utilization: 0.90
+    trust_remote_code: true
+    limit_mm_per_prompt: '{"audio":1}'
+    no_enable_flashinfer_autotune: true
+    kernel_config: '{"enable_jit_warmup":false,"enable_cutedsl_warmup":false}'
+    # 启动环境（完整保留；SAMPLER 不是 SAMPLE）
+    env:
+      PYTHONNOUSERSITE: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+    unset_env:
+      - VLLM_ATTENTION_BACKEND
+      - VLLM_USE_FLASHINFER_SAMPLE
+      - VLLM_ATTENTIOIN_BACKEND
+    api_key: dummy
+    pipeline: pipelines/glm_asr_batch.yaml
+
+  sensevoice:
+    enabled: true
+    # 本地 FunASR 加载，无独立 vLLM 服务
+    model_path: /data2/data-cp/xijujun/models/SenseVoiceSmall
+    device: cuda:0  # 相对 CUDA_VISIBLE_DEVICES 映射后的逻辑设备
+    language: auto
+    use_itn: true
+    disable_update: true
+    pipeline: pipelines/sensevoice_asr_batch.yaml

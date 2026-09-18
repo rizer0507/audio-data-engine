@@ -1,0 +1,12 @@
+# 028 lightweight audio energy policy (versioned). Thresholds are engineering
+# defaults and may be recalibrated from batch statistics; bump policy_version
+# whenever thresholds change so classification caches invalidate.
+policy_version: audio_energy_v1
+input_audio_key: resampled_16k
+min_duration_ms: 300
+min_rms_dbfs: -50.0
+min_peak_dbfs: -40.0
+min_non_silent_ratio: 0.02
+borderline_margin_db: 3.0
+silence_frame_dbfs: -45.0
+frame_ms: 20

@@ -1,0 +1,5 @@
+# 033 仓库冻结参数（配合 pipelines/warehouse_freeze.yaml --config）
+annotation_config: configs/annotation/zh_asr_v3.yaml
+categories_config: configs/warehouse/categories_five_class_v2_2.yaml
+warehouse_output_dir: datasets/stage1/warehouses
+catalog_dir: data/catalog

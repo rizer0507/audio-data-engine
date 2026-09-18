@@ -5,7 +5,9 @@
 # 已落地：docs/04-改进需求/已完成/005-评测流水线改进需求.md
 #         docs/04-改进需求/已完成/006-工序一清洗引擎拆分需求.md
 # 注意：跑前务必 unset 建集用的全局 QWEN_ASR_API_BASE / GLM_ASR_API_BASE，避免新旧模型串同一端口
+# 保活：各评测 vLLM 与本批 pipeline 均在 tmux 内跑（见 00 §2.0）；VS Code/Tabby 断线不停服
 
+# 建议：tmux new -s eval_batch   （各端口 vLLM 另开 vllm5560 / vllm5561 …）
 cd /data2/data-cp/lizi/audio-data-engine
 source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
 
@@ -28,6 +30,7 @@ audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME"
 audio-data eval check "$EVAL_NAME" --formal
 
 # 同 family：base + SFT 分端口（summary 已有 base 时可跳过）
+# 各端口 vLLM 须已在 tmux 内常驻（例：tmux new -s vllm5560）
 export QWEN_ASR_API_BASE=http://127.0.0.1:5560
 audio-data pipeline run pipelines/qwen_asr_batch.yaml \
   --eval-name "$EVAL_NAME" --asr-run qwen
@@ -54,7 +57,7 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 
 # 012-E：evaluation.json 含 business_metrics（NFR/FAR/…）与 publish_status
 # 缺校准门禁阈值 → needs_review；不得宣称业务回归 pass / 自动发布
-# 分拣默认已切 v3（014）；本门禁只阻塞「业务自动放行」，不阻塞 classify_v3
+# 当前五分类默认 v2.2（028/029）；本门禁只阻塞「业务自动放行」，不阻塞分类产物生成
 # 正式 Base vs SFT 比较时配置 baseline_prefix / candidate_prefix 与校准后的 gate 阈值
 # 详见：docs/04-改进需求/已完成/012-E-业务评测与生产切换.md（操作口径被 014 覆盖）
 #       configs/metrics/business_risk_v1.yaml

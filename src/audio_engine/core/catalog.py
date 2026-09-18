@@ -19,9 +19,18 @@ ARTIFACT_KINDS = {
     "model",
     "report",
     "training_input",
+    "warehouse",
     "other",
 }
-ArtifactKind = Literal["manifest", "dataset_release", "model", "report", "training_input", "other"]
+ArtifactKind = Literal[
+    "manifest",
+    "dataset_release",
+    "model",
+    "report",
+    "training_input",
+    "warehouse",
+    "other",
+]
 
 
 def utc_now() -> str:
@@ -182,6 +191,31 @@ class ModelVersion(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class BatchWarehouse(BaseModel):
+    """Formal batch-unique data warehouse (033). Not a train/eval Release."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = CATALOG_SCHEMA_VERSION
+    warehouse_id: str
+    batch: str
+    manifest_artifact_id: str
+    classified_digest: str
+    content_fingerprint: str
+    uri: str
+    counts: dict[str, int] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=utc_now)
+    git_commit: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("warehouse_id", "batch")
+    @classmethod
+    def validate_ids(cls, value: str) -> str:
+        if not value or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in value):
+            raise ValueError("warehouse id/batch may contain only lowercase letters, digits, '_' and '-'")
+        return value
+
+
 class ArtifactCatalog:
     """Filesystem catalog using one atomic, immutable JSON record per artifact.
 
@@ -194,6 +228,7 @@ class ArtifactCatalog:
         self.records_dir = self.root / "artifacts"
         self.releases_dir = self.root / "releases"
         self.models_dir = self.root / "models"
+        self.warehouses_dir = self.root / "warehouses"
 
     def register_file(
         self,
@@ -318,6 +353,36 @@ class ArtifactCatalog:
                 for path in sorted(self.models_dir.glob("*.json"), reverse=True)
             ]
             if self.models_dir.exists()
+            else []
+        )
+
+    def put_warehouse(self, warehouse: BatchWarehouse) -> BatchWarehouse:
+        """Register one formal warehouse per batch (immutable; content change fails)."""
+        self.get(warehouse.manifest_artifact_id, verify=True)
+        # Enforce warehouse_id ↔ batch uniqueness across the catalog.
+        for existing in self.list_warehouses():
+            if existing.batch == warehouse.batch and existing.warehouse_id != warehouse.warehouse_id:
+                raise ValueError(
+                    f"batch {warehouse.batch!r} already bound to warehouse {existing.warehouse_id!r}"
+                )
+            if existing.warehouse_id == warehouse.warehouse_id and existing.batch != warehouse.batch:
+                raise ValueError(
+                    f"warehouse_id {warehouse.warehouse_id!r} already bound to batch {existing.batch!r}"
+                )
+        # Named record keyed by batch so one batch can only ever hold one formal warehouse.
+        self._put_named(self.warehouses_dir, warehouse.batch, warehouse.model_dump(mode="json"))
+        return warehouse
+
+    def get_warehouse_by_batch(self, batch: str) -> BatchWarehouse:
+        return BatchWarehouse.model_validate(self._get_named(self.warehouses_dir, batch))
+
+    def list_warehouses(self) -> list[BatchWarehouse]:
+        return (
+            [
+                BatchWarehouse.model_validate_json(path.read_text(encoding="utf-8"))
+                for path in sorted(self.warehouses_dir.glob("*.json"), reverse=True)
+            ]
+            if self.warehouses_dir.exists()
             else []
         )
 

@@ -1,0 +1,5 @@
+# 033 标注包导出参数（配合 pipelines/warehouse_export_annotation.yaml --config）
+revision: r1
+view: blind
+format: both
+annotation_config: configs/annotation/zh_asr_v3.yaml

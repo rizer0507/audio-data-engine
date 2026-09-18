@@ -589,6 +589,10 @@ def apply_source_name_to_single_pipeline(
         # 020 shadow: write beside production classified, never overwrite it.
         if "shadow_020" in key:
             out = staged_manifest_path(f"classified_v3_{name}_shadow_020")
+        elif "five_class_v2_2" in key or "v2_2_auto_noise" in key:
+            out = staged_manifest_path(f"classified_five_class_v2_2_auto_noise_{name}")
+        elif "five_class_v2" in key or "v2_auto_noise" in key:
+            out = staged_manifest_path(f"classified_five_class_v2_auto_noise_{name}")
         elif "five_class" in key:
             out = staged_manifest_path(f"classified_five_class_v1_{name}")
         elif "zh_only" in key:
@@ -631,6 +635,79 @@ def apply_source_name_to_single_pipeline(
         return {"source_dir": None, "input_manifest": str(resolved), "source_id": None,
                 "output_manifest": _posix(manifest_path("built_v3", name)),
                 "aggregate_manifests": None, "asr_run": None, "aggregate_base": None}
+
+    if "warehouse_export" in key:
+        if run_alias is not None or base_alias is not None:
+            raise ValueError("warehouse_export_annotation does not accept ASR run/base overrides")
+        # Prefer formal five-class v2.2 classified snapshot; fall back to explicit path via CLI.
+        candidates = [
+            staged_manifest_path(f"classified_five_class_v2_2_auto_noise_{name}"),
+            staged_manifest_path(f"classified_five_class_v2_auto_noise_{name}"),
+            staged_manifest_path(f"classified_five_class_v1_{name}"),
+            manifest_path("classified_v3", name),
+        ]
+        resolved = None
+        for cand in candidates:
+            try:
+                resolved = resolve_existing_manifest(cand)
+                break
+            except FileNotFoundError:
+                continue
+        if resolved is None:
+            raise FileNotFoundError(
+                f"no classified Manifest found for batch {name!r}; "
+                "expected classified_five_class_v2_2_auto_noise_<batch>.parquet"
+            )
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(
+                staged_manifest_path(f"warehouse_export_{name}")
+            ),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+            "warehouse_batch": name,
+            "classified_manifest": str(resolved),
+        }
+
+    if "warehouse_freeze" in key:
+        if run_alias is not None or base_alias is not None:
+            raise ValueError("warehouse_freeze does not accept ASR run/base overrides")
+        reviewed = resolve_existing_manifest(
+            staged_manifest_path(f"reviewed_warehouse_{name}")
+        )
+        classified_candidates = [
+            staged_manifest_path(f"classified_five_class_v2_2_auto_noise_{name}"),
+            staged_manifest_path(f"classified_five_class_v2_auto_noise_{name}"),
+            staged_manifest_path(f"classified_five_class_v1_{name}"),
+            manifest_path("classified_v3", name),
+        ]
+        classified = None
+        for cand in classified_candidates:
+            try:
+                classified = resolve_existing_manifest(cand)
+                break
+            except FileNotFoundError:
+                continue
+        if classified is None:
+            raise FileNotFoundError(
+                f"no classified Manifest found for batch {name!r} (needed for freeze alignment)"
+            )
+        return {
+            "source_dir": None,
+            "input_manifest": str(reviewed),
+            "source_id": None,
+            "output_manifest": _posix(
+                staged_manifest_path(f"warehouse_frozen_{name}")
+            ),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+            "warehouse_batch": name,
+            "classified_manifest": str(classified),
+        }
 
     asr_kind = _asr_output_kind(pipeline_name)
     if asr_kind is not None:

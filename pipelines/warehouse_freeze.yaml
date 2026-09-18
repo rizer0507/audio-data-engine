@@ -1,0 +1,33 @@
+# 033 段二：回填校验 → 整批门禁 → batch 唯一仓库冻结（人工操作之后）
+#
+# 输入必须是整批人审完成的 reviewed_warehouse_<batch>.parquet
+#（由多次 review import --protocol v3 累积写成，见操作说明）。
+# 与分类快照 1:1 对齐；集合校验在 Manifest 层完成，不逐样本发布。
+# 不绑定训练集 Release；不抽取 train/val。
+#
+#   audio-data pipeline run pipelines/warehouse_freeze.yaml \
+#     --source-name <batch> \
+#     --config configs/warehouse/freeze_default.yaml
+#
+# 正式仓库：datasets/stage1/warehouses/<batch>/{manifest.parquet,warehouse.json}
+# catalog：data/catalog/warehouses/<batch>.json（一 batch 一正式 warehouse_id）
+
+name: warehouse_freeze
+input:
+  manifest: datasets/stage1/derived/reviewed_warehouse_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/warehouse_frozen_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: freeze
+    operator: quality.warehouse_freeze
+    params:
+      # batch / classified_manifest 由 --source-name 注入
+      annotation_config: configs/annotation/zh_asr_v3.yaml
+      categories_config: configs/warehouse/categories_five_class_v2_2.yaml
+      warehouse_output_dir: datasets/stage1/warehouses
+      catalog_dir: data/catalog
+      # review_evidence: []  # 可选：列出不可覆盖的 annotation_*.json 路径

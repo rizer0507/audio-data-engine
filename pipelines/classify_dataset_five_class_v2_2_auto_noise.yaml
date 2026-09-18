@@ -1,0 +1,42 @@
+# 029 五类分拣正式入口（selection_five_class_v2_2_auto_noise）。
+# 独立产物，不覆盖 classified_five_class_v1_* / classified_five_class_v2_auto_noise_* /
+# classified_v3_* / 审核包 / release。
+# 输入前提：上游已做 VAD；本流水线不重跑 VAD / GPU ASR。
+# 服务器上音频路径可读时执行 energy → DNSMOS 候选 → classify；Windows 只收最终 Parquet/XLSX。
+#
+#   audio-data pipeline run pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml \
+#     --source-name 0914-mixed-30000 \
+#     --config configs/selection/zh_asr_five_class_v2_2_auto_noise_0914_mixed_30000.yaml
+
+name: classify_dataset_five_class_v2_2_auto_noise
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_five_class_v2_2_auto_noise_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: attach_audio_energy
+    operator: quality.audio_energy
+    params:
+      config_path: configs/quality/audio_energy_v1.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml
+  - name: score_dnsmos_v2_2_candidates
+    operator: quality.dnsmos_v2_2_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml
+      dnsmos_config: configs/quality/dnsmos_p835.yaml
+      dnsmos_decision_config: configs/quality/dnsmos_decision_v2_2.yaml
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml
+      rule_version: selection_five_class_v2_2_auto_noise
+      noise_policy: asr_anomaly_noise_v1
+      classify_text_policy: five_class_v1
+      quality:
+        calibrated: false
+        noise_policy: asr_anomaly_noise_v1

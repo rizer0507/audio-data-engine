@@ -7,10 +7,10 @@ api_base: null
 api_key: dummy
 # 单 shard 内并发 HTTP 请求数（对接 vLLM /v1/audio/transcriptions）。
 # 对齐该副本 --max-num-seqs；先 4～8，探针通过再加。
-concurrency: 8
+concurrency: 32
 timeout: 120
 language: zh
-batch_size: 32
+batch_size: 128
 temperature: 0
 response_format: json
 

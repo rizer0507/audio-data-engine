@@ -268,11 +268,11 @@ def evaluate_noise_trigger(sample: Sample, config: SelectionV3Config) -> NoiseTr
     reasons: list[str] = []
     if family_valid and not any(family_valid.values()):
         reasons.append(TRIGGER_ALL_FAMILIES_NO_VALID)
-    from audio_engine.core.selection_v3.types import is_five_class_rule
+    from audio_engine.core.selection_v3.types import is_any_five_class_rule
 
-    # 027: foreign/echo routes are excluded before scoring; do not use non_chinese
-    # as a noise-trigger decision under the five-class rule.
-    if foreign_routes and not is_five_class_rule(config.rule_version):
+    # 027/028: foreign/echo routes are excluded before scoring; do not use non_chinese
+    # as a noise-trigger decision under five-class rules.
+    if foreign_routes and not is_any_five_class_rule(config.rule_version):
         reasons.append(TRIGGER_NON_CHINESE)
     technical = bool(family_valid) and technical_families == len(family_valid) and not any(
         family_valid.values()

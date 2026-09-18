@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -137,6 +138,9 @@ def _apply_pipeline_config(cfg: PipelineConfig, config_file: Path) -> None:
     Used by prepare_dataset_v3 (and later classify/build v3) so artifact paths and
     policy versions come from the resolved config rather than ad-hoc discovery.
     Existing step params are preserved; ``config_path`` is overridden.
+
+    Warehouse export/freeze configs may also set ``revision`` / ``batch`` /
+    ``categories_config`` / ``output`` / ``review_evidence`` on the step.
     """
     path = Path(config_file).resolve()
     if not path.exists():
@@ -148,6 +152,41 @@ def _apply_pipeline_config(cfg: PipelineConfig, config_file: Path) -> None:
     patched = False
     for step in cfg.steps:
         op = str(step.operator)
+        if op in {
+            "quality.warehouse_export_annotation",
+            "quality.warehouse_freeze",
+        }:
+            # Merge warehouse-specific keys; keep YAML step defaults for unset fields.
+            merge_keys = (
+                "revision",
+                "batch",
+                "view",
+                "format",
+                "output",
+                "pack_output",
+                "annotation_config",
+                "categories_config",
+                "allowed_categories",
+                "classified_manifest",
+                "review_evidence",
+                "warehouse_output_dir",
+                "catalog_dir",
+                "rule_version",
+            )
+            extra = {k: raw[k] for k in merge_keys if k in raw}
+            if "config_path" in (step.params or {}) or "annotation_config" in (step.params or {}):
+                # Prefer explicit warehouse annotation_config / categories from --config.
+                if "annotation_config" in raw:
+                    extra["annotation_config"] = str(
+                        Path(str(raw["annotation_config"])).resolve()
+                        if not Path(str(raw["annotation_config"])).is_absolute()
+                        else raw["annotation_config"]
+                    )
+                if "categories_config" in raw:
+                    extra["categories_config"] = str(raw["categories_config"])
+            step.params = {**(step.params or {}), **extra}
+            patched = True
+            continue
         consumes = (
             op in {
                 "quality.prepare_dataset_v3",
@@ -168,6 +207,32 @@ def _apply_pipeline_config(cfg: PipelineConfig, config_file: Path) -> None:
         raise typer.BadParameter(
             f"--config={path} could not be applied: pipeline has no config-consuming step"
         )
+
+
+def _apply_warehouse_source_overrides(cfg: PipelineConfig, overrides: dict) -> None:
+    """Inject batch + classified snapshot paths into warehouse export/freeze steps."""
+    batch = overrides.get("warehouse_batch")
+    classified = overrides.get("classified_manifest")
+    for step in cfg.steps:
+        op = str(step.operator)
+        if op not in {
+            "quality.warehouse_export_annotation",
+            "quality.warehouse_freeze",
+        }:
+            continue
+        params = dict(step.params or {})
+        if batch:
+            params["batch"] = batch
+        if classified:
+            params["classified_manifest"] = classified
+        if op == "quality.warehouse_export_annotation" and batch:
+            # Default pack stem under review/warehouse/<batch>/<revision>/
+            revision = str(params.get("revision") or "r1")
+            if not params.get("output") and not params.get("pack_output"):
+                params["output"] = (
+                    f"datasets/stage1/review/warehouse/{batch}/{revision}/pack"
+                )
+        step.params = params
 
 
 def _apply_asr_run_transcript_key(cfg: PipelineConfig, asr_run: str) -> None:
@@ -805,6 +870,8 @@ def pipeline_run(
                         **(step.params or {}),
                         "quality_sidecar_manifest": overrides["quality_sidecar_manifest"],
                     }
+        if overrides.get("warehouse_batch") or overrides.get("classified_manifest"):
+            _apply_warehouse_source_overrides(cfg, overrides)
         if overrides.get("asr_run"):
             _apply_asr_run_transcript_key(cfg, str(overrides["asr_run"]))
             cfg.name = pipeline_run_name(
@@ -823,6 +890,12 @@ def pipeline_run(
         if overrides.get("quality_sidecar_manifest"):
             console.print(
                 f"  Quality:     [cyan]{overrides['quality_sidecar_manifest']}[/cyan]"
+            )
+        if overrides.get("warehouse_batch"):
+            console.print(f"  Warehouse:   batch=[cyan]{overrides['warehouse_batch']}[/cyan]")
+        if overrides.get("classified_manifest"):
+            console.print(
+                f"  Classified:  [cyan]{overrides['classified_manifest']}[/cyan]"
             )
         if cfg.source_dir:
             console.print(f"  Source dir:  [cyan]{cfg.source_dir}[/cyan]")
@@ -906,6 +979,22 @@ def pipeline_run(
         except Exception as exc:  # noqa: BLE001
             raise typer.BadParameter(str(exc)) from exc
         console.print(f"  Config:      [cyan]{dataset_config.resolve()}[/cyan]")
+        # Refresh warehouse pack path if --config changed revision after --source-name.
+        for step in cfg.steps:
+            if str(step.operator) != "quality.warehouse_export_annotation":
+                continue
+            params = dict(step.params or {})
+            batch = str(params.get("batch") or "").strip()
+            revision = str(params.get("revision") or "r1").strip() or "r1"
+            if batch and (
+                not params.get("output")
+                or str(params.get("output")).endswith("/pack")
+                or "/warehouse/" in str(params.get("output") or "")
+            ):
+                params["output"] = (
+                    f"datasets/stage1/review/warehouse/{batch}/{revision}/pack"
+                )
+                step.params = params
 
     if input_manifest is not None:
         cfg.input_manifest = str(input_manifest)
@@ -1649,11 +1738,22 @@ def review_import(
         "--allow-issues",
         help="v3: write output even when blocking validation issues exist (still reports them)",
     ),
+    batch: Optional[str] = typer.Option(
+        None,
+        "--batch",
+        help="033 warehouse pack: expected batch id (validated against package warehouse_binding)",
+    ),
+    categories_config: Path = typer.Option(
+        Path("configs/warehouse/categories_five_class_v2_2.yaml"),
+        "--categories-config",
+        help="033: allowed reviewed_category values (extensible YAML list)",
+    ),
 ) -> None:
     """Import human review decisions.
 
     v3: empty gold ``__EMPTY__`` / JSON null vs ``__NULL__``; first pass alone cannot
     promote dual-required samples to gold; same person cannot self-review.
+    Warehouse packs (033): also validate batch binding and apply reviewed_category.
     """
     import pandas as pd
 
@@ -1748,6 +1848,11 @@ def review_import(
     )
     from audio_engine.core.annotation_v3.types import PASSES
     from audio_engine.core.artifacts import atomic_write_json
+    from audio_engine.core.warehouse.categories import load_allowed_categories
+    from audio_engine.core.warehouse.import_support import (
+        apply_reviewed_category_from_rows,
+        validate_warehouse_binding,
+    )
 
     if review_pass not in PASSES:
         raise typer.BadParameter(f"invalid --pass {review_pass!r}; expected one of {sorted(PASSES)}")
@@ -1767,11 +1872,26 @@ def review_import(
         for field in IMMUTABLE_EXPORT_COLUMNS:
             if str(row.get(field) or "") != str(original.get(field) or ""):
                 raise typer.BadParameter(f"immutable review column changed: {field}")
+
+    # Digest check uses current Manifest identity fields (id/sha/category/type);
+    # do not require dataset_path to equal the original classified path — multi-pass
+    # imports target reviewed_* intermediates.
+    binding_errors = validate_warehouse_binding(
+        package_meta,
+        batch=batch,
+        classified_samples=list(manifest) if package_meta.get("warehouse_binding") else None,
+        classified_path=None,
+    )
+    if binding_errors:
+        for err in binding_errors:
+            console.print(f"[red]ERR[/red] warehouse_binding: {err}")
+        raise typer.BadParameter(
+            f"warehouse pack binding failed ({len(binding_errors)} issue(s))"
+        )
+
     expected_qid = queue_id or str(rows[0].get("queue_id") or "")
     if not expected_qid:
-        meta_path = Path(review_file).with_suffix(".meta.json")
-        if meta_path.exists():
-            expected_qid = str(json.loads(meta_path.read_text(encoding="utf-8")).get("queue_id") or "")
+        expected_qid = str(package_meta.get("queue_id") or "")
     if not expected_qid:
         raise typer.BadParameter("could not resolve queue_id; pass --queue-id")
 
@@ -1784,6 +1904,13 @@ def review_import(
         review_pass=review_pass,
         actor_id=actor_id,
     )
+    if package_meta.get("warehouse_binding"):
+        allowed = load_allowed_categories(categories_config)
+        import_result = apply_reviewed_category_from_rows(
+            import_result,
+            rows,
+            allowed_categories=allowed,
+        )
     if import_has_blocking_issues(import_result) and not allow_issues:
         for issue in import_result.issues[:20]:
             console.print(
@@ -2038,15 +2165,66 @@ def review_export_summary(
             "source_path": sample.source_path,
             "type": bucket,
             "classification_bucket": bucket,
+            "category": sample.labels.get("category"),
+            "semantic_subtype": sample.labels.get("semantic_subtype")
+            or sample.labels.get("subtype")
+            or "",
+            "noise_kind": sample.labels.get("noise_kind") or "",
             "classification_reason": ",".join(
                 str(code) for code in (sample.labels.get("classification_reason_codes") or [])
             ),
+            "classification_source": sample.labels.get("classification_source") or "",
+            "classification_confidence": sample.labels.get("classification_confidence") or "",
+            "rule_version": sample.labels.get("rule_version")
+            or sample.labels.get("selection_policy_version")
+            or "",
             "label": str(sample.labels.get("label") or sample.labels.get("gold_text") or ""),
             "gold_text": str(sample.labels.get("gold_text") or ""),
             "gold_source": sample.labels.get("gold_source", ""),
             "annotation_state": sample.labels.get("annotation_state", ""),
             "annotation_reason": sample.labels.get("annotation_reason", ""),
             "selection_policy_version": sample.labels.get("selection_policy_version", ""),
+            "stable_text_family_count": sample.labels.get("stable_text_family_count"),
+            "stable_empty_family_count": sample.labels.get("stable_empty_family_count"),
+            "unstable_family_count": sample.labels.get("unstable_family_count"),
+            "unavailable_family_count": sample.labels.get("unavailable_family_count"),
+            "family_state_by_name": str(sample.labels.get("family_state_by_name") or ""),
+            "selected_family": sample.labels.get("selected_family") or "",
+            "selected_run_id": sample.labels.get("selected_run_id") or "",
+            "duration_ms": sample.labels.get("duration_ms"),
+            "rms_dbfs": sample.labels.get("rms_dbfs"),
+            "peak_dbfs": sample.labels.get("peak_dbfs"),
+            "non_silent_ratio": sample.labels.get("non_silent_ratio"),
+            "energy_state": sample.labels.get("energy_state") or "",
+            "energy_policy_version": sample.labels.get("energy_policy_version") or "",
+            "needs_review": sample.labels.get("needs_review"),
+            "review_reason": sample.labels.get("review_reason") or "",
+            "hardcase_reason": sample.labels.get("hardcase_reason") or "",
+            "dnsmos_sig": (sample.quality or {}).get("dnsmos_sig"),
+            "dnsmos_bak": (sample.quality or {}).get("dnsmos_bak"),
+            "dnsmos_ovrl": (sample.quality or {}).get("dnsmos_ovrl"),
+            "dnsmos_status": sample.labels.get("dnsmos_status")
+            or (sample.quality or {}).get("dnsmos_status")
+            or "",
+            "dnsmos_noise_state": sample.labels.get("dnsmos_noise_state")
+            or (sample.quality or {}).get("dnsmos_noise_state")
+            or "",
+            "dnsmos_speech_state": sample.labels.get("dnsmos_speech_state")
+            or (sample.quality or {}).get("dnsmos_speech_state")
+            or "",
+            "dnsmos_decision_policy_version": sample.labels.get(
+                "dnsmos_decision_policy_version"
+            )
+            or (sample.quality or {}).get("dnsmos_decision_policy_version")
+            or "",
+            "background_quality_risk": sample.labels.get("background_quality_risk"),
+            "quality_tag": sample.labels.get("quality_tag") or "",
+            "evidence_sources": str(sample.labels.get("evidence_sources") or ""),
+            "decision_trace": str(sample.labels.get("decision_trace") or ""),
+            "v2_fallback": sample.labels.get("v2_fallback"),
+            "borderline_resolved_by_dnsmos": sample.labels.get(
+                "borderline_resolved_by_dnsmos"
+            ),
         }
         row.update({f"{key}_text": sample.get_transcript_text(key) for key in sample.transcripts})
         rows.append(row)
@@ -2076,6 +2254,45 @@ def review_export_summary(
 
     counts = Counter(row["type"] for row in rows)
     console.print(f"  type counts: {dict(sorted(counts.items()))}")
+    category_rows = [row for row in rows if row.get("category")]
+    if category_rows:
+        cat_counts = Counter(str(row.get("category")) for row in category_rows)
+        console.print(f"  category counts: {dict(sorted(cat_counts.items()))}")
+        noise_counts = Counter(
+            str(row.get("noise_kind") or "")
+            for row in category_rows
+            if row.get("category") == "environment_noise"
+        )
+        if any(noise_counts.values()):
+            console.print(f"  noise_kind counts: {dict(sorted(noise_counts.items()))}")
+        dnsmos_noise_counts = Counter(
+            str(row.get("dnsmos_noise_state") or "")
+            for row in category_rows
+            if row.get("dnsmos_noise_state")
+        )
+        if any(dnsmos_noise_counts.values()):
+            console.print(
+                f"  dnsmos_noise_state counts: {dict(sorted(dnsmos_noise_counts.items()))}"
+            )
+        dnsmos_status_counts = Counter(
+            str(row.get("dnsmos_status") or "") for row in rows if row.get("dnsmos_status")
+        )
+        if any(dnsmos_status_counts.values()):
+            console.print(
+                f"  dnsmos_status counts: {dict(sorted(dnsmos_status_counts.items()))}"
+            )
+        v2_fallback_n = sum(1 for row in rows if row.get("v2_fallback") is True)
+        borderline_resolved_n = sum(
+            1 for row in rows if row.get("borderline_resolved_by_dnsmos") is True
+        )
+        if v2_fallback_n or borderline_resolved_n or any(
+            str(row.get("rule_version") or "").startswith("selection_five_class_v2_2")
+            for row in rows
+        ):
+            console.print(f"  v2_fallback count: {v2_fallback_n}")
+            console.print(
+                f"  borderline_resolved_by_dnsmos count: {borderline_resolved_n}"
+            )
 
     if output_manifest is not None:
         typed = Manifest(typed_samples)
@@ -2777,6 +2994,806 @@ def export_dataset(
         raise typer.BadParameter(f"Unsupported format: {format}")
 
     console.print(f"[green]OK[/green] Exported to [cyan]{out}[/cyan]")
+
+
+stage1_app = typer.Typer(help="工序一编排（030）：runtime 配置与家族启动适配器")
+app.add_typer(stage1_app, name="stage1")
+stage1_serve_app = typer.Typer(help="三家族 ASR 服务启动 / 探针 / 释放")
+stage1_app.add_typer(stage1_serve_app, name="serve")
+
+
+def _load_stage1_runtime(runtime_config: Path):
+    from audio_engine.core.stage1 import load_runtime_config
+
+    return load_runtime_config(runtime_config)
+
+
+@stage1_app.command("check-config")
+def stage1_check_config(
+    runtime_config: Path = typer.Option(
+        Path("configs/stage1/server.yaml"),
+        "--runtime-config",
+        help="服务器 runtime YAML",
+    ),
+    family: Optional[str] = typer.Option(
+        None,
+        "--family",
+        help="仅检查指定家族（qwen/glm/sensevoice）；默认全部",
+    ),
+) -> None:
+    """部署前报缺：授权 GPU、解释器、家族权重/启动器、DNSMOS 等必填项。"""
+    from audio_engine.core.stage1 import MissingConfigError
+    from audio_engine.core.stage1.adapters import get_adapter, list_families
+
+    cfg = _load_stage1_runtime(runtime_config)
+    families = [family] if family else None
+    missing = cfg.missing_fields(families=families, deploy=True)
+    path_errors: list[str] = []
+    for name in families or list_families():
+        path_errors.extend(get_adapter(name).check_paths(cfg))
+
+    payload = {
+        "runtime_config": str(cfg.path),
+        "ok": not missing and not path_errors,
+        "missing": missing,
+        "path_errors": path_errors,
+        "authorized_gpus": list(cfg.authorized_gpus) if cfg.authorized_gpus else None,
+    }
+    console.print_json(json.dumps(payload, ensure_ascii=False))
+    if missing:
+        raise typer.Exit(code=2)
+    if path_errors:
+        raise typer.Exit(code=3)
+
+
+@stage1_app.command("run")
+def stage1_run(
+    batch: str = typer.Option(..., "--batch", help="逻辑批次名（与来源目录分离保存）"),
+    source: str = typer.Option(
+        ...,
+        "--source",
+        help="本地源目录或 resources/manifest.yaml 中已登记的 source_id",
+    ),
+    model: list[str] = typer.Option(
+        ...,
+        "--model",
+        help="家族权重，可重复：qwen=/path glm=/path sensevoice=/path",
+    ),
+    runtime_config: Path = typer.Option(
+        Path("configs/stage1/server.yaml"),
+        "--runtime-config",
+    ),
+    gpus: str = typer.Option(
+        ...,
+        "--gpus",
+        help="授权 GPU 列表，逗号分隔；须属于 runtime authorized_gpus，禁止默认猜测",
+    ),
+    jobs_dir: Path = typer.Option(Path("runs/stage1/jobs"), "--jobs-dir"),
+    catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
+    max_rows: int = typer.Option(20000, "--max-rows", help="XLSX 单文件最大行数"),
+    foreground: bool = typer.Option(
+        False,
+        "--foreground",
+        help="前台执行（调试用）；默认后台，SSH 断开不中断",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="只创建 job、冻结配置并演练命令，不真正跑流水线；不能标正式成功",
+    ),
+    attach_existing: bool = typer.Option(
+        False,
+        "--attach-existing",
+        help="若端口已有匹配身份的服务则接入，不新建",
+    ),
+) -> None:
+    """提交工序一贯通任务：清洗→三族独立双跑→登记→v2.2 分类→导出→对账。
+
+    打印 job_id 后立即返回（默认后台）。提交成功 ≠ 批次执行成功。
+    """
+    from audio_engine.core.stage1.daemon import spawn_job_worker
+    from audio_engine.core.stage1.job import (
+        Stage1JobRequest,
+        create_job,
+        parse_gpus_option,
+        parse_model_option,
+        resolve_source_arg,
+    )
+    from audio_engine.core.stage1.orchestrator import Stage1Orchestrator, plan_job_summary
+
+    models: dict[str, str] = {}
+    for item in model:
+        family, path = parse_model_option(item)
+        models[family] = path
+    gpu_list = parse_gpus_option(gpus)
+    source_kind, source_value = resolve_source_arg(source)
+
+    # Validate GPUs against runtime before creating job.
+    runtime = _load_stage1_runtime(runtime_config)
+    runtime.require_ready(deploy=True)
+    for gpu in gpu_list:
+        token: int | str = int(gpu) if str(gpu).isdigit() else gpu
+        runtime.require_authorized_gpu(token)
+
+    request = Stage1JobRequest(
+        batch=batch,
+        source=source_value,
+        source_kind=source_kind,
+        models=models,
+        runtime_config=str(runtime_config),
+        gpus=gpu_list,
+        jobs_root=str(jobs_dir),
+        catalog_dir=str(catalog_dir),
+        max_xlsx_rows=max_rows,
+        attach_existing_services=attach_existing,
+    )
+    summary = plan_job_summary(request)
+    try:
+        job_root, state = create_job(request)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    payload = {
+        **summary,
+        "job_dir": str(job_root),
+        "status_cmd": f"audio-data stage1 status {state.job_id}",
+        "wait_cmd": f"audio-data stage1 wait {state.job_id}",
+        "submitted": True,
+        "batch_succeeded": False,
+        "message": "任务已提交；请用 status/wait 查看。提交成功不等于批次执行成功。",
+    }
+
+    if dry_run or foreground:
+        orch = Stage1Orchestrator(job_root, dry_run=dry_run)
+        try:
+            state = orch.run()
+        except Exception as exc:  # noqa: BLE001
+            payload.update(
+                {
+                    "status": "failed",
+                    "error": str(exc),
+                    "batch_succeeded": False,
+                }
+            )
+            console.print_json(json.dumps(payload, ensure_ascii=False))
+            raise typer.Exit(code=1) from exc
+        payload.update(
+            {
+                "status": state.status,
+                "batch_succeeded": state.status == "succeeded",
+                "reconcile": state.reconcile,
+                "outputs": state.outputs,
+            }
+        )
+        console.print_json(json.dumps(payload, ensure_ascii=False))
+        if state.status != "succeeded":
+            raise typer.Exit(code=1)
+        return
+
+    pid = spawn_job_worker(job_root)
+    state.pid = pid
+    state.status = "running"
+    from audio_engine.core.stage1.job import save_job_state
+
+    save_job_state(job_root, state)
+    payload.update({"status": "running", "worker_pid": pid, "batch_succeeded": False})
+    console.print_json(json.dumps(payload, ensure_ascii=False))
+
+
+@stage1_app.command("resume")
+def stage1_resume(
+    job_id: str = typer.Argument(..., help="已有 job_id"),
+    jobs_dir: Path = typer.Option(Path("runs/stage1/jobs"), "--jobs-dir"),
+    foreground: bool = typer.Option(
+        False,
+        "--foreground",
+        help="前台执行；默认后台，SSH 断开不中断",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """从检查点续跑：跳过已成功产物，导出失败只恢复导出，不覆盖成功 ASR。"""
+    from audio_engine.core.stage1.daemon import spawn_job_worker
+    from audio_engine.core.stage1.job import job_dir, load_job_state, save_job_state
+    from audio_engine.core.stage1.orchestrator import Stage1Orchestrator
+
+    root = job_dir(jobs_dir, job_id)
+    if not (root / "state.json").is_file():
+        raise typer.BadParameter(f"job state not found: {root / 'state.json'}")
+    state = load_job_state(root)
+    payload = {
+        "job_id": state.job_id,
+        "batch": state.batch,
+        "mode": "resume",
+        "job_root": str(root),
+        "status_cmd": f"audio-data stage1 status {state.job_id}",
+        "wait_cmd": f"audio-data stage1 wait {state.job_id}",
+        "note": "续跑保留成功产物；提交成功≠批次成功",
+    }
+    if dry_run or foreground:
+        orch = Stage1Orchestrator(root, dry_run=dry_run)
+        state = orch.resume()
+        payload.update(
+            {
+                "status": state.status,
+                "batch_succeeded": bool(
+                    state.status == "succeeded" and (state.reconcile or {}).get("ok")
+                ),
+                "error": state.error,
+                "reconcile": state.reconcile,
+            }
+        )
+        console.print_json(json.dumps(payload, ensure_ascii=False))
+        if state.status != "succeeded":
+            raise typer.Exit(code=3 if state.status == "needs_attention" else 1)
+        return
+
+    pid = spawn_job_worker(root, mode="resume")
+    state.pid = pid
+    state.status = "running"
+    save_job_state(root, state)
+    payload.update({"status": "running", "worker_pid": pid, "batch_succeeded": False})
+    console.print_json(json.dumps(payload, ensure_ascii=False))
+
+
+@stage1_app.command("retry")
+def stage1_retry(
+    job_id: str = typer.Argument(..., help="已有 job_id"),
+    jobs_dir: Path = typer.Option(Path("runs/stage1/jobs"), "--jobs-dir"),
+    family: Optional[str] = typer.Option(
+        None, "--family", help="限定家族：qwen / glm / sensevoice"
+    ),
+    run: Optional[str] = typer.Option(
+        None, "--run", help="限定路次编号（1 或 2），须配合 --family"
+    ),
+    failed_only: bool = typer.Option(
+        True,
+        "--failed-only/--all",
+        help="默认只重置失败/缺失；--all 重置目标范围内全部阶段",
+    ),
+    export_only: bool = typer.Option(
+        False,
+        "--export-only",
+        help="仅恢复 export/reconcile，绝不重跑 ASR",
+    ),
+    foreground: bool = typer.Option(False, "--foreground"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """精准补跑：指定 family/run 的 failed-only，或仅导出恢复。"""
+    from audio_engine.core.stage1.daemon import spawn_job_worker
+    from audio_engine.core.stage1.job import job_dir, load_job_state, save_job_state
+    from audio_engine.core.stage1.orchestrator import Stage1Orchestrator
+
+    if run is not None and family is None:
+        raise typer.BadParameter("--run 须配合 --family 使用")
+    root = job_dir(jobs_dir, job_id)
+    if not (root / "state.json").is_file():
+        raise typer.BadParameter(f"job state not found: {root / 'state.json'}")
+    state = load_job_state(root)
+    payload = {
+        "job_id": state.job_id,
+        "batch": state.batch,
+        "mode": "retry",
+        "family": family,
+        "run": run,
+        "failed_only": failed_only,
+        "export_only": export_only,
+        "job_root": str(root),
+        "status_cmd": f"audio-data stage1 status {state.job_id}",
+        "wait_cmd": f"audio-data stage1 wait {state.job_id}",
+        "note": "补跑保留真实 execution；导出失败不得重跑 ASR",
+    }
+    if dry_run or foreground:
+        orch = Stage1Orchestrator(root, dry_run=dry_run)
+        state = orch.retry(
+            family=family,
+            run=run,
+            failed_only=failed_only,
+            export_only=export_only,
+        )
+        payload.update(
+            {
+                "status": state.status,
+                "batch_succeeded": bool(
+                    state.status == "succeeded" and (state.reconcile or {}).get("ok")
+                ),
+                "error": state.error,
+                "reconcile": state.reconcile,
+            }
+        )
+        console.print_json(json.dumps(payload, ensure_ascii=False))
+        if state.status != "succeeded":
+            raise typer.Exit(code=3 if state.status == "needs_attention" else 1)
+        return
+
+    pid = spawn_job_worker(
+        root,
+        mode="retry",
+        family=family,
+        run=run,
+        failed_only=failed_only,
+        export_only=export_only,
+    )
+    state.pid = pid
+    state.status = "running"
+    save_job_state(root, state)
+    payload.update({"status": "running", "worker_pid": pid, "batch_succeeded": False})
+    console.print_json(json.dumps(payload, ensure_ascii=False))
+
+
+@stage1_app.command("status")
+def stage1_status(
+    job_id: str = typer.Argument(..., help="stage1 run 返回的 job_id"),
+    jobs_dir: Path = typer.Option(Path("runs/stage1/jobs"), "--jobs-dir"),
+    json_out: bool = typer.Option(
+        False,
+        "--json/--no-json",
+        help="输出 JSON（默认终端视图；与 --watch 联用时每次刷新打印 JSON）",
+    ),
+    watch: bool = typer.Option(
+        False,
+        "--watch",
+        "-w",
+        help="每 --interval 秒刷新；状态变化去重显示",
+    ),
+    interval: float = typer.Option(5.0, "--interval", help="watch 刷新秒数（默认 5）"),
+    stall_timeout: float = typer.Option(
+        300.0,
+        "--stall-timeout",
+        help="进程存活但无进展超过该秒数则标记 stalled",
+    ),
+) -> None:
+    """统一进度：活动阶段、各族双路覆盖率、GPU 快照、吞吐/ETA、停滞与缺口。
+
+    对账通过前不显示完成（progress 上限 99%）；batch_succeeded 仅在 reconcile.ok。
+    """
+    import time as _time
+
+    from audio_engine.core.stage1.job import job_dir
+    from audio_engine.core.stage1.status_view import build_status_view, format_status_text
+
+    root = job_dir(jobs_dir, job_id)
+    if not (root / "state.json").is_file():
+        raise typer.BadParameter(f"job state not found: {root / 'state.json'}")
+
+    last_fingerprint: str | None = None
+    last_summary_at = 0.0
+
+    def _fingerprint(view_dict: dict) -> str:
+        slim = {
+            "display_status": view_dict.get("display_status"),
+            "progress_pct": view_dict.get("progress_pct"),
+            "active_stages": view_dict.get("active_stages"),
+            "asr_coverage_pct": view_dict.get("asr_coverage_pct"),
+            "family_coverage": {
+                fam: {
+                    "success_runs": (info or {}).get("success_runs"),
+                    "complete": (info or {}).get("complete"),
+                }
+                for fam, info in (view_dict.get("family_coverage") or {}).items()
+            },
+            "stall": (view_dict.get("stall") or {}).get("stalled"),
+            "block_reason": view_dict.get("block_reason"),
+            "batch_succeeded": view_dict.get("batch_succeeded"),
+        }
+        return json.dumps(slim, ensure_ascii=False, sort_keys=True)
+
+    while True:
+        view = build_status_view(root, stall_timeout_s=stall_timeout)
+        payload = view.to_dict()
+        fp = _fingerprint(payload)
+        now = _time.time()
+        changed = fp != last_fingerprint
+        # Dedup: print on change, or force summary every 60s while watching.
+        force_summary = watch and (now - last_summary_at) >= 60.0
+        if changed or force_summary or not watch:
+            if json_out:
+                console.print_json(json.dumps(payload, ensure_ascii=False))
+            else:
+                if watch and changed and last_fingerprint is not None:
+                    console.print(f"[dim]--- status changed {_time.strftime('%H:%M:%S')} ---[/dim]")
+                console.print(format_status_text(view))
+            last_fingerprint = fp
+            last_summary_at = now
+            # Persist latest view for external tools.
+            try:
+                from audio_engine.core.stage1.digests import write_json
+
+                write_json(root / "status_view.json", payload)
+            except Exception:
+                pass
+        if not watch:
+            # Non-zero if failed terminal without success — status itself stays 0
+            # unless user asks; keep 0 for query. wait owns exit codes.
+            return
+        if view.batch_succeeded or view.display_status == "failed":
+            return
+        _time.sleep(max(0.5, interval))
+
+
+@stage1_app.command("wait")
+def stage1_wait(
+    job_id: str = typer.Argument(...),
+    jobs_dir: Path = typer.Option(Path("runs/stage1/jobs"), "--jobs-dir"),
+    interval: float = typer.Option(5.0, "--interval"),
+    timeout: float = typer.Option(0.0, "--timeout", help="秒；0 表示不限制"),
+    stall_timeout: float = typer.Option(300.0, "--stall-timeout"),
+    json_out: bool = typer.Option(True, "--json/--no-json"),
+) -> None:
+    """阻塞直到终态；仅对账通过才以 0 退出（完成前绝不成功退出）。"""
+    import time as _time
+
+    from audio_engine.core.stage1.job import job_dir, load_job_state, save_job_state
+    from audio_engine.core.stage1.process import pid_is_alive
+    from audio_engine.core.stage1.status_view import build_status_view, wait_exit_code
+
+    root = job_dir(jobs_dir, job_id)
+    started = _time.time()
+    last_fp = None
+    while True:
+        # Heal zombie running state.
+        state = load_job_state(root)
+        if state.pid and not pid_is_alive(int(state.pid)) and state.status == "running":
+            state.status = "failed"
+            state.error = f"worker pid={state.pid} 已退出但状态仍为 running"
+            save_job_state(root, state)
+
+        view = build_status_view(root, stall_timeout_s=stall_timeout)
+        code = wait_exit_code(view)
+        fp = json.dumps(
+            {
+                "display_status": view.display_status,
+                "progress_pct": view.progress_pct,
+                "active": view.active_stages,
+                "stall": view.stall.get("stalled"),
+            },
+            ensure_ascii=False,
+        )
+        if fp != last_fp:
+            if json_out:
+                console.print_json(
+                    json.dumps(
+                        {
+                            "job_id": view.job_id,
+                            "display_status": view.display_status,
+                            "progress_pct": view.progress_pct,
+                            "batch_succeeded": view.batch_succeeded,
+                            "block_reason": view.block_reason,
+                            "asr_coverage_pct": view.asr_coverage_pct,
+                            "eta": view.eta,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            else:
+                console.print(
+                    f"wait {view.job_id} {view.display_status} "
+                    f"progress={view.progress_pct}% asr={view.asr_coverage_pct}"
+                )
+            last_fp = fp
+
+        if code is not None:
+            final = {
+                "job_id": view.job_id,
+                "status": view.status,
+                "display_status": view.display_status,
+                "batch_succeeded": view.batch_succeeded,
+                "reconcile": view.reconcile,
+                "error": view.block_reason,
+                "outputs": view.outputs,
+                "exit_code": code,
+                "note": "仅 reconcile.ok 时 exit=0；对账前不能成功退出",
+            }
+            console.print_json(json.dumps(final, ensure_ascii=False))
+            raise typer.Exit(code=code)
+
+        if timeout > 0 and (_time.time() - started) > timeout:
+            console.print_json(
+                json.dumps(
+                    {
+                        "job_id": view.job_id,
+                        "status": view.status,
+                        "display_status": view.display_status,
+                        "batch_succeeded": False,
+                        "error": f"wait timeout after {timeout}s",
+                        "exit_code": 2,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise typer.Exit(code=2)
+        _time.sleep(max(0.5, interval))
+
+
+@stage1_app.command("classify")
+def stage1_classify(
+    batch: str = typer.Option(..., "--batch", help="与各家族推理时同一 batch / source-name"),
+    source_dir: Optional[Path] = typer.Option(
+        None,
+        "--source-dir",
+        "--source_dir",
+        help="可选；仅做目录存在性提示，不会重扫/重洗音频",
+    ),
+    family: Optional[list[str]] = typer.Option(
+        None,
+        "--family",
+        help="例如 qwen=qwen_1,qwen_2；可重复三次。优先于 dataset YAML 与 stage1 默认别名",
+    ),
+    dataset_config: Optional[Path] = typer.Option(
+        None, "--dataset-config", help="显式批次 YAML（只读 model_families）"
+    ),
+    cleaned: Optional[Path] = typer.Option(None, "--cleaned", help="完整 cleaned 底表"),
+    asr_dir: Path = typer.Option(Path("datasets/stage1/asr"), "--asr-dir"),
+    dnsmos_config: Path = typer.Option(
+        Path("configs/quality/dnsmos_p835.yaml"), "--dnsmos-config"
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        help="默认 data/exports/summary_five_class_v2_2_auto_noise_<batch>.xlsx",
+    ),
+    classified_output: Optional[Path] = typer.Option(
+        None,
+        "--classified-output",
+        help="默认 datasets/stage1/derived/classified_five_class_v2_2_auto_noise_<batch>.parquet",
+    ),
+    no_classified_parquet: bool = typer.Option(
+        False, "--no-classified-parquet", help="仅交付 XLSX，不写正式 classified parquet"
+    ),
+    energy_workers: int = typer.Option(
+        1,
+        "--energy-workers",
+        "--workers",
+        help="音频能量步线程并发（默认 1；8 卡服务器 CPU 建议 16~32）",
+    ),
+    overwrite: bool = typer.Option(False, "--overwrite"),
+) -> None:
+    """六路 ASR 已齐后的统一五类 v2.2 分类入口（031）；不启动 ASR、不占 GPU。
+
+    复用 ``scripts/classify_asr_to_xlsx.py`` 同一实现；不伪造 register/reservation/release。
+    """
+    import importlib.util
+
+    script_path = None
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "scripts" / "classify_asr_to_xlsx.py"
+        if candidate.is_file():
+            script_path = candidate
+            break
+    if script_path is None:
+        console.print("[red]错误: 找不到 scripts/classify_asr_to_xlsx.py[/red]")
+        raise typer.Exit(code=2)
+
+    spec = importlib.util.spec_from_file_location("classify_asr_to_xlsx", script_path)
+    if spec is None or spec.loader is None:
+        raise typer.Exit(code=2)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    argv: list[str] = ["--batch", batch]
+    if source_dir is not None:
+        argv.extend(["--source-dir", str(source_dir)])
+    if family:
+        for item in family:
+            argv.extend(["--family", item])
+    if dataset_config is not None:
+        argv.extend(["--dataset-config", str(dataset_config)])
+    if cleaned is not None:
+        argv.extend(["--cleaned", str(cleaned)])
+    argv.extend(["--asr-dir", str(asr_dir)])
+    argv.extend(["--dnsmos-config", str(dnsmos_config)])
+    argv.extend(["--energy-workers", str(energy_workers)])
+    if output is not None:
+        argv.extend(["--output", str(output)])
+    if classified_output is not None:
+        argv.extend(["--classified-output", str(classified_output)])
+    if no_classified_parquet:
+        argv.append("--no-classified-parquet")
+    if overwrite:
+        argv.append("--overwrite")
+
+    try:
+        module.main(argv)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        if code:
+            raise typer.Exit(code=code) from exc
+
+
+@stage1_serve_app.command("plan")
+def stage1_serve_plan(
+    family: str = typer.Argument(..., help="qwen / glm / sensevoice"),
+    gpu: str = typer.Option(..., "--gpu", help="授权 GPU 编号或 UUID（须在 runtime 配置内）"),
+    runtime_config: Path = typer.Option(
+        Path("configs/stage1/server.yaml"),
+        "--runtime-config",
+    ),
+    port: Optional[int] = typer.Option(None, "--port", help="覆盖配置端口（SenseVoice 忽略）"),
+) -> None:
+    """只打印启动命令 / 环境，不拉起进程（可在无服务器权重时验证构造）。"""
+    from audio_engine.core.stage1.adapters import get_adapter
+    from audio_engine.core.stage1.adapters.base import dump_plan
+
+    cfg = _load_stage1_runtime(runtime_config)
+    gpu_token: int | str = int(gpu) if gpu.isdigit() else gpu
+    plan = get_adapter(family).plan(cfg, gpu=gpu_token, port=port)
+    console.print_json(json.dumps(dump_plan(plan), ensure_ascii=False))
+
+
+@stage1_serve_app.command("start")
+def stage1_serve_start(
+    family: str = typer.Argument(..., help="qwen / glm / sensevoice"),
+    gpu: str = typer.Option(..., "--gpu", help="授权 GPU 编号或 UUID"),
+    runtime_config: Path = typer.Option(
+        Path("configs/stage1/server.yaml"),
+        "--runtime-config",
+    ),
+    port: Optional[int] = typer.Option(None, "--port"),
+    session_dir: Optional[Path] = typer.Option(
+        None,
+        "--session-dir",
+        help="会话目录（默认 runs/stage1/serve/<family>-gpu<gpu>-<ts>）",
+    ),
+    attach_existing: bool = typer.Option(
+        False,
+        "--attach-existing",
+        help="核验已有服务身份后接入，不新建进程、停止时不杀",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="只落盘 session 与命令，不启动进程",
+    ),
+    probe_audio: Optional[Path] = typer.Option(
+        None,
+        "--probe",
+        help="启动成功后立即用该音频探测；默认可用配置 probe.audio_path",
+    ),
+) -> None:
+    """启动或显式接入一个家族实例；仅清理 owned 会话进程。"""
+    from datetime import datetime as _dt
+
+    from audio_engine.core.stage1.adapters import get_adapter
+
+    cfg = _load_stage1_runtime(runtime_config)
+    gpu_token: int | str = int(gpu) if gpu.isdigit() else gpu
+    adapter = get_adapter(family)
+    if session_dir is None:
+        stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
+        session_dir = cfg.session_root / f"{adapter.family}-gpu{gpu_token}-{stamp}"
+    session = adapter.start(
+        cfg,
+        gpu=gpu_token,
+        port=port,
+        session_dir=session_dir,
+        attach_existing=attach_existing,
+        dry_run=dry_run,
+    )
+    audio = probe_audio or cfg.probe_audio_path
+    probe_payload = None
+    if audio and not dry_run:
+        result = adapter.probe(cfg, session=session, audio_path=audio, gpu=gpu_token)
+        probe_payload = {
+            "ok": result.ok,
+            "text": result.text,
+            "audio": result.audio_path,
+        }
+        if not result.ok:
+            if session.owned and session.kind == "vllm":
+                adapter.stop(session)
+            raise typer.BadParameter(f"探针失败（空转写）: {result.audio_path}")
+    console.print_json(
+        json.dumps(
+            {
+                "session_dir": str(session_dir),
+                "family": session.family,
+                "gpu": session.gpu,
+                "port": session.port,
+                "api_base": session.api_base,
+                "owned": session.owned,
+                "attached": session.attached,
+                "pid": session.pid,
+                "client_env": session.client_env,
+                "argv": session.argv,
+                "probe": probe_payload,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+@stage1_serve_app.command("stop")
+def stage1_serve_stop(
+    session_dir: Path = typer.Argument(..., help="start 输出的 session 目录"),
+) -> None:
+    """仅停止本任务 owned 进程；attached / dry-run 会话不会杀外部服务。"""
+    from audio_engine.core.stage1.adapters import get_adapter
+    from audio_engine.core.stage1.process import ServiceSession
+
+    state_path = session_dir / "session.json"
+    if not state_path.is_file():
+        raise typer.BadParameter(f"session 不存在: {state_path}")
+    session = ServiceSession.load(state_path)
+    adapter = get_adapter(session.family)
+    adapter.stop(session)
+    console.print(
+        f"[green]OK[/green] stopped family={session.family} owned={session.owned} "
+        f"pid={session.pid}"
+    )
+
+
+@stage1_serve_app.command("probe")
+def stage1_serve_probe(
+    family: str = typer.Argument(..., help="qwen / glm / sensevoice"),
+    audio: Path = typer.Option(..., "--audio", help="短 WAV 探针"),
+    runtime_config: Path = typer.Option(
+        Path("configs/stage1/server.yaml"),
+        "--runtime-config",
+    ),
+    api_base: Optional[str] = typer.Option(None, "--api-base", help="vLLM 服务地址"),
+    gpu: Optional[str] = typer.Option(
+        None,
+        "--gpu",
+        help="SenseVoice 必填：约束 CUDA_VISIBLE_DEVICES",
+    ),
+    session_dir: Optional[Path] = typer.Option(None, "--session-dir"),
+) -> None:
+    """模型身份检查 + 短音频推理探针。"""
+    from audio_engine.core.stage1.adapters import get_adapter
+    from audio_engine.core.stage1.process import ServiceSession
+
+    cfg = _load_stage1_runtime(runtime_config)
+    adapter = get_adapter(family)
+    session = None
+    if session_dir is not None:
+        session = ServiceSession.load(session_dir / "session.json")
+    gpu_token: int | str | None = None
+    if gpu is not None:
+        gpu_token = int(gpu) if gpu.isdigit() else gpu
+        cfg.require_authorized_gpu(gpu_token)
+    result = adapter.probe(
+        cfg,
+        session=session,
+        api_base=api_base,
+        audio_path=audio,
+        gpu=gpu_token,
+    )
+    console.print_json(
+        json.dumps(
+            {
+                "ok": result.ok,
+                "family": result.family,
+                "audio": result.audio_path,
+                "text": result.text,
+                "detail": result.detail,
+            },
+            ensure_ascii=False,
+        )
+    )
+    if not result.ok:
+        raise typer.Exit(code=2)
+
+
+@stage1_serve_app.command("identity")
+def stage1_serve_identity(
+    api_base: str = typer.Option(..., "--api-base"),
+    expected: str = typer.Option(..., "--expected", help="期望的 served-model-name"),
+) -> None:
+    """查询 /v1/models 并核验 served-model-name。"""
+    from audio_engine.core.stage1.identity import assert_served_model
+
+    identity = assert_served_model(api_base, expected)
+    console.print_json(
+        json.dumps(
+            {
+                "ok": True,
+                "api_base": identity.api_base,
+                "model_ids": list(identity.model_ids),
+                "expected": expected,
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 def main() -> None:

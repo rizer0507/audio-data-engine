@@ -16,6 +16,26 @@ from audio_engine.core.selection_v3.types import (
     RULE_VERSION,
 )
 
+_DEFAULT_CRITICAL_SHORT_RESPONSES = (
+    "要",
+    "不要",
+    "需要",
+    "不需要",
+    "好",
+    "不好",
+    "可以",
+    "不可以",
+    "行",
+    "不行",
+    "是",
+    "不是",
+    "有",
+    "没有",
+    "用",
+    "不用",
+    "好的",
+)
+
 
 @dataclass
 class RunIdentity:
@@ -148,6 +168,32 @@ class SelectionV3Config:
     gold_min_stable_families: int = 3
     short_polarity_max_han_chars: int = 4
     noise_call_counter: list[int] | None = field(default=None, repr=False)
+    # 028 audio energy policy (versioned thresholds; never hardcode in classifier).
+    audio_energy_policy_version: str = "audio_energy_v1"
+    audio_energy_min_duration_ms: float = 300.0
+    audio_energy_min_rms_dbfs: float = -50.0
+    audio_energy_min_peak_dbfs: float = -40.0
+    audio_energy_min_non_silent_ratio: float = 0.02
+    audio_energy_borderline_margin_db: float = 3.0
+    audio_energy_silence_frame_dbfs: float = -45.0
+    audio_energy_frame_ms: int = 20
+    # Critical short responses that must not auto-enter human_noise.
+    critical_short_responses: list[str] = field(default_factory=list)
+    # 029 DNSMOS joint decision (v2.2 only; disabled leaves pure v2 fallback).
+    dnsmos_decision_enabled: bool = False
+    dnsmos_decision_config_path: str = ""
+    dnsmos_decision_policy_version: str = ""
+    dnsmos_decision_fallback_to_v2_rules: bool = True
+    dnsmos_decision_resolve_borderline_when_noisy: bool = True
+    dnsmos_decision_attach_gold_quality_tag: bool = True
+    dnsmos_clean_bak: float = 3.5
+    dnsmos_clean_ovrl: float = 3.2
+    dnsmos_noisy_bak: float = 3.0
+    dnsmos_noisy_ovrl: float = 2.8
+    dnsmos_strong_sig: float = 3.5
+    dnsmos_weak_sig: float = 2.8
+    dnsmos_noisy_operator: str = "or"
+    dnsmos_require_status_success: bool = True
 
     def all_transcript_keys(self) -> list[str]:
         """Ordered unique keys expected across configured families."""
@@ -349,6 +395,100 @@ class SelectionV3Config:
         consensus_req = params.get("consensus") or {}
         classify_text = params.get("classify_text") or {}
         selection = params.get("selection") or params.get("gold_selection") or {}
+        audio_energy = params.get("audio_energy") or {}
+        # Optional external energy policy file (versioned thresholds).
+        energy_path = (
+            audio_energy.get("config_path")
+            or params.get("audio_energy_config")
+            or params.get("audio_energy_path")
+        )
+        if energy_path:
+            energy_raw = yaml.safe_load(Path(energy_path).read_text(encoding="utf-8")) or {}
+            if isinstance(energy_raw, dict):
+                # File defaults, then inline audio_energy overrides.
+                merged_energy = dict(energy_raw)
+                merged_energy.update(
+                    {k: v for k, v in audio_energy.items() if k != "config_path"}
+                )
+                audio_energy = merged_energy
+        dnsmos_decision = params.get("dnsmos_decision") or {}
+        dnsmos_decision_path = (
+            dnsmos_decision.get("config_path")
+            or params.get("dnsmos_decision_config")
+            or params.get("dnsmos_decision_path")
+            or ""
+        )
+        dnsmos_decision_enabled = bool(
+            dnsmos_decision.get(
+                "enabled",
+                params.get("dnsmos_decision_enabled", bool(dnsmos_decision_path)),
+            )
+        )
+        if dnsmos_decision_enabled and not dnsmos_decision_path:
+            raise ValueError(
+                "dnsmos_decision.enabled=true requires config_path "
+                "(configs/quality/dnsmos_decision_v2_2.yaml)"
+            )
+        dnsmos_thresholds: dict[str, Any] = {}
+        if dnsmos_decision_path:
+            from audio_engine.core.selection_v3.dnsmos_decision import (
+                load_dnsmos_decision_config,
+            )
+
+            loaded_dnsmos = load_dnsmos_decision_config(dnsmos_decision_path)
+            dnsmos_thresholds = {
+                "policy_version": loaded_dnsmos.policy_version,
+                "clean_bak": loaded_dnsmos.clean_bak,
+                "clean_ovrl": loaded_dnsmos.clean_ovrl,
+                "noisy_bak": loaded_dnsmos.noisy_bak,
+                "noisy_ovrl": loaded_dnsmos.noisy_ovrl,
+                "strong_sig": loaded_dnsmos.strong_sig,
+                "weak_sig": loaded_dnsmos.weak_sig,
+                "noisy_operator": loaded_dnsmos.noisy_operator,
+                "require_status_success": loaded_dnsmos.require_status_success,
+            }
+            # Inline overrides after file defaults.
+            for key in (
+                "policy_version",
+                "clean_bak",
+                "clean_ovrl",
+                "noisy_bak",
+                "noisy_ovrl",
+                "strong_sig",
+                "weak_sig",
+                "noisy_operator",
+                "require_status_success",
+            ):
+                if key in dnsmos_decision and key != "config_path":
+                    dnsmos_thresholds[key] = dnsmos_decision[key]
+            if "thresholds" in dnsmos_decision and isinstance(
+                dnsmos_decision["thresholds"], dict
+            ):
+                dnsmos_thresholds.update(dnsmos_decision["thresholds"])
+            if "decision" in dnsmos_decision and isinstance(
+                dnsmos_decision["decision"], dict
+            ):
+                dnsmos_thresholds.update(dnsmos_decision["decision"])
+            # Re-validate after overrides.
+            load_dnsmos_decision_config(
+                raw={
+                    "policy_version": dnsmos_thresholds.get("policy_version"),
+                    "thresholds": {
+                        "clean_bak": dnsmos_thresholds["clean_bak"],
+                        "clean_ovrl": dnsmos_thresholds["clean_ovrl"],
+                        "noisy_bak": dnsmos_thresholds["noisy_bak"],
+                        "noisy_ovrl": dnsmos_thresholds["noisy_ovrl"],
+                        "strong_sig": dnsmos_thresholds["strong_sig"],
+                        "weak_sig": dnsmos_thresholds["weak_sig"],
+                    },
+                    "decision": {
+                        "noisy_operator": dnsmos_thresholds.get("noisy_operator", "or"),
+                        "require_status_success": dnsmos_thresholds.get(
+                            "require_status_success", True
+                        ),
+                    },
+                }
+            )
         homophone_pairs = []
         for item in tolerance.get("homophone_pairs") or []:
             if isinstance(item, (list, tuple)) and len(item) == 2:
@@ -569,7 +709,18 @@ class SelectionV3Config:
             gold_min_stable_families=int(
                 selection.get(
                     "min_stable_families",
-                    params.get("gold_min_stable_families", 3),
+                    params.get(
+                        "gold_min_stable_families",
+                        (
+                            2
+                            if (
+                                str(params.get("rule_version") or "").startswith(
+                                    "selection_five_class_v2"
+                                )
+                            )
+                            else 3
+                        ),
+                    ),
                 )
             ),
             short_polarity_max_han_chars=int(
@@ -577,6 +728,97 @@ class SelectionV3Config:
                     "short_polarity_max_han_chars",
                     params.get("short_polarity_max_han_chars", 4),
                 )
+            ),
+            audio_energy_policy_version=str(
+                audio_energy.get("policy_version")
+                or params.get("audio_energy_policy_version")
+                or "audio_energy_v1"
+            ),
+            audio_energy_min_duration_ms=float(
+                audio_energy.get(
+                    "min_duration_ms",
+                    params.get("audio_energy_min_duration_ms", 300.0),
+                )
+            ),
+            audio_energy_min_rms_dbfs=float(
+                audio_energy.get(
+                    "min_rms_dbfs",
+                    params.get("audio_energy_min_rms_dbfs", -50.0),
+                )
+            ),
+            audio_energy_min_peak_dbfs=float(
+                audio_energy.get(
+                    "min_peak_dbfs",
+                    params.get("audio_energy_min_peak_dbfs", -40.0),
+                )
+            ),
+            audio_energy_min_non_silent_ratio=float(
+                audio_energy.get(
+                    "min_non_silent_ratio",
+                    params.get("audio_energy_min_non_silent_ratio", 0.02),
+                )
+            ),
+            audio_energy_borderline_margin_db=float(
+                audio_energy.get(
+                    "borderline_margin_db",
+                    params.get("audio_energy_borderline_margin_db", 3.0),
+                )
+            ),
+            audio_energy_silence_frame_dbfs=float(
+                audio_energy.get(
+                    "silence_frame_dbfs",
+                    params.get("audio_energy_silence_frame_dbfs", -45.0),
+                )
+            ),
+            audio_energy_frame_ms=int(
+                audio_energy.get(
+                    "frame_ms",
+                    params.get("audio_energy_frame_ms", 20),
+                )
+            ),
+            critical_short_responses=[
+                str(x).strip()
+                for x in (
+                    selection.get("critical_short_responses")
+                    or params.get("critical_short_responses")
+                    or []
+                )
+                if str(x).strip()
+            ],
+            dnsmos_decision_enabled=dnsmos_decision_enabled,
+            dnsmos_decision_config_path=str(dnsmos_decision_path or ""),
+            dnsmos_decision_policy_version=str(
+                dnsmos_thresholds.get("policy_version")
+                or dnsmos_decision.get("policy_version")
+                or ""
+            ),
+            dnsmos_decision_fallback_to_v2_rules=bool(
+                dnsmos_decision.get(
+                    "fallback_to_v2_rules",
+                    params.get("dnsmos_decision_fallback_to_v2_rules", True),
+                )
+            ),
+            dnsmos_decision_resolve_borderline_when_noisy=bool(
+                dnsmos_decision.get(
+                    "resolve_borderline_when_noisy",
+                    params.get("dnsmos_decision_resolve_borderline_when_noisy", True),
+                )
+            ),
+            dnsmos_decision_attach_gold_quality_tag=bool(
+                dnsmos_decision.get(
+                    "attach_gold_quality_tag",
+                    params.get("dnsmos_decision_attach_gold_quality_tag", True),
+                )
+            ),
+            dnsmos_clean_bak=float(dnsmos_thresholds.get("clean_bak", 3.5)),
+            dnsmos_clean_ovrl=float(dnsmos_thresholds.get("clean_ovrl", 3.2)),
+            dnsmos_noisy_bak=float(dnsmos_thresholds.get("noisy_bak", 3.0)),
+            dnsmos_noisy_ovrl=float(dnsmos_thresholds.get("noisy_ovrl", 2.8)),
+            dnsmos_strong_sig=float(dnsmos_thresholds.get("strong_sig", 3.5)),
+            dnsmos_weak_sig=float(dnsmos_thresholds.get("weak_sig", 2.8)),
+            dnsmos_noisy_operator=str(dnsmos_thresholds.get("noisy_operator", "or")),
+            dnsmos_require_status_success=bool(
+                dnsmos_thresholds.get("require_status_success", True)
             ),
         )
         cfg.validate_family_config()
@@ -601,10 +843,27 @@ class SelectionV3Config:
 
         cfg.noise_policy = normalize_noise_policy(cfg.noise_policy)
         cfg.classify_text_policy = normalize_classify_text_policy(cfg.classify_text_policy)
-        from audio_engine.core.selection_v3.types import is_five_class_rule
+        from audio_engine.core.selection_v3.types import (
+            is_any_five_class_rule,
+            is_five_class_v2_2_rule,
+            is_five_class_v2_rule,
+        )
 
-        if is_five_class_rule(cfg.rule_version) and cfg.classify_text_policy == "legacy":
+        if is_any_five_class_rule(cfg.rule_version) and cfg.classify_text_policy == "legacy":
             cfg.classify_text_policy = normalize_classify_text_policy("five_class_v1")
+        if (
+            is_five_class_v2_rule(cfg.rule_version)
+            or is_five_class_v2_2_rule(cfg.rule_version)
+        ) and not cfg.critical_short_responses:
+            cfg.critical_short_responses = list(_DEFAULT_CRITICAL_SHORT_RESPONSES)
+        if is_five_class_v2_2_rule(cfg.rule_version) and cfg.dnsmos_decision_enabled:
+            if not cfg.dnsmos_decision_config_path:
+                raise ValueError(
+                    "selection_five_class_v2_2 requires dnsmos_decision.config_path "
+                    "when enabled=true"
+                )
+            if not cfg.dnsmos_decision_policy_version:
+                raise ValueError("dnsmos_decision.policy_version must be non-empty")
         if cfg.classify_text_echo_missing not in {"fail", "echo_list_missing"}:
             raise ValueError(
                 "classify_text.echo_missing must be 'fail' or 'echo_list_missing', "

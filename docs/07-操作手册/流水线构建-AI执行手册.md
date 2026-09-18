@@ -35,8 +35,7 @@
 
 只问阻塞问题，例如：输入文件到底在哪、用哪张 GPU、热词原文是什么。不要让用户填技术表格。
 
-**分拣默认（014）**：工序一③正式入口为 `pipelines/classify_dataset_v3.yaml`（N≥3×双跑，见 015）；
-`classify_dataset.yaml`（v1）仅 legacy 复现，不要再写成新批次默认路径。
+**五分类默认（028/029）**：工序一③正式入口为 `pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml`（N≥3×双跑，上游已做 VAD）；编排固定为 `audio_energy → dnsmos_v2_2_candidates → classify`。`classify_dataset_five_class_v2_auto_noise.yaml` 是无 DNSMOS 联合语义的对照，五类 v1 与旧 `classify_dataset_v3*` 只作历史/legacy 复现，不要再写成新批次默认路径。
 
 ---
 

@@ -12,19 +12,20 @@
   工序二「训练」            = 引擎④训练流水线（外部框架）
   工序三「评测」            = 引擎⑤评测（本版服务器手册为 Model Registry 入口）
 
-【现行默认 · 2026-09 / 014·015·019·023·027】
-  工序一③正式：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v1
+【现行默认 · 2026-09 / 015·019·028·029】
+  工序一③正式：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v2_2_auto_noise
   legacy 回退：classify_dataset_v3_asr_anomaly_noise + selection_v3.0
-  噪声：分拣 YAML 内嵌按需 DNSMOS（diagnose_asr_anomaly）；全量 sidecar 仅研究。见下文「5b. 噪声打分」。
+  噪声：分拣 YAML 内嵌 audio_energy + DNSMOS 候选评分；全量 sidecar 仅研究/复用。见下文「5b. 噪声打分」。
   家族契约：N≥3 × 每族双跑；四族/Kimi 为可选增强，非门票。
   文本相似度：rapidfuzz（019；pip install -e . 已含）。
-  一键命令以 手册/dev/01-工序一-数据清洗落库打标.txt 与 单条流水线执行命令.txt §2f-v3-027 / §2f-noise 为准。
+  一键命令以 手册/dev/01-工序一-数据清洗落库打标.txt 与 单条流水线执行命令.txt §2f-v3-029 / §2f-noise 为准。
+  「一条命令多步骤」台账：手册/dev/05-一条命令多步骤.txt（030 全链路、031 后置分类…）。
   下文若仍出现 multi_asr_aggregate → classify_dataset（v1），一律视为 legacy / 诊断。
 
 工序总览原文（历史快照；分拣入口已由上框覆盖）：
 --------------------------------------------------------------------------------
 当前我的数据引擎工序是：
-①数据清洗、落库流水线(data_cleaning_source_A.yaml) --------> ②同源多结果 ASR（`--asr-run` 双跑，N≥3）+ register → prepare/attach/sidecar -------> ③自动分拣（默认 classify_dataset_v3）+（可选）人审/build_dataset_v3 --------> ④训练流水线(当前尚未实现，在另一套框架中，未集成进来)  --------> ⑤评测流水线（与④完全解耦）：`eval register` → 各模型独立 vLLM 跑批（`--eval-name` + `--asr-run`）→ `eval_aggregate`（按 id 对齐）→ `eval_metric_pipeline`（相对 gold_text 多模型字准 + 按 type 导出）
+①数据清洗、落库流水线(data_cleaning_source_A.yaml) --------> ②同源多结果 ASR（`--asr-run` 双跑，N≥3）+ register → prepare/attach -------> ③自动五分类（默认 classify_dataset_five_class_v2_2_auto_noise）+（可选）人审/build_dataset_v3 --------> ④训练流水线(当前尚未实现，在另一套框架中，未集成进来)  --------> ⑤评测流水线（与④完全解耦）：`eval register` → 各模型独立 vLLM 跑批（`--eval-name` + `--asr-run`）→ `eval_aggregate`（按 id 对齐）→ `eval_metric_pipeline`（相对 gold_text 多模型字准 + 按 type 导出）
 
 工序②要点：
 - 同一 `--source-name` 下可多次跑任意模型/批次，用 `--asr-run <alias>` 区分产物（`{alias}_asr_<BATCH>.parquet` + transcript 键）
@@ -32,10 +33,10 @@
 - （legacy 诊断）聚拢+字准：`--aggregate-base` / `--join-manifest` / `asr_metric_pipeline`
 
 工序③要点（现行默认）：
-- 正式：`classify_dataset_five_class_v1` + `selection_five_class_v1`；产物 `classified_five_class_v1_*`
+- 正式：`classify_dataset_five_class_v2_2_auto_noise` + `selection_five_class_v2_2_auto_noise`；产物 `classified_five_class_v2_2_auto_noise_*`
 - legacy：`classify_dataset_v3_asr_anomaly_noise` + `selection_v3.0`；产物 `classified_v3_*_asr_anomaly_noise_v1`
-- 规则 SSOT：docs/02-规范规则/数据挑选规则_v1.md；legacy 见旧 v3.0 文档（已废止作业务依据）
-- 噪声：按需 DNSMOS（023/027），正常中文 not_required；未校准不得自动定 environment_noise
+- 规则 SSOT：docs/02-规范规则/数据挑选规则_v2_2_auto_noise.md；v2/v1 为对照，旧 v3.0 已废止作业务依据
+- 噪声：家族四态 + 音频能量 + 版本化 DNSMOS 状态联合判定；DNSMOS unavailable 时审计回退 v2 强规则
 - 文本相似度：rapidfuzz（019）
 - （更旧 legacy）v1：`pipelines/classify_dataset.yaml` 仅复现
 
@@ -278,9 +279,35 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 # 流水线对 api_bases 做 round-robin（失败自动切下一实例）
 # 吞吐调参：pipelines/qwen_asr_batch.yaml 的 execution.workers / max_in_flight
 
-# ── 2.1 独立终端启动 vLLM（现场真实用过的权重 / 端口）────────────────
+# ── 2.0 tmux 保活（服务器强制；VS Code Remote / Tabby / SSH 断线不停服）──
+# 根因：笔记本休眠或关掉 VS Code/Tabby 会杀掉附着在该 SSH 上的 bash，
+#       前台起的 vLLM 与 pipeline 会一起停。保活必须在服务器上用 tmux。
+# Tabby / VS Code 只是客户端，不能替代服务器侧 tmux。
+#
+# 起 vLLM（示例名按端口；多卡多会话）：
+#   tmux new -s vllm5555
+#   # 在会话里粘贴下方 2.1 的 serve 命令；起来后 Ctrl+b 再按 d 脱离
+# 起批处理（与 vLLM 分开会话）：
+#   tmux new -s asr_batch
+#   # source 环境 → export QWEN_ASR_API_BASE → audio-data pipeline run ...
+#   # Ctrl+b d 脱离
+#
+# 常用：
+#   tmux ls                      # 列会话
+#   tmux attach -t vllm5555      # 回来看日志
+#   tmux attach -t asr_batch
+# 停服（推荐先进会话 Ctrl+C，再 exit）：
+#   tmux kill-session -t vllm5555
+#   tmux kill-session -t asr_batch
+# 确认残留：nvidia-smi；必要时 pkill -f "vllm serve.*5555"
+#
+# 规则：vLLM 与 pipeline 都要进 tmux；只保活其中一个，另一个仍会随断线停。
+#       stage1 单命令（030）本身后台跑、SSH 断开可继续，不依赖本条；手工 vLLM 仍须 tmux。
+
+# ── 2.1 tmux 内启动 vLLM（现场真实用过的权重 / 端口）────────────────
 
 # A) 基座 Qwen3-ASR-1.7B · GPU4 · port 5555（常用）
+# tmux new -s vllm5555
 CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
   --gpu-memory-utilization 0.5 \
   --host 127.0.0.1 \
@@ -312,6 +339,7 @@ CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
 # export PYTHONNOUSERSITE=1
 # 请求 model 仍填 qwen3-asr（LoRA 模块名与 yaml 对齐）；/v1/models 里基座叫 qwen3-asr-base
 # 可与 A（GPU4:5555）分卡并行对比；--max-lora-rank 按 adapter_config.json 的 r 调整
+# tmux new -s vllm5564
 CUDA_VISIBLE_DEVICES=5 /data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/python \
   /data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
   --gpu-memory-utilization 0.5 \
@@ -326,7 +354,8 @@ CUDA_VISIBLE_DEVICES=5 /data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/b
   --lora-modules qwen3-asr=/home/lizi/Qwen3-ASR-main/data/exp004_audio/checkpoint-1800 \
   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
 
-# ── 2.2 流水线终端：确认接口 + 探针 ──────────────────────────────────
+# ── 2.2 流水线终端（建议另开 tmux 会话 asr_batch）：确认接口 + 探针 ─
+# tmux new -s asr_batch   # 或 attach 已有会话后再跑下面
 
 export QWEN_ASR_API_BASE=http://127.0.0.1:5555
 export QWEN_ASR_API_KEY=dummy
@@ -402,8 +431,10 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATC
 # pad 音频只作推理输入，不进 Release / 评测集真值；duration 仍是原始时长。
 # 未 pad / 混合探针未通过前 --max-num-seqs 保持 2～4；通过后每卡可试到 8。
 # 在途 HTTP ≈ 各副本 max-num-seqs 之和。默认 YAML：2 shard × concurrency 4。
+# 保活：tmux new -s vllm5554 / vllm5555；批跑 tmux new -s asr_kimi（见 §2.0）
 #
 # 现场开服例 A（GPU4 · port 5554）：
+# tmux new -s vllm5554
 # CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/models/kimi-audio-instruct-7b-instruct-7b \
 #   --gpu-memory-utilization 0.90 --host 127.0.0.1 --port 5554 \
 #   --tensor-parallel-size 1 --served-model-name kimi-audio \
@@ -411,6 +442,7 @@ audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name "$BATC
 #   --no-enable-prefix-caching --limit-mm-per-prompt '{"audio":1}'
 #
 # 现场开服例 B（GPU5 · port 5555）：
+# tmux new -s vllm5555
 # CUDA_VISIBLE_DEVICES=5 vllm serve /data2/data-cp/models/kimi-audio-instruct-7b \
 #   --gpu-memory-utilization 0.90 --host 127.0.0.1 --port 5555 \
 #   --tensor-parallel-size 1 --served-model-name kimi-audio \
@@ -455,9 +487,11 @@ audio-data pipeline run pipelines/kimi_audio_asr_batch.yaml --source-name "$BATC
 # 产物：glm_asr_${BATCH}.parquet / transcripts.glm → --join-manifest glm
 # 默认 YAML：1 shard × concurrency 8。两副本同权重再改成 2 shard。
 # GPU / 端口占位：GPU 6 → :5570；落地当天确认空闲卡。
+# 保活：tmux new -s vllm5570；批跑 tmux new -s asr_glm（见 §2.0）
 #
 # 现场 glm_asr_vllm（vLLM 0.28）：必须 VLLM_USE_FLASHINFER_SAMPLER=0（SAMPLER，不是 SAMPLE）
 # 系统 /usr/bin/nvcc <12，FlashInfer 采样 JIT 会炸。整段复制，不要手改变量名。
+# tmux new -s vllm5570
 # export DST_ENV=/data2/data-cp/lizi/env_hub/glm_asr_vllm
 # export PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 # export FLASHINFER_DISABLE_VERSION_CHECK=1
@@ -532,20 +566,22 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 ================================================================================
 
 -------------------------------------------------------
-5. 使用版本化策略自动分拣（现行正式 = 五类 v1）
+5. 使用版本化策略自动分拣（现行正式 = 五类 v2.2）
 -------------------------------------------------------
-# 正式入口见 手册/dev/01-工序一-*.txt 与 单条流水线执行命令.txt §2f-v3-027：
-#   prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v1
-# 配置：configs/selection/zh_asr_five_class_v1.yaml（或批次专用）
-# 产物：classified_five_class_v1_${BATCH}.parquet（勿覆盖 classified_v3_*）
+# 正式入口见 手册/dev/01-工序一-*.txt 与 单条流水线执行命令.txt §2f-v3-029：
+#   prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v2_2_auto_noise
+# 配置：configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml（或批次专用）
+# 产物：classified_five_class_v2_2_auto_noise_${BATCH}.parquet（勿覆盖 v1/v2/v3）
 #
-# YAML 内两步（噪声按需诊断已内嵌，无需先跑全量 sidecar）：
-#   1) diagnose_asr_anomaly  = quality.asr_anomaly_noise + dnsmos_p835.yaml
-#   2) classify              = quality.classify（rule_version=selection_five_class_v1）
+# YAML 内三步（无需先跑全量 sidecar）：
+#   1) attach_audio_energy          = quality.audio_energy
+#   2) score_dnsmos_v2_2_candidates = quality.dnsmos_v2_2_candidates
+#   3) classify                     = quality.classify（selection_five_class_v2_2_auto_noise）
 
-# audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml \
+# audio-data pipeline run pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml \
 #   --source-name "$BATCH" \
-#   --config configs/selection/zh_asr_five_class_v1.yaml
+#   --config configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml \
+#   --force
 
 # ---- legacy 回退：ASR 异常噪声 + selection_v3.0 ----
 # audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml \
@@ -570,22 +606,21 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
 -------------------------------------------------------
 5b. 噪声打分（DNSMOS）— 工序、步骤与边界
 -------------------------------------------------------
-# 权威需求：009（侧车接入）/ 023（按需触发）/ 027 §9（五类下噪声职责）
-# 规则：docs/02-规范规则/数据挑选规则_v1.md §6.5 / §9
-# 配置：configs/quality/dnsmos_p835.yaml（默认 calibrated: false）
+# 权威需求：028（自动噪声）/ 029（DNSMOS 联合）
+# 规则：docs/02-规范规则/数据挑选规则_v2_2_auto_noise.md
+# 配置：audio_energy_v1.yaml + dnsmos_p835.yaml + dnsmos_decision_v2_2.yaml
 
 【在整条链中的位置】
   ① 清洗落库（不跑 DNSMOS、不跑 VAD）
     → ② 多族 ASR + register + prepare/attach
-    → ③′【噪声诊断】按需 DNSMOS（内嵌于分拣 YAML 的 diagnose 步）
-    → ③ 五类/文本分拣（消费分数作旁证；未校准不能单独定 environment_noise）
+    → ③′ audio_energy + DNSMOS 候选评分
+    → ③ 五类分拣（家族四态 + 能量 + DNSMOS 联合）
 
 【两条路径】
   A. 生产主路径（推荐）
-     pipelines/classify_dataset_five_class_v1.yaml
-       或 legacy：classify_dataset_v3_asr_anomaly_noise.yaml
-     步骤：diagnose_asr_anomaly → classify
-     正常中文 → not_required（不加载推理、不写假干净分）
+     pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml
+     步骤：audio_energy → dnsmos_v2_2_candidates → classify
+     仅候选样本评分；已有同哈希侧车时复用
   B. 研究/历史全量（非默认）
      pipelines/audio_quality_sidecar.yaml
      输入 cleaned_* → 输出 quality_sidecar_*
@@ -595,22 +630,19 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name "$BATCH
   [ ] dnsmos_p835.yaml 的 model_path 指向真实 ONNX（缺文件 → 被触发样本 failed，不阻断 not_required）
   [ ] 已安装 onnxruntime（或 pip install '.[dnsmos]'）
   [ ] resampled_16k 在本机可读（/data2 路径须在可读服务器跑）
-  [ ] calibrated 仍为 false（听音校准完成前禁止改 true）
+  [ ] dnsmos_decision_v2_2.yaml 阈值与 policy_version 同步；不要靠改 calibrated 影响 v2.2
 
-【触发条件】
-  selection_v3.0（023）：
-    1) 全部配置家族均无有效转写
-    2) 任一成功路次正文含非中文话语
-  selection_five_class_v1（027）：
-    · 外语 / 热词全文回声 / 提示词全文回声 → 路级排除，不作为噪声触发
-    · 全族无有效转写等仍可诊断
-    · 空/有字+肯否、短应答冲突等 → 作旁证或 verify_target_speech，不因低分自动进噪声类
+【v2.2 候选与作用】
+  · 全空 + audible/borderline：区分 noisy、unavailable 与 clean+strong 矛盾
+  · 两空一有字 + audible/borderline：增强 human_noise 证据
+  · ≥2 稳定同文：DNSMOS noisy 只附 quality_tag，不改 gold_candidate 主类
+  · DNSMOS unavailable：回退 v2 强规则并写 v2_fallback，不伪造 noisy
 
 【状态与字段】
-  noise_diagnosis_status: not_required | pending | success | failed | unsupported
-  分数: dnsmos_sig / dnsmos_bak / dnsmos_ovrl
-  未校准: noise_band=unknown；success ≠ 已证实环境噪声
-  五类 environment_noise: 仅校准声学或人工听音确认后；否则人工任务，禁止 pending_evidence 池
+  分数: dnsmos_sig / dnsmos_bak / dnsmos_ovrl；状态: dnsmos_status
+  决策: dnsmos_noise_state / dnsmos_speech_state / dnsmos_decision_policy_version
+  审计: v2_fallback / borderline_resolved_by_dnsmos / quality_tag
+  边界: DNSMOS 单项不能独立证明目标人声或背景噪声
 
 【命令示例】
 # 主路径：随五类/legacy 分拣一起跑（见 §5），无需单独命令。
@@ -958,7 +990,7 @@ audio-data model show <model_id>
 [ ] BATCH
 [ ] SOURCE_DIR（现场默认 /data2/data-cp/lizi/mt3000）
 [ ] QWEN_ASR_API_BASE / QWEN_ASR_API_KEY（或 QWEN_ASR_API_BASES）
-[ ] Qwen vLLM：权重路径 + GPU + port + --served-model-name qwen3-asr
+[ ] Qwen vLLM：权重路径 + GPU + port + --served-model-name qwen3-asr；用 tmux 起服/批跑（§2.0）
 [ ] Qwen parallel_shards(8) × concurrency(4)
 [ ] SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 [ ] SenseVoice sharding：gpus [4,5] × instances_per_gpu 4
@@ -1050,12 +1082,12 @@ wav/pcm（例：/data2/data-cp/lizi/mt3000）
 # ---------------------------------------------------------------------------
 # 噪声打分依赖与速查（与正文 §5b 一致）
 # ---------------------------------------------------------------------------
-# 主路径：随 classify_dataset_five_class_v1 / classify_dataset_v3_asr_anomaly_noise 内嵌 diagnose
+# 主路径：classify_dataset_five_class_v2_2_auto_noise 内嵌 energy + DNSMOS 候选评分
 # 研究全量：pipelines/audio_quality_sidecar.yaml + configs/quality/dnsmos_p835.yaml
 # ONNX：配置 model_path；缺文件只影响被触发子集
 # pip：onnxruntime 或 pip install '.[dnsmos]'
 # 内网可选：
 # pip install distillmos --index-url http://maven.paic.com.cn/repository/pypi/simple \
 #   --trusted-host maven.paic.com.cn
-# calibrated:false；未校准不得自动定 environment_noise / 不得改 true 冒充已校准
-# 详解：手册/dev/01 §3b；docs/04-改进需求/已完成/009、进行中/023、027 §9
+# v2.2 使用 dnsmos_decision_v2_2 的版本化阈值；不要改 calibrated 冒充校准
+# 详解：手册/dev/01 §3b；docs/04-改进需求/已完成/028、029

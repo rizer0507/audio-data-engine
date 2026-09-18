@@ -4,6 +4,7 @@
   - 内容全部源自仓库根目录源文档，按「工序总览」①→⑤ 重新编排，便于逐步执行。
   - 源文档原件未修改，仍保留在仓库根目录。
   - 本文件为 local · Windows 开发机 环境完整执行手册。
+  - 服务器过夜批跑保活用 tmux（见 手册/dev/00-总详细手册.txt §2.0）；本机 Windows 不适用该条。
 ================================================================================
 当前工序映射（来源：docs/01-项目架构/工序总览.md）
 ================================================================================
@@ -13,10 +14,10 @@
   工序二「训练」            = 引擎④训练流水线（外部框架，尚未完全集成）
   工序三「评测」            = 引擎⑤评测流水线（与④完全解耦）
 
-【现行默认 · 2026-09 / 014·015·019·023·027】
-  工序一③正式：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v1
+【现行默认 · 2026-09 / 015·019·028·029】
+  工序一③正式：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v2_2_auto_noise
   legacy 回退：classify_dataset_v3_asr_anomaly_noise + selection_v3.0
-  噪声：分拣 YAML 内嵌按需 DNSMOS（diagnose_asr_anomaly）；全量 sidecar 仅研究。见下文「5b. 噪声打分」。
+  噪声：分拣 YAML 内嵌 audio_energy + DNSMOS 候选评分；全量 sidecar 仅研究/复用。见下文「5b. 噪声打分」。
   家族契约：N≥3 × 每族双跑；四族/Kimi 为可选增强，非门票。
   文本相似度：rapidfuzz（019；pip install -e . 已含）。
   一键命令以 手册/local/01-工序一-数据清洗落库打标.txt 与 单条流水线执行命令.txt §2f-v3-027 / §2f-noise 为准。
@@ -25,7 +26,7 @@
 工序总览原文（历史快照；分拣入口已由上框覆盖）：
 --------------------------------------------------------------------------------
 当前我的数据引擎工序是：
-①数据清洗、落库流水线(data_cleaning_source_A.yaml) --------> ②同源多结果 ASR（`--asr-run` 双跑，N≥3）+ register → prepare/attach/sidecar -------> ③自动分拣（默认 classify_dataset_v3）+（可选）人审/build_dataset_v3 --------> ④训练流水线(当前尚未实现，在另一套框架中，未集成进来)  --------> ⑤评测流水线（与④完全解耦）：`eval register` → 各模型独立 vLLM 跑批（`--eval-name` + `--asr-run`）→ `eval_aggregate`（按 id 对齐）→ `eval_metric_pipeline`（相对 gold_text 多模型字准 + 按 type 导出）
+①数据清洗、落库流水线(data_cleaning_source_A.yaml) --------> ②同源多结果 ASR（`--asr-run` 双跑，N≥3）+ register → prepare/attach -------> ③自动五分类（默认 classify_dataset_five_class_v2_2_auto_noise）+（可选）人审/build_dataset_v3 --------> ④训练流水线(当前尚未实现，在另一套框架中，未集成进来)  --------> ⑤评测流水线（与④完全解耦）：`eval register` → 各模型独立 vLLM 跑批（`--eval-name` + `--asr-run`）→ `eval_aggregate`（按 id 对齐）→ `eval_metric_pipeline`（相对 gold_text 多模型字准 + 按 type 导出）
 
 工序②要点：
 - 同一 `--source-name` 下可多次跑任意模型/批次，用 `--asr-run <alias>` 区分产物（`{alias}_asr_<BATCH>.parquet` + transcript 键）
@@ -33,10 +34,10 @@
 - （legacy 诊断）聚拢+字准：`--aggregate-base` / `--join-manifest` / `asr_metric_pipeline`
 
 工序③要点（现行默认）：
-- 正式：`classify_dataset_five_class_v1` + `selection_five_class_v1`；产物 `classified_five_class_v1_*`
+- 正式：`classify_dataset_five_class_v2_2_auto_noise` + `selection_five_class_v2_2_auto_noise`；产物 `classified_five_class_v2_2_auto_noise_*`
 - legacy：`classify_dataset_v3_asr_anomaly_noise` + `selection_v3.0`
-- 规则 SSOT：docs/02-规范规则/数据挑选规则_v1.md
-- 噪声：按需 DNSMOS（023/027），正常中文 not_required；未校准不得自动定 environment_noise
+- 规则 SSOT：docs/02-规范规则/数据挑选规则_v2_2_auto_noise.md
+- 噪声：家族四态 + 音频能量 + 版本化 DNSMOS 状态联合判定；unavailable 时审计回退 v2 强规则
 - 文本相似度：rapidfuzz（019）
 - （更旧 legacy）v1：`pipelines/classify_dataset.yaml` 仅复现
 
@@ -323,20 +324,19 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
 ================================================================================
 
 -------------------------------------------------------
-5. 使用版本化策略自动分拣（现行正式 = 五类 v1）
+5. 使用版本化策略自动分拣（现行正式 = 五类 v2.2）
 -------------------------------------------------------
-# 正式入口见 手册/local/01-工序一-*.txt 与 单条流水线执行命令.txt §2f-v3-027：
-#   prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v1
-# 配置：configs/selection/zh_asr_five_class_v1.yaml（或批次专用）
-# 产物：classified_five_class_v1_${BATCH}.parquet（禁止覆盖 classified_v3_*）
+# 正式入口见 手册/local/01-工序一-*.txt 与 单条流水线执行命令.txt §2f-v3-029：
+#   prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v2_2_auto_noise
+# 配置：configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml（或批次专用）
+# 产物：classified_five_class_v2_2_auto_noise_${BATCH}.parquet（禁止覆盖 v1/v2/v3）
 #
-# YAML 内两步（噪声按需诊断已内嵌）：
-#   1) diagnose_asr_anomaly  = quality.asr_anomaly_noise + dnsmos_p835.yaml
-#   2) classify              = quality.classify（selection_five_class_v1）
+# YAML 内三步：audio_energy → dnsmos_v2_2_candidates → classify
 
-# audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml `
+# audio-data pipeline run pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml `
 #   --source-name $env:BATCH `
-#   --config configs/selection/zh_asr_five_class_v1.yaml
+#   --config configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml `
+#   --force
 
 # ---- legacy 回退：ASR 异常噪声 + selection_v3.0 ----
 # audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml `
@@ -359,19 +359,19 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
 -------------------------------------------------------
 5b. 噪声打分（DNSMOS）— 工序、步骤与边界
 -------------------------------------------------------
-# 权威需求：009（侧车接入）/ 023（按需触发）/ 027 §9（五类下噪声职责）
-# 规则：docs/02-规范规则/数据挑选规则_v1.md §6.5 / §9
-# 配置：configs/quality/dnsmos_p835.yaml（默认 calibrated: false）
+# 权威需求：028（自动噪声）/ 029（DNSMOS 联合）
+# 规则：docs/02-规范规则/数据挑选规则_v2_2_auto_noise.md
+# 配置：audio_energy_v1.yaml + dnsmos_p835.yaml + dnsmos_decision_v2_2.yaml
 
 【在整条链中的位置】
   ① 清洗落库（不跑 DNSMOS、不跑 VAD）
     → ② 多族 ASR + register + prepare/attach
-    → ③′【噪声诊断】按需 DNSMOS（内嵌于分拣 YAML 的 diagnose 步）
-    → ③ 五类/文本分拣（消费分数作旁证；未校准不能单独定 environment_noise）
+    → ③′ audio_energy + DNSMOS 候选评分
+    → ③ 五类分拣（家族四态 + 能量 + DNSMOS 联合）
 
 【两条路径】
-  A. 生产主路径：classify_dataset_five_class_v1（或 legacy asr_anomaly）
-     步骤 diagnose_asr_anomaly → classify；正常中文 not_required
+  A. 生产主路径：classify_dataset_five_class_v2_2_auto_noise
+     步骤 audio_energy → dnsmos_v2_2_candidates → classify；已有同哈希侧车可复用
   B. 研究全量：audio_quality_sidecar.yaml → quality_sidecar_*
      分拣失败时禁止自动改跑本路径
 
@@ -379,12 +379,12 @@ audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
   [ ] model_path ONNX 存在（缺文件 → 触发子集 failed，不阻断 not_required）
   [ ] onnxruntime 或 pip install '.[dnsmos]'
   [ ] resampled_16k 本机可读（/data2 路径须在可读机）
-  [ ] calibrated:false（听音校准前禁止改 true）
+  [ ] dnsmos_decision_v2_2.yaml 阈值与 policy_version 同步；不要靠改 calibrated 影响 v2.2
 
-【触发】
-  v3.0：全族无有效转写；或成功路非中文
-  five_class_v1：外语/回声先排除不触发；全空及空/有字·短应答冲突作旁证/送标
-  未校准低分 ≠ environment_noise
+【v2.2 候选与边界】
+  全空有声/临界、两空一有字等候选复用或计算 DNSMOS；noisy 可增强/收敛噪声判定。
+  clean+strong 与全空有声矛盾时进 hardcase；unavailable 回退 v2 强规则并留痕。
+  DNSMOS 单项不能独立证明目标人声或背景噪声。
 
 【命令】
 # 主路径随 §5 分拣一起跑。

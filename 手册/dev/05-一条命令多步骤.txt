@@ -1,0 +1,89 @@
+一条命令多步骤（dev · 命令台账）
+================================================================================
+用途：专门收录「一条命令完成多步骤」的生产入口。分步排查仍看 01 / 00 / 单条流水线。
+约定：每条只写最短可跑命令 + 前置 + 产物；细节链到 docs / 其它手册。
+后续新增同类入口时，按下方模板追加一节即可（编号递增）。
+
+环境（本节命令默认）：
+  cd /data2/data-cp/lizi/audio-data-engine
+  source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
+  export OMP_NUM_THREADS=1
+  export MKL_NUM_THREADS=1
+  export BATCH=<批次名>          # 与 --source-name / --batch 同一字符串
+  export SOURCE_DIR=<原始音频根>
+  export AUTHORIZED_GPUS=<授权卡号,逗号分隔>   # 禁止照抄历史卡号
+
+================================================================================
+1. 工序一全链路（030 · stage1 run）
+================================================================================
+# 目标：清洗 → 三族双跑 ASR → prepare/attach → 五类 v2.2 → export-summary
+# 前置：configs/stage1/server.yaml 已补齐；authorized_gpus / engine_python /
+#       families.qwen.vllm_bin / dnsmos.onnx_path；授权仅配置内 GPU
+# 不做：用户不必手敲 prepare→attach→classify→export
+# 详解：docs/07-操作手册/工序一单命令-服务器1000条试跑.md
+#       docs/04-改进需求/已完成/030-工序一单命令编排与双GPU可靠执行.md
+#       单条流水线执行命令.txt §0a
+
+audio-data stage1 check-config --runtime-config configs/stage1/server.yaml
+
+audio-data stage1 run \
+  --batch "$BATCH" \
+  --source "$SOURCE_DIR" \
+  --model qwen=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
+  --model glm=/data2/data-cp/models/GLM-ASR-Nano-2512 \
+  --model sensevoice=/data2/data-cp/xijujun/models/SenseVoiceSmall \
+  --runtime-config configs/stage1/server.yaml \
+  --gpus "$AUTHORIZED_GPUS"
+
+audio-data stage1 status <job_id> --watch
+audio-data stage1 wait <job_id>
+# wait：reconcile.ok → exit 0；failed → 1；needs_attention → 3
+# 本入口后台执行；SSH/VS Code 断开可继续（不必为 stage1 另开 tmux）
+
+# 补跑：
+# audio-data stage1 resume <job_id>
+# audio-data stage1 retry <job_id> --family glm --run 2 --failed-only
+# audio-data stage1 retry <job_id> --export-only
+
+# 产物：
+#   runs/stage1/jobs/<job_id>/
+#   datasets/stage1/cleaned/cleaned_${BATCH}.parquet
+#   datasets/stage1/asr/{qwen,glm,sensevoice}_{1,2}_asr_${BATCH}.parquet
+#   datasets/stage1/derived/classified_five_class_v2_2_auto_noise_${BATCH}.parquet
+#   data/exports/summary_five_class_v2_2_auto_noise_${BATCH}.xlsx
+
+================================================================================
+2. 工序一后置分类（031 · 六路 ASR 已齐）
+================================================================================
+# 目标：已有六路 ASR → audio_energy → dnsmos_v2_2_candidates → classify → 完整 XLSX
+# 前置：cleaned 底表 + 六路 {alias}_asr_${BATCH}.parquet 已齐；本机可读 resampled_16k
+# 不做：不启动 ASR、不占 GPU、不伪造 register/reservation/release
+# 别名：--family > dataset YAML > stage1 固定 qwen_1/2、glm_1/2、sensevoice_1/2
+# 缺路：按家族/路次列出期望路径后非零退出（不进半套分类）
+# 详解：docs/07-操作手册/已有六路ASR一键分类导出.md
+#       docs/04-改进需求/进行中/031-工序一后置统一分类分拣入口.md
+#       单条流水线执行命令.txt §0b；手册/dev/01 §3a-031
+
+# stage1 固定双跑别名（最常见）
+python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
+# 等价 CLI（同一实现；--workers 是 --energy-workers 别名）：
+# audio-data stage1 classify --batch "$BATCH" --energy-workers 32
+# audio-data stage1 classify --batch "$BATCH" --workers 32
+
+# 历史/手工别名（须与推理 --asr-run 逐字一致）
+# python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32 \
+#   --family qwen=qwen-basr-1,qwen-basr-2 \
+#   --family glm=glm-base-1,glm-base-2 \
+#   --family sensevoice=sv-base-1,sv-base-2
+
+# 可选：--source-dir 仅做目录存在性提示，不会重扫/重洗
+#       --output / --classified-output / --overwrite / --no-classified-parquet
+#       --energy-workers / --workers：仅加速音频能量步（默认 1；建议 16~32，看 CPU/磁盘）
+
+# 默认产物：
+#   data/exports/summary_five_class_v2_2_auto_noise_${BATCH}.xlsx
+#   datasets/stage1/derived/classified_five_class_v2_2_auto_noise_${BATCH}.parquet
+
+================================================================================
+（在此下方继续追加 3. / 4. / …）
+================================================================================

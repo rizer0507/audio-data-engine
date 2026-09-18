@@ -1,0 +1,31 @@
+# 033 段一：分类 Manifest → 整批人工标注包（人工操作之前）
+#
+# 覆盖 classified 全量样本（含 environment_noise / review_queue 为空），
+# 不是默认 review export 的 priority∩queue 子集。
+# 中间保留人工听音与 review import；本流水线不宣称人审完成。
+#
+#   audio-data pipeline run pipelines/warehouse_export_annotation.yaml \
+#     --source-name <batch> \
+#     --config configs/warehouse/export_r1.yaml
+#
+# 产物：datasets/stage1/review/warehouse/<batch>/<revision>/pack.{xlsx,jsonl,meta.json}
+# 旁路输出 Manifest：datasets/stage1/derived/warehouse_export_<batch>.parquet
+
+name: warehouse_export_annotation
+input:
+  manifest: datasets/stage1/derived/classified_five_class_v2_2_auto_noise_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/warehouse_export_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+pipeline:
+  - name: export_pack
+    operator: quality.warehouse_export_annotation
+    params:
+      # batch / classified_manifest 由 --source-name 注入；revision 建议用 --config 覆盖
+      revision: r1
+      view: blind
+      format: both
+      annotation_config: configs/annotation/zh_asr_v3.yaml

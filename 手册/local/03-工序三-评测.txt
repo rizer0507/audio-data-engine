@@ -51,7 +51,7 @@ audio-data pipeline run pipelines/eval_metric_pipeline.yaml \
 
 # 012-E：evaluation.json 含 business_metrics（NFR/FAR/…）与 publish_status
 # 缺校准门禁阈值 → needs_review；不得宣称业务回归 pass / 自动发布
-# 分拣默认已切 v3（014）；本门禁只阻塞「业务自动放行」，不阻塞 classify_v3
+# 当前五分类默认 v2.2（028/029）；本门禁只阻塞「业务自动放行」，不阻塞分类产物生成
 # 正式 Base vs SFT 比较时配置 baseline_prefix / candidate_prefix 与校准后的 gate 阈值
 # 详见：docs/04-改进需求/已完成/012-E-业务评测与生产切换.md（操作口径被 014 覆盖）
 #       configs/metrics/business_risk_v1.yaml

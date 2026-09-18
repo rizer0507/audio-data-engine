@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from audio_engine.core.selection_v3.types import (
+    BUSINESS_CATEGORIES_FIVE_CLASS,
     DECISION_AUDIT_PENDING,
     DECISION_EXCLUDE,
     DECISION_MANUAL_REVIEW,
@@ -13,8 +14,11 @@ from audio_engine.core.selection_v3.types import (
     LABEL_SOURCE_NONE,
     LABEL_TIER_NONE,
     RULE_VERSION,
+    is_any_five_class_rule,
     is_business_semantic_rule,
     is_five_class_rule,
+    is_five_class_v2_2_rule,
+    is_five_class_v2_rule,
 )
 
 
@@ -107,6 +111,33 @@ class ClassificationResultV3:
     exclusion_reasons_by_run: dict[str, list[str]] = field(default_factory=dict)
     selection_policy: str | None = None
     noise_kind: str | None = None
+    # 028 v2 audit / energy / family-state fields.
+    classification_source: str | None = None
+    classification_confidence: str | None = None
+    stable_text_family_count: int | None = None
+    stable_empty_family_count: int | None = None
+    unstable_family_count: int | None = None
+    unavailable_family_count: int | None = None
+    family_state_by_name: dict[str, str] = field(default_factory=dict)
+    family_representative_text: dict[str, str | None] = field(default_factory=dict)
+    duration_ms: float | None = None
+    rms_dbfs: float | None = None
+    peak_dbfs: float | None = None
+    non_silent_ratio: float | None = None
+    energy_state: str | None = None
+    energy_policy_version: str | None = None
+    needs_review: bool | None = None
+    hardcase_reason: str | None = None
+    # 029 v2.2 DNSMOS joint evidence fields.
+    dnsmos_noise_state: str | None = None
+    dnsmos_speech_state: str | None = None
+    dnsmos_decision_policy_version: str | None = None
+    background_quality_risk: bool | None = None
+    quality_tag: str | None = None
+    evidence_sources: list[str] = field(default_factory=list)
+    decision_trace: dict[str, Any] = field(default_factory=dict)
+    v2_fallback: bool | None = None
+    borderline_resolved_by_dnsmos: bool | None = None
 
     def to_labels(self, policy_version: str) -> dict[str, Any]:
         labels: dict[str, Any] = {
@@ -201,6 +232,31 @@ class ClassificationResultV3:
             },
             "selection_policy": self.selection_policy or "",
             "noise_kind": self.noise_kind or "",
+            "classification_source": self.classification_source or "",
+            "classification_confidence": self.classification_confidence or "",
+            "stable_text_family_count": self.stable_text_family_count,
+            "stable_empty_family_count": self.stable_empty_family_count,
+            "unstable_family_count": self.unstable_family_count,
+            "unavailable_family_count": self.unavailable_family_count,
+            "family_state_by_name": dict(self.family_state_by_name or {}),
+            "family_representative_text": dict(self.family_representative_text or {}),
+            "duration_ms": self.duration_ms,
+            "rms_dbfs": self.rms_dbfs,
+            "peak_dbfs": self.peak_dbfs,
+            "non_silent_ratio": self.non_silent_ratio,
+            "energy_state": self.energy_state or "",
+            "energy_policy_version": self.energy_policy_version or "",
+            "needs_review": self.needs_review,
+            "hardcase_reason": self.hardcase_reason or "",
+            "dnsmos_noise_state": self.dnsmos_noise_state or "",
+            "dnsmos_speech_state": self.dnsmos_speech_state or "",
+            "dnsmos_decision_policy_version": self.dnsmos_decision_policy_version or "",
+            "background_quality_risk": self.background_quality_risk,
+            "quality_tag": self.quality_tag or "",
+            "evidence_sources": list(self.evidence_sources or []),
+            "decision_trace": dict(self.decision_trace or {}),
+            "v2_fallback": self.v2_fallback,
+            "borderline_resolved_by_dnsmos": self.borderline_resolved_by_dnsmos,
         }
         if self.annotation_tasks:
             first = self.annotation_tasks[0]
@@ -235,6 +291,26 @@ class ClassificationResultV3:
                     "five_class manual_annotation requires annotation_tasks "
                     f"(sample outcome={self.outcome!r})"
                 )
+        if is_five_class_v2_rule(self.rule_version) or is_five_class_v2_2_rule(
+            self.rule_version
+        ):
+            labels["is_human_verified"] = False
+            if self.outcome == "classified":
+                if self.category not in BUSINESS_CATEGORIES_FIVE_CLASS:
+                    raise ValueError(
+                        "five_class_v2 classified samples require category in "
+                        f"{sorted(BUSINESS_CATEGORIES_FIVE_CLASS)}, got {self.category!r}"
+                    )
+            if self.outcome == "manual_annotation":
+                raise ValueError(
+                    "five_class_v2 forbids manual_annotation outcome; use hardcase"
+                )
+            if self.outcome not in {"excluded", "classified"}:
+                raise ValueError(
+                    f"five_class_v2 outcome must be excluded|classified, got {self.outcome!r}"
+                )
+        if is_any_five_class_rule(self.rule_version):
+            labels.setdefault("is_human_verified", False)
         return labels
 
 

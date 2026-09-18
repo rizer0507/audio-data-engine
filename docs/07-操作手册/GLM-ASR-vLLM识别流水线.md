@@ -16,11 +16,14 @@ audio-data pipeline run pipelines/glm_asr_batch.yaml --eval-name eval_core_v001 
 
 每卡一个完整模型：`--tensor-parallel-size 1`。不要 `--tensor-parallel-size 2`，也不要和正在跑的 Qwen / Kimi 抢同一张卡、同一个端口。
 
+**保活（服务器强制）**：在 `tmux` 内起服与批跑（例：`tmux new -s vllm5570` / `tmux new -s asr_glm`），`Ctrl+b d` 脱离后再关 VS Code / Tabby。详见 `手册/dev/00-总详细手册.txt` §2.0。Tabby 不能替代服务器侧 tmux。
+
 空闲 GPU 与正式端口 **落地当天确认**。下文 `GPU 6` / `:5570` 只是占位，避免和 Qwen `:5559` / Kimi `:5554` 撞车。
 
 现场环境 `glm_asr_vllm`（vLLM 0.28、系统 `/usr/bin/nvcc` < 12）必须关掉 FlashInfer 采样，否则 warmup 会现场 JIT 炸。**变量名是 `SAMPLER`，不是 `SAMPLE`。** 先清掉打错的旧变量，再整段粘贴：
 
 ```bash
+# tmux new -s vllm5570
 export DST_ENV=/data2/data-cp/lizi/env_hub/glm_asr_vllm
 export PYTHONNOUSERSITE=1
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
@@ -40,6 +43,7 @@ CUDA_VISIBLE_DEVICES=4 \
   --limit-mm-per-prompt '{"audio":1}' \
   --no-enable-flashinfer-autotune \
   --kernel-config '{"enable_jit_warmup":false,"enable_cutedsl_warmup":false}'
+# 起来后：Ctrl+b d
 ```
 
 成功标志：日志 **不能** 再写 `Using FlashInfer for top-p & top-k sampling`，随后出现 `Application startup complete` / Uvicorn 听 `0.0.0.0:5570`。  

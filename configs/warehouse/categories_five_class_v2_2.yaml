@@ -1,0 +1,6 @@
+allowed_categories:
+  - gold_candidate
+  - semantic_risk
+  - hardcase
+  - voicemail
+  - environment_noise

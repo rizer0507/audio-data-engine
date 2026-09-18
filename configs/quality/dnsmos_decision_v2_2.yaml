@@ -1,0 +1,17 @@
+# 029 DNSMOS decision policy for selection_five_class_v2_2_auto_noise.
+# BAK/OVRL defaults copied from dnsmos_p835.yaml engineering thresholds and
+# versioned independently. SIG thresholds are engineering defaults (1–5 scale);
+# bump policy_version whenever any threshold changes.
+policy_version: dnsmos_decision_v2_2
+
+thresholds:
+  clean_bak: 3.5
+  clean_ovrl: 3.2
+  noisy_bak: 3.0
+  noisy_ovrl: 2.8
+  strong_sig: 3.5
+  weak_sig: 2.8
+
+decision:
+  noisy_operator: or
+  require_status_success: true

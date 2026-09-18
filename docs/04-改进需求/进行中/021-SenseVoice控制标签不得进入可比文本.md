@@ -1,14 +1,18 @@
 # 021 · SenseVoice 控制标签不得进入可比文本与候选金标
 
-> 状态：**进行中**（022 已让分拣候选正文去掉控制标签；ASR 落盘 `text` 白名单仍保留未知标签，本项不因此标完成）  
+> 状态：**进行中**（[022](../已完成/022-v3语义容错分拣与金标选文落地.md) 已让分拣候选正文去掉控制标签；ASR 落盘 `text` 白名单仍保留未知标签，本项不因此标完成）  
 > 日期：2026-09-11  
 > 触发：工序一产物里 SenseVoice 转写仍然带着 `<|zh|>`、`<|NEUTRAL|>`、`<|Speech|>`、`<|withitn|>` 这类控制字段。下游表、人审候选、训练目标看上去像「没洗干净」。  
-> 前置 / 关联：标签解析见 `src/audio_engine/operators/asr/sensevoice.py`（`parse_sensevoice_text`）与 [SenseVoice识别流水线](../../07-操作手册/SenseVoice识别流水线.md) §7.1；全标签剥离函数在 `src/audio_engine/core/transcript_reconcile.py`（`clean_control_tags`）；v3 候选文本取自 `selection_v3/consensus.py` 的 `medoid.raw_text`。清洗边界与 [018](./018-转写语速不可能防护栏.md) 同类：**不要把本项塞进①音频清洗 DAG**。  
+> 前置 / 关联：标签解析见 `src/audio_engine/operators/asr/sensevoice.py`（`parse_sensevoice_text`）与 [SenseVoice识别流水线](../../07-操作手册/SenseVoice识别流水线.md) §7.1；全标签剥离函数在 `src/audio_engine/core/transcript_reconcile.py`（`clean_control_tags`）；v3 候选文本取自 `selection_v3/consensus.py` 的 `medoid.raw_text`。清洗边界与 [018](../已完成/018-转写语速不可能防护栏.md) 同类：**不要把本项塞进①音频清洗 DAG**。  
 > 范围边界：**对外可见的转写 / 候选 / 训练目标不得残留 FunASR 控制标签**；模型原始串只留在审计字段。**不改**分桶阈值、相似度公式、家族投票规则。① `data_cleaning_source_A` 不改。
 
 ---
 
+
+
 ## 1. 当前事实（结论）
+
+
 
 ### 1.1 标签还在，但不是「清洗流水线忘了跑」
 
@@ -24,17 +28,19 @@ SenseVoice / FunASR 的原始输出形态固定为控制标签前缀 + 口语正
 
 ### 1.2 两条清洗口径互相打架
 
-| 位置 | 实际行为 | 结果 |
-| --- | --- | --- |
-| ASR 落盘 `parse_sensevoice_text` | **只删白名单**：语言 `zh/en/yue/ja/ko/nospeech`，情感 `HAPPY/SAD/ANGRY/NEUTRAL`，事件 `Speech/BGM/Applause/Laughter/Cry/Sneeze/Breath/Cough` | 未知标签**留在** `transcripts.*.text`。单测写死：`"<|future|>你好"` 必须原样保留 |
-| 比对用 `clean_control_tags` / `comparison_text` | 删除**全部** `<\|…\|>`，外加残缺情感形如 `<EMO_UNKNOW>\|` | 投票、相似度通常看不到标签 |
-| v3 分拣写候选 | `candidate_text = medoid.raw_text or medoid.comparison_text` | **优先用带标签的原始串** |
-| `quality.normalize_transcripts` | 会把正文洗成纯字 | **只挂在评测/字准流水线**，不在 `sensevoice_asr_batch`、聚拢、`classify_dataset_v3` |
+
+| 位置                                           | 实际行为                                                                                                                           | 结果                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| ASR 落盘 `parse_sensevoice_text`               | **只删白名单**：语言 `zh/en/yue/ja/ko/nospeech`，情感 `HAPPY/SAD/ANGRY/NEUTRAL`，事件 `Speech/BGM/Applause/Laughter/Cry/Sneeze/Breath/Cough` | 未知标签**留在** `transcripts.*.text`。单测写死：`"<                           |
+| 比对用 `clean_control_tags` / `comparison_text` | 删除**全部** `<|…|>`，外加残缺情感形如 `<EMO_UNKNOW>|`                                                                                      | 投票、相似度通常看不到标签                                                      |
+| v3 分拣写候选                                     | `candidate_text = medoid.raw_text or medoid.comparison_text`                                                                   | **优先用带标签的原始串**                                                     |
+| `quality.normalize_transcripts`              | 会把正文洗成纯字                                                                                                                       | **只挂在评测/字准流水线**，不在 `sensevoice_asr_batch`、聚拢、`classify_dataset_v3` |
+
 
 因此：
 
 - 比较往往是干净的，**看起来洗过了**；
-- 落盘 `text`、人审 `candidate_text` / `label`、以及从候选拷走的 `train_target_text` **仍然带着 `<| |>`**。
+- 落盘 `text`、人审 `candidate_text` / `label`、以及从候选拷走的 `train_target_text` **仍然带着** `<| |>`。
 
 SenseVoice 被选成 medoid（或该路没有 `comparison_text` 可退）时，候选金标就是：
 
@@ -46,12 +52,14 @@ SenseVoice 被选成 medoid（或该路没有 `comparison_text` 可退）时，�
 
 ### 1.3 白名单漏掉的常见标签（生产里会进 `text`）
 
-| 标签 | 来源 | 现在落在 `text` 里？ |
-| --- | --- | --- |
-| `<|withitn|>` / `<|woitn|>` | ITN 开关，默认开启 | **是** |
-| `<|EMO_UNKNOWN|>` / `<|EMO_UNKNOW|>` | 情感未知（仓库测试和旁路脚本已出现后一种拼写） | **是** |
-| 新语言 / 新事件 / 模型升级多出来的 `<|…|>` | FunASR 版本漂移 | **是**（故意保留，见手册 §7.1） |
-| `<|zh|>` `<|NEUTRAL|>` `<|Speech|>` | 白名单内 | 从 `text` 去掉，但仍完整留在 `extra.raw_text`，并被候选金标重新捞回 |
+
+| 标签                      | 来源          | 现在落在 `text` 里？ |
+| ----------------------- | ----------- | -------------- |
+| `<                      | withitn     | >`/`<          |
+| `<                      | EMO_UNKNOWN | >`/`<          |
+| 新语言 / 新事件 / 模型升级多出来的 `< | …           | >`             |
+| `<                      | zh          | > ``<          |
+
 
 手册 §7.1 的原意是：未知标签记到 `extra.unknown_tags`，**不要静默丢审计信息**；并避免把用户真说出的尖括号内容删掉。  
 落地时把「审计保留」做成了「可比正文也保留」，和「`text` 必须是去掉控制标签后的可比对纯文本」互相矛盾。真实口语几乎不会说出 `<|withitn|>` 这种 token。
@@ -64,7 +72,7 @@ SenseVoice 被选成 medoid（或该路没有 `comparison_text` 可退）时，�
 ingest → pcm_to_wav → resample_16k → probe → filter(duration>0) → select(audio_pass)
 ```
 
-文件头写死「只做音频质量，不做标注决策」。与 [018](./018-转写语速不可能防护栏.md) 相同：
+文件头写死「只做音频质量，不做标注决策」。与 [018](../已完成/018-转写语速不可能防护栏.md) 相同：
 
 - **不要**把文本清洗塞进 pcm / resample / probe。
 - **要**在 SenseVoice **写出可比正文时**剥掉全部控制标签，并在分拣 **写出给人看 / 给训练用的文本时** 禁止回写原始串。
@@ -72,6 +80,8 @@ ingest → pcm_to_wav → resample_16k → probe → filter(duration>0) → sele
 已跑完的 ASR parquet 里已经有 `extra.raw_text`，修复**不必重跑 GPU**。
 
 ---
+
+
 
 ## 2. 我想做什么
 
@@ -86,9 +96,11 @@ SenseVoice 的控制字段只允许出现在审计副本。任何会被人读、
 
 ---
 
+
+
 ## 3. 数据从哪来、结果要什么
 
-- **输入：** 已有 SenseVoice 结果（`sensevoice_asr_*.parquet`、聚拢后的 `transcripts.sensevoice*`），以及由它们产生的 `classified_v3_*`。新跑的 `pipelines/sensevoice_asr_batch.yaml` 同样适用。
+- **输入：** 已有 SenseVoice 结果（`sensevoice_asr_*.parquet`、聚拢后的 `transcripts.sensevoice`*），以及由它们产生的 `classified_v3_*`。新跑的 `pipelines/sensevoice_asr_batch.yaml` 同样适用。
 - **跑完希望得到：**
   - `transcripts.*.text`：口语正文，无 `<|…|>`，无残缺情感标签。
   - `extra.raw_text`：仍是模型原文（可以带标签）。
@@ -100,7 +112,11 @@ SenseVoice 的控制字段只允许出现在审计副本。任何会被人读、
 
 ---
 
+
+
 ## 4. 业务上有哪些规矩
+
+
 
 ### 4.1 什么必须从可比正文删掉
 
@@ -115,14 +131,18 @@ SenseVoice 的控制字段只允许出现在审计副本。任何会被人读、
 ### 4.2 什么不能删
 
 - `extra.raw_text` 一字不改。
-- 用户真实说出、但**不像控制标签**的尖括号正文（例如 `小于a大于`、普通 `()`、`【】`）。判定标准：只删 `<|…|>` 与已证实的残缺 `EMO_*` 形，不另做「凡是尖括号都删」。
+- 用户真实说出、但**不像控制标签**的尖括号正文（例如 `小于a大于`、普通 `()`、`【】`）。判定标准：只删 `<|…|>` 与已证实的残缺 `EMO_`* 形，不另做「凡是尖括号都删」。
 - 标点、语气词、数字、否定词。本需求**只去控制标签**，不把 `plain_transcript_text` 的去标点规则提前到 ASR 落盘。（比对仍按现有 `comparison_text` 去标点；那是另一层。）
+
+
 
 ### 4.3 解析与审计
 
 - 语言 / 情感 / 事件继续从 **原文** 解析，规则可沿用现有白名单。
 - 原文里出现、但未归入 language/emotion/events 的标签，写入 `extra.unknown_tags`（去重、保持出现顺序）。删正文 ≠ 丢标签。
 - 语音信箱等规则若需要扫原始串，继续读 `raw_text`；不要改成只扫已清洗正文，以免漏掉只写在标签旁的提示音文案。投票相似度继续走 `comparison_text`，本需求不改它的阈值。
+
+
 
 ### 4.4 候选金标口径
 
@@ -137,9 +157,11 @@ SenseVoice 的控制字段只允许出现在审计副本。任何会被人读、
 ### 4.5 存量与缓存
 
 - 新推理：`asr.sensevoice` / `asr.sensevoice_batch` 写出的 `text` 即已清洗。`transcript_key` 别名（`sensevoice-asr-1` 等）同样适用。
-- 已落盘 parquet：提供可重复执行的修补（脚本或算子皆可），只改 `text` / `candidate_text` / `label` 等可比字段，**不重跑模型、不删 `raw_text`**。
+- 已落盘 parquet：提供可重复执行的修补（脚本或算子皆可），只改 `text` / `candidate_text` / `label` 等可比字段，**不重跑模型、不删** `raw_text`。
 - ASR cache：若 cache 里存的是带标签的 `text`，修补逻辑或 cache key 必须让 `--force` 之前的旧 cache 不会把脏 `text` 再写回去。优先：读 cache 时再剥一次标签（便宜、不强迫全量重推）。
 - 分拣 cache：投票输入不变则桶不变；重跑分拣或离线改写候选均可。不要为了去标签而要求重推三万条音频。
+
+
 
 ### 4.6 明确不做
 
@@ -149,6 +171,8 @@ SenseVoice 的控制字段只允许出现在审计副本。任何会被人读、
 - 不调整 v3 阈值、家族契约、语速栏、DNSMOS。
 
 ---
+
+
 
 ## 5. 我怎么才算满意
 
@@ -162,9 +186,42 @@ SenseVoice 的控制字段只允许出现在审计副本。任何会被人读、
 
 ---
 
+
+
 ## 6. 其他我想说的
 
 - 根因一句话：**审计串和可比正文被写成了同一个字段。** `raw_text` 该脏，`text` 和 `candidate_text` 不该脏。
 - 优先改解析与候选写出；存量用离线重写补。不要用「再跑一遍 SenseVoice」当修复方案。
 - 旧手册「未知标签留在正文，以免误删口语」作废。误删防护改为：只匹配控制标签语法，不删除其它尖括号。
 - 参考实现已在仓库：`clean_control_tags` 比 `parse_sensevoice_text` 更接近正确口径。新逻辑应共用这一处，避免 ASR 与分拣各写一套正则。
+
+
+
+请严格按 docs/07-操作手册/[流水线构建-AI执行手册.md](http://流水线构建-AI执行手册.md) 执行。
+
+需求文档：docs/04-改进需求/进行中/[031-工序一后置统一分类分拣入口.md](http://031-工序一后置统一分类分拣入口.md)
+
+
+
+目标：实现「工序一多家族 ASR（含双跑）完成后」的统一分类分拣入口——不启动 ASR、不占 GPU，严格复用五类 v2.2 引擎（audio_energy → dnsmos_v2_2_candidates → classify），产出完整分类 XLSX。
+
+
+
+关键要求：
+
+1. 输入以 --batch 为主；各家族推理时的 --asr-run 双跑别名必须纳入。别名解析顺序：显式 --family（或等价参数）> 批次 dataset YAML > stage1 固定别名（qwen_1/2、glm_1/2、sensevoice_1/2）。禁止对历史别名静默猜测。
+
+2. 启动分类前做详细前置体检：按家族/路次列出存在与缺失及期望路径；缺任何一路则失败并给出摘要（哪个家族整缺、哪一路缺）。
+
+3. 结果必须是完整分类 XLSX（统计+明细），列契约对齐正式 review export-summary；默认输出路径尽量与工序一正式交付一致，可用 --output 覆盖；默认不覆盖已有文件。
+
+4. 优先增强并收敛现有 scripts/classify_asr_to_[xlsx.py](http://xlsx.py)（可选再挂 audio-data stage1 classify 复用同一实现），不要再开第三套半兼容路径。不伪造 register/reservation/release。
+
+5. 补单测（缺失报错结构 + 现有 happy path 回归），更新相关操作手册与单条流水线执行命令.txt / 工序一手册中的推荐命令。
+
+
+
+用自然语言需求即可；缺会阻塞实现的信息先问我，其余工程细节你定。
+
+完成实现与针对性验证后，说明变更文件、推荐命令、验证结果；保留工作区已有修改。
+

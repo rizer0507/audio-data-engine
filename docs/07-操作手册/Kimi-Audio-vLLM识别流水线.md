@@ -14,11 +14,14 @@ audio-data pipeline run pipelines/kimi_asr_batch.yaml --eval-name eval_core_v001
 
 每卡一个完整模型：`--tensor-parallel-size 1`。不要 `--tensor-parallel-size 2`，也不要和本地 `kimi_audio` 抢同一张卡。
 
+**保活（服务器强制）**：每路 `vllm serve` 与批跑分别进 `tmux`（例：`tmux new -s vllm5554` / `vllm5555` / `asr_kimi`），`Ctrl+b d` 脱离。详见 `手册/dev/00-总详细手册.txt` §2.0。Tabby / VS Code Remote 断线不能保活前台进程。
+
 **未做分桶 pad / 混合时长探针未通过前**，`--max-num-seqs` 保持 2～4，不要默认抬到 8+。  
 **pad 且长短混合探针通过后**，每卡可试到 8。
 
 ```bash
 # GPU 4 → :5554
+# tmux new -s vllm5554
 CUDA_VISIBLE_DEVICES=4 \
 vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
   --host 0.0.0.0 \
@@ -32,8 +35,10 @@ vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
   --gpu-memory-utilization 0.90 \
   --no-enable-prefix-caching \
   --limit-mm-per-prompt '{"audio":1}'
+# Ctrl+b d
 
 # GPU 5 → :5555（第二副本；单卡可省略）
+# tmux new -s vllm5555
 CUDA_VISIBLE_DEVICES=5 \
 vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
   --host 0.0.0.0 \
@@ -47,6 +52,7 @@ vllm serve /data2/data-cp/zcl/models/Kimi-Audio-7B-Instruct \
   --gpu-memory-utilization 0.90 \
   --no-enable-prefix-caching \
   --limit-mm-per-prompt '{"audio":1}'
+# Ctrl+b d
 ```
 
 `--served-model-name` 必须与 `KIMI_ASR_MODEL`（默认 `kimi-audio`）一致。

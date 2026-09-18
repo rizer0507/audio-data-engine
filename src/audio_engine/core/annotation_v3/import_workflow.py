@@ -581,5 +581,7 @@ def import_has_blocking_issues(result: ImportResult) -> bool:
         "invalid_gold_kind",
         "invalid_decision",
         "non_speech_missing_event",
+        "invalid_reviewed_category",
+        "category_mutated",
     }
     return any(i.code in blocking for i in result.issues)

@@ -16,7 +16,13 @@ from audio_engine.operators.quality.evaluation_report import EvaluationReportOpe
 from audio_engine.operators.quality.prepare_dataset_v3 import PrepareDatasetV3Operator
 from audio_engine.operators.quality.dnsmos import DnsmosOperator
 from audio_engine.operators.quality.asr_anomaly_noise import AsrAnomalyNoiseOperator
+from audio_engine.operators.quality.audio_energy import AudioEnergyOperator
+from audio_engine.operators.quality.dnsmos_v2_2_candidates import DnsmosV22CandidatesOperator
 from audio_engine.operators.quality.build_dataset_v3 import BuildDatasetV3Operator
+from audio_engine.operators.quality.warehouse_export_annotation import (
+    WarehouseExportAnnotationOperator,
+)
+from audio_engine.operators.quality.warehouse_freeze import WarehouseFreezeOperator
 
 __all__ = [
     "AsrEditDistanceOperator",
@@ -37,6 +43,10 @@ __all__ = [
     "PrepareDatasetV3Operator",
     "DnsmosOperator",
     "AsrAnomalyNoiseOperator",
+    "AudioEnergyOperator",
+    "DnsmosV22CandidatesOperator",
     "BuildDatasetV3Operator",
     "AttachAsrV3Operator",
+    "WarehouseExportAnnotationOperator",
+    "WarehouseFreezeOperator",
 ]

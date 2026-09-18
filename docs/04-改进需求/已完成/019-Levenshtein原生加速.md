@@ -8,9 +8,9 @@
 
 > 落地：`selection_v3.text._levenshtein` 改用 `rapidfuzz.distance.Levenshtein`；`rapidfuzz>=3.0` 写入 `pyproject.toml` 正式依赖；缺库导入即 `ImportError`（无静默纯 Python 回退）；单测 `tests/test_selection_v3_text_levenshtein.py` 与历史纯 Python DP 对照。  
 
-> 触发：`selection_v3.text._levenshtein` 为纯 Python DP；`0908-30000` 分拣单核打满、墙钟可达数小时级。即便 [018](../进行中/018-转写语速不可能防护栏.md) 拦掉超长幻觉，正常长度文本上的多次两两比较仍偏慢。  
+> 触发：`selection_v3.text._levenshtein` 为纯 Python DP；`0908-30000` 分拣单核打满、墙钟可达数小时级。即便 [018](./018-转写语速不可能防护栏.md) 拦掉超长幻觉，正常长度文本上的多次两两比较仍偏慢。  
 
-> 前置 / 关联：热路径位于 `src/audio_engine/core/selection_v3/text.py`（`text_similarity` / `_levenshtein`）；消费方为 `classify_dataset_v3`。总加速蓝图见 [017](../进行中/017-v3分拣加速.md)（本需求从中拆出 **编辑距离 P0**，单独可交付）。[018](../进行中/018-转写语速不可能防护栏.md) 与本需求正交、可叠加。  
+> 前置 / 关联：热路径位于 `src/audio_engine/core/selection_v3/text.py`（`text_similarity` / `_levenshtein`）；消费方为 `classify_dataset_v3`。总加速蓝图见 [017](../进行中/017-v3分拣加速.md)（本需求从中拆出 **编辑距离 P0**，单独可交付）。[018](./018-转写语速不可能防护栏.md) 与本需求正交、可叠加。  
 
 > 范围边界：只替换编辑距离 / 相似度实现为**现成原生加速库**；**不改** `comparison_text` 归一化、分桶阈值、决策链、侧车、清洗 DAG。并发与 Manifest 改造仍归 017，本需求可不依赖它们单独落地。
 

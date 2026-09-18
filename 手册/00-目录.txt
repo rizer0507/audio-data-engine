@@ -10,6 +10,7 @@
 说明：
   - 本目录为可进 Git 的执行手册。
   - 复杂说明在「00-总详细手册」；日常执行用 01/02/03 一键分册。
+  - 「一条命令多步骤」生产入口台账：dev/05-一条命令多步骤.txt。
   - 结构：dev / local 各一套。
 
 dev/（服务器）
@@ -18,6 +19,7 @@ dev/（服务器）
   02-工序二-训练.txt
   03-工序三-评测.txt
   04-服务器热更新-tmp到正式工程.txt
+  05-一条命令多步骤.txt          # 单命令完成多步骤的生产入口台账（030/031…）
 
 local/（Windows 本机）
   00-总详细手册.txt
@@ -29,17 +31,27 @@ local/（Windows 本机）
 
 阅读建议：
   1. 先读工序总览，再按环境打开对应 01/02/03 执行；
-  2. 排障查 00-总详细手册；
-  3. U 盘到服务器后用 04-服务器热更新。
+  2. 「一条命令多步骤」优先查 手册/dev/05-一条命令多步骤.txt；
+  3. 排障查 00-总详细手册；
+  4. U 盘到服务器后用 04-服务器热更新。
 
 更新记录：
-  - 2026-09-15：补充噪声打分（DNSMOS）工序与步骤：01 §3b、00 §5b、单条流水线 §2f-noise；正式分拣对齐五类 v1。
+  - 2026-09-17：新增 05-一条命令多步骤（030 全链路 + 031 后置分类）；目录同步。
+  - 2026-09-17：服务器手册统一补 tmux 保活（00 §2.0；01/03 前置；单条流水线 / GLM·Kimi 操作手册）。
+  - 2026-09-16：五分类正式入口更新为 v2.2：audio_energy → DNSMOS 候选 → classify；v2/v1 仅对照。
+  - 2026-09-15：补充噪声打分（DNSMOS）工序与步骤：01 §3b、00 §5b、单条流水线 §2f-noise。
   - 2026-09-04：dev 按服务器真实命令同步；工序分册精简为一键执行。
   - 2026-09-04：新增 04-服务器热更新；文档热更新去掉 rsync --delete。
   - 2026-09-04：文档体系改为三大工序，与工序总览 / 03-流水线对齐。
   - 2026-09-04：外源金标→工序三：`classify_external_gold` 落地；005/006 迁入已完成。
 
 噪声打分速查：
-  - 主路径：分拣 YAML 内嵌 diagnose_asr_anomaly（按需）；见 01 §3b / 00 §5b / 单条流水线 §2f-noise
+  - 主路径：classify_dataset_five_class_v2_2_auto_noise 内嵌 audio_energy + dnsmos_v2_2_candidates；见 01 §3b / 00 §5b / 单条流水线 §2f-v3-029
   - 研究全量：pipelines/audio_quality_sidecar.yaml
-  - 规则边界：未校准不得自动定 environment_noise（数据挑选规则_v1 §6.5）
+  - 规则边界：v2.2 按家族状态 + 能量 + 版本化 DNSMOS 阈值联合判定；DNSMOS 单项不能独立定类
+
+服务器过夜批跑速查：
+  - 手工 vLLM / pipeline：tmux（手册/dev/00 §2.0）；Tabby/VS Code 不能保活
+  - stage1 单命令（030）：本身后台，SSH 断开可继续；手工对照服仍须 tmux
+  - 六路已齐只分类（031）：python scripts/classify_asr_to_xlsx.py --batch $BATCH（见 05）
+  - 查/杀：tmux ls；tmux attach -t <名>；tmux kill-session -t <名>
