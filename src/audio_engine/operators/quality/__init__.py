@@ -18,6 +18,9 @@ from audio_engine.operators.quality.dnsmos import DnsmosOperator
 from audio_engine.operators.quality.asr_anomaly_noise import AsrAnomalyNoiseOperator
 from audio_engine.operators.quality.audio_energy import AudioEnergyOperator
 from audio_engine.operators.quality.dnsmos_v2_2_candidates import DnsmosV22CandidatesOperator
+from audio_engine.operators.quality.silero_vad import SileroVadOperator
+from audio_engine.operators.quality.efficientat_candidates import EfficientAtCandidatesOperator
+from audio_engine.operators.quality.efficientat import EfficientAtOperator
 from audio_engine.operators.quality.build_dataset_v3 import BuildDatasetV3Operator
 from audio_engine.operators.quality.warehouse_export_annotation import (
     WarehouseExportAnnotationOperator,
@@ -45,6 +48,9 @@ __all__ = [
     "AsrAnomalyNoiseOperator",
     "AudioEnergyOperator",
     "DnsmosV22CandidatesOperator",
+    "SileroVadOperator",
+    "EfficientAtCandidatesOperator",
+    "EfficientAtOperator",
     "BuildDatasetV3Operator",
     "AttachAsrV3Operator",
     "WarehouseExportAnnotationOperator",

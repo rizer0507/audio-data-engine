@@ -1,0 +1,18 @@
+# Acoustic evidence aggregation v1 (VAD + EfficientAT + energy → acoustic_state).
+policy_version: acoustic_evidence_v1
+
+# When EfficientAT is skipped, derive audio_event_state from VAD+energy.
+skipped_event_policy: vad_energy_fallback  # vad_energy_fallback | unknown
+
+# Strong acoustic veto applies only to these acoustic_state values.
+strong_veto_states:
+  - silence
+  - non_speech_noise
+
+# Optional DNSMOS quality_tag only (never category evidence).
+dnsmos_quality_tags:
+  perceptual_noisy:
+    bak_max: 3.0
+    ovrl_max: 2.8
+  poor_speech_quality:
+    sig_max: 2.8

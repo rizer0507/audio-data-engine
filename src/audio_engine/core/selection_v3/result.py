@@ -18,6 +18,7 @@ from audio_engine.core.selection_v3.types import (
     is_business_semantic_rule,
     is_five_class_rule,
     is_five_class_v2_2_rule,
+    is_five_class_v2_3_rule,
     is_five_class_v2_rule,
 )
 
@@ -138,6 +139,14 @@ class ClassificationResultV3:
     decision_trace: dict[str, Any] = field(default_factory=dict)
     v2_fallback: bool | None = None
     borderline_resolved_by_dnsmos: bool | None = None
+    # 034 v2.3 min acoustic evidence fields.
+    text_evidence_state: str | None = None
+    vad_speech_state: str | None = None
+    audio_event_state: str | None = None
+    acoustic_state: str | None = None
+    hallucination_state: str | None = None
+    quality_tags: list[str] = field(default_factory=list)
+    decision_evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_labels(self, policy_version: str) -> dict[str, Any]:
         labels: dict[str, Any] = {
@@ -257,6 +266,13 @@ class ClassificationResultV3:
             "decision_trace": dict(self.decision_trace or {}),
             "v2_fallback": self.v2_fallback,
             "borderline_resolved_by_dnsmos": self.borderline_resolved_by_dnsmos,
+            "text_evidence_state": self.text_evidence_state or "",
+            "vad_speech_state": self.vad_speech_state or "",
+            "audio_event_state": self.audio_event_state or "",
+            "acoustic_state": self.acoustic_state or "",
+            "hallucination_state": self.hallucination_state or "",
+            "quality_tags": list(self.quality_tags or []),
+            "decision_evidence": dict(self.decision_evidence or {}),
         }
         if self.annotation_tasks:
             first = self.annotation_tasks[0]
@@ -293,7 +309,7 @@ class ClassificationResultV3:
                 )
         if is_five_class_v2_rule(self.rule_version) or is_five_class_v2_2_rule(
             self.rule_version
-        ):
+        ) or is_five_class_v2_3_rule(self.rule_version):
             labels["is_human_verified"] = False
             if self.outcome == "classified":
                 if self.category not in BUSINESS_CATEGORIES_FIVE_CLASS:

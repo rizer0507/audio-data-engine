@@ -2200,6 +2200,19 @@ def review_export_summary(
             "needs_review": sample.labels.get("needs_review"),
             "review_reason": sample.labels.get("review_reason") or "",
             "hardcase_reason": sample.labels.get("hardcase_reason") or "",
+            "vad_speech_state": sample.labels.get("vad_speech_state")
+            or (sample.quality or {}).get("vad_speech_state")
+            or "",
+            "speech_ratio": sample.labels.get("speech_ratio")
+            if sample.labels.get("speech_ratio") is not None
+            else (sample.quality or {}).get("speech_ratio"),
+            "audio_event_state": sample.labels.get("audio_event_state")
+            or (sample.quality or {}).get("audio_event_state")
+            or "",
+            "acoustic_state": sample.labels.get("acoustic_state")
+            or (sample.quality or {}).get("acoustic_state")
+            or "",
+            "decision_evidence": str(sample.labels.get("decision_evidence") or ""),
             "dnsmos_sig": (sample.quality or {}).get("dnsmos_sig"),
             "dnsmos_bak": (sample.quality or {}).get("dnsmos_bak"),
             "dnsmos_ovrl": (sample.quality or {}).get("dnsmos_ovrl"),
@@ -2293,6 +2306,26 @@ def review_export_summary(
             console.print(
                 f"  borderline_resolved_by_dnsmos count: {borderline_resolved_n}"
             )
+        if any(
+            str(row.get("rule_version") or "").startswith("selection_five_class_v2_3")
+            for row in rows
+        ):
+            vad_counts = Counter(
+                str(row.get("vad_speech_state") or "")
+                for row in rows
+                if row.get("vad_speech_state")
+            )
+            acoustic_counts = Counter(
+                str(row.get("acoustic_state") or "")
+                for row in rows
+                if row.get("acoustic_state")
+            )
+            if any(vad_counts.values()):
+                console.print(f"  vad_speech_state counts: {dict(sorted(vad_counts.items()))}")
+            if any(acoustic_counts.values()):
+                console.print(
+                    f"  acoustic_state counts: {dict(sorted(acoustic_counts.items()))}"
+                )
 
     if output_manifest is not None:
         typed = Manifest(typed_samples)
@@ -3507,6 +3540,11 @@ def stage1_wait(
 @stage1_app.command("classify")
 def stage1_classify(
     batch: str = typer.Option(..., "--batch", help="与各家族推理时同一 batch / source-name"),
+    rule_version: str = typer.Option(
+        "v2_3_min_acoustic",
+        "--rule-version",
+        help="默认 v2_3_min_acoustic（034）；legacy 用 v2_2_auto_noise",
+    ),
     source_dir: Optional[Path] = typer.Option(
         None,
         "--source-dir",
@@ -3524,17 +3562,19 @@ def stage1_classify(
     cleaned: Optional[Path] = typer.Option(None, "--cleaned", help="完整 cleaned 底表"),
     asr_dir: Path = typer.Option(Path("datasets/stage1/asr"), "--asr-dir"),
     dnsmos_config: Path = typer.Option(
-        Path("configs/quality/dnsmos_p835.yaml"), "--dnsmos-config"
+        Path("configs/quality/dnsmos_p835.yaml"),
+        "--dnsmos-config",
+        help="仅 --rule-version v2_2_auto_noise 使用；v2.3 默认不跑 DNSMOS",
     ),
     output: Optional[Path] = typer.Option(
         None,
         "--output",
-        help="默认 data/exports/summary_five_class_v2_2_auto_noise_<batch>.xlsx",
+        help="默认 data/exports/summary_five_class_v2_3_min_acoustic_<batch>.xlsx",
     ),
     classified_output: Optional[Path] = typer.Option(
         None,
         "--classified-output",
-        help="默认 datasets/stage1/derived/classified_five_class_v2_2_auto_noise_<batch>.parquet",
+        help="默认 datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_<batch>.parquet",
     ),
     no_classified_parquet: bool = typer.Option(
         False, "--no-classified-parquet", help="仅交付 XLSX，不写正式 classified parquet"
@@ -3543,13 +3583,14 @@ def stage1_classify(
         1,
         "--energy-workers",
         "--workers",
-        help="音频能量步线程并发（默认 1；8 卡服务器 CPU 建议 16~32）",
+        help="仅加速音频能量步线程并发（默认 1；不控制 Silero/EfficientAT）",
     ),
     overwrite: bool = typer.Option(False, "--overwrite"),
 ) -> None:
-    """六路 ASR 已齐后的统一五类 v2.2 分类入口（031）；不启动 ASR、不占 GPU。
+    """六路 ASR 已齐后的统一五类分类入口（031/035）；默认 v2.3 最小声学。
 
     复用 ``scripts/classify_asr_to_xlsx.py`` 同一实现；不伪造 register/reservation/release。
+    与 ``pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml`` 语义等价。
     """
     import importlib.util
 
@@ -3570,7 +3611,7 @@ def stage1_classify(
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 
-    argv: list[str] = ["--batch", batch]
+    argv: list[str] = ["--batch", batch, "--rule-version", rule_version]
     if source_dir is not None:
         argv.extend(["--source-dir", str(source_dir)])
     if family:

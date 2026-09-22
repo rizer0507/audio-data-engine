@@ -13,6 +13,8 @@ RULE_VERSION_FIVE_CLASS = "selection_five_class_v1"
 RULE_VERSION_FIVE_CLASS_V2 = "selection_five_class_v2_auto_noise"
 # 029 DNSMOS joint evidence. Independent of v2; do not silently change v2 semantics.
 RULE_VERSION_FIVE_CLASS_V2_2 = "selection_five_class_v2_2_auto_noise"
+# 034 min acoustic evidence (Silero + EfficientAT). Independent of v2.2.
+RULE_VERSION_FIVE_CLASS_V2_3 = "selection_five_class_v2_3_min_acoustic"
 TOLERANCE_VERSION = "text_tolerance_v1"
 # 025 opt-in text pre-layer. Production default stays legacy until an explicit switch.
 CLASSIFY_TEXT_VERSION = "classify_text_zh_only_v1"
@@ -329,6 +331,14 @@ def is_five_class_rule(rule_version: str | None) -> bool:
     return text == RULE_VERSION_FIVE_CLASS or text.startswith("selection_five_class_v1")
 
 
+def is_five_class_v2_3_rule(rule_version: str | None) -> bool:
+    """True only for 034 ``selection_five_class_v2_3_min_acoustic``."""
+    text = str(rule_version or "").strip()
+    return text == RULE_VERSION_FIVE_CLASS_V2_3 or text.startswith(
+        "selection_five_class_v2_3"
+    )
+
+
 def is_five_class_v2_2_rule(rule_version: str | None) -> bool:
     """True only for 029 ``selection_five_class_v2_2_auto_noise``."""
     text = str(rule_version or "").strip()
@@ -338,9 +348,9 @@ def is_five_class_v2_2_rule(rule_version: str | None) -> bool:
 
 
 def is_five_class_v2_rule(rule_version: str | None) -> bool:
-    """True only for 028 ``selection_five_class_v2_auto_noise`` (not v2.2)."""
+    """True only for 028 ``selection_five_class_v2_auto_noise`` (not v2.2/v2.3)."""
     text = str(rule_version or "").strip()
-    if is_five_class_v2_2_rule(text):
+    if is_five_class_v2_2_rule(text) or is_five_class_v2_3_rule(text):
         return False
     return text == RULE_VERSION_FIVE_CLASS_V2 or text.startswith(
         "selection_five_class_v2"
@@ -348,11 +358,12 @@ def is_five_class_v2_rule(rule_version: str | None) -> bool:
 
 
 def is_any_five_class_rule(rule_version: str | None) -> bool:
-    """True for five-class strategies (v1, v2, or v2.2)."""
+    """True for five-class strategies (v1, v2, v2.2, or v2.3)."""
     return (
         is_five_class_rule(rule_version)
         or is_five_class_v2_rule(rule_version)
         or is_five_class_v2_2_rule(rule_version)
+        or is_five_class_v2_3_rule(rule_version)
     )
 
 

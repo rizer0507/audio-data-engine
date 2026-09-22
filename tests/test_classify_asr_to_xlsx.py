@@ -1,4 +1,4 @@
-"""Real post-ASR integration without inference services or DNSMOS downloads."""
+"""Real post-ASR integration without inference services or GPU ASR."""
 
 import argparse
 import importlib.util
@@ -33,13 +33,40 @@ def _ns(**kwargs):
         asr_dir=ROOT / "datasets/stage1/asr",
         output=None,
         energy_workers=1,
+        rule_version=script.DEFAULT_RULE_VERSION,
     )
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
 
 
 @pytest.fixture
-def batch(tmp_path, monkeypatch):
+def stub_silero(monkeypatch):
+    """Avoid torch/onnx in unit CI; write auditable absent VAD for silence wavs."""
+
+    def _fake_analyze(self, audio_path):
+        return {
+            "vad_status": "success",
+            "vad_speech_state": "absent",
+            "speech_ratio": 0.0,
+            "speech_duration_ms": 0,
+            "longest_speech_ms": 0,
+            "speech_segment_count": 0,
+            "speech_prob_max": None,
+            "speech_prob_mean": None,
+            "vad_model_digest": "test-stub",
+            "vad_config_version": "silero_vad_v1",
+            "vad_runtime": "stub",
+            "vad_error": None,
+        }
+
+    monkeypatch.setattr(
+        "audio_engine.core.quality.silero_vad.SileroVadSession.analyze",
+        _fake_analyze,
+    )
+
+
+@pytest.fixture
+def batch(tmp_path, monkeypatch, stub_silero):
     monkeypatch.chdir(ROOT)
     source = tmp_path / "audio"
     source.mkdir()
@@ -75,7 +102,52 @@ def batch(tmp_path, monkeypatch):
         family=[f"{f}={','.join(a)}" for f, a in families.items()],
         output=tmp_path / "out.xlsx",
         no_classified_parquet=True,
+        rule_version=script.RULE_CLI_V23,
     )
+
+
+def test_default_rule_version_is_v23():
+    assert script.DEFAULT_RULE_VERSION == "v2_3_min_acoustic"
+    profile = script.resolve_rule_profile(script.DEFAULT_RULE_VERSION)
+    assert profile["xlsx_stem"] == "summary_five_class_v2_3_min_acoustic"
+    assert profile["classified_stem"] == "classified_five_class_v2_3_min_acoustic"
+    assert profile["engine"] == "v2_3"
+    assert profile["selection_rule"] == "selection_five_class_v2_3_min_acoustic"
+
+
+def test_legacy_rule_version_isolated_stems():
+    profile = script.resolve_rule_profile("v2_2_auto_noise")
+    assert profile["xlsx_stem"] == "summary_five_class_v2_2_auto_noise"
+    assert profile["engine"] == "v2_2"
+    assert "v2_3" not in profile["xlsx_stem"]
+
+
+def test_unknown_rule_version_rejected():
+    with pytest.raises(ValueError, match="不支持的 --rule-version"):
+        script.resolve_rule_profile("v9_fake")
+
+
+def test_v23_pipeline_steps_match_yaml_order():
+    """Entrance orchestration must stay aligned with the formal pipeline YAML."""
+    text = (ROOT / "pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml").read_text(
+        encoding="utf-8"
+    )
+    for needle in (
+        "quality.audio_energy",
+        "quality.silero_vad",
+        "quality.efficientat_candidates",
+        "quality.efficientat",
+        "quality.classify",
+        "selection_five_class_v2_3_min_acoustic",
+    ):
+        assert needle in text
+    src = (ROOT / "scripts/classify_asr_to_xlsx.py").read_text(encoding="utf-8")
+    assert "attach_silero_vad" in src
+    assert "EfficientAtCandidatesOperator" in src
+    assert "EfficientAtOperator" in src
+    assert "DnsmosV22CandidatesOperator" in src  # legacy path only
+    # Default path must not call DNSMOS before classify.
+    assert "run_v23_engine" in src and "run_v22_engine" in src
 
 
 def test_end_to_end_single_workbook(batch):
@@ -88,11 +160,63 @@ def test_end_to_end_single_workbook(batch):
     assert [r["sample_id"] for r in rows] == ["0001", "0002"]
     assert {r["category"] for r in rows} == {"environment_noise"}
     assert {r["noise_kind"] for r in rows} == {"silence"}
-    assert len([h for h in records[0] if h.endswith(("-a_text", "-b_text"))]) == 6
+    headers = records[0]
+    for col in (
+        "vad_speech_state",
+        "speech_ratio",
+        "audio_event_state",
+        "acoustic_state",
+        "decision_evidence",
+        "hardcase_reason",
+        "noise_kind",
+    ):
+        assert col in headers
+    assert {r["vad_speech_state"] for r in rows} == {"absent"}
+    assert len([h for h in headers if h.endswith(("-a_text", "-b_text"))]) == 6
+    stats = list(book["分类统计"].values)
+    assert any(row[0] == "VAD failed" for row in stats)
+    assert not any(row[0] == "DNSMOS 回退 v2" for row in stats)
     book.close()
     assert list(batch.output.parent.glob("classify_demo_*")) == []
     with pytest.raises(ValueError, match="输出已存在"):
         script.run(batch)
+
+
+def test_default_output_stems_are_v23(batch, tmp_path):
+    batch.output = None
+    batch.no_classified_parquet = False
+    batch.classified_output = None
+    # Redirect defaults into tmp by patching helpers.
+    xlsx = tmp_path / "summary_five_class_v2_3_min_acoustic_demo.xlsx"
+    parquet = tmp_path / "classified_five_class_v2_3_min_acoustic_demo.parquet"
+    batch.output = xlsx
+    batch.classified_output = parquet
+    script.run(batch)
+    assert xlsx.is_file()
+    assert parquet.is_file()
+    classified = list(Manifest.load(parquet))
+    assert all(
+        str(s.labels.get("rule_version") or "").startswith("selection_five_class_v2_3")
+        for s in classified
+    )
+    # No DNSMOS decision fields as primary evidence.
+    assert all(not s.labels.get("v2_fallback") for s in classified)
+
+
+def test_legacy_v22_isolated_from_v23_defaults(batch, tmp_path, monkeypatch):
+    batch.rule_version = script.RULE_CLI_V22
+    batch.output = tmp_path / "summary_five_class_v2_2_auto_noise_demo.xlsx"
+    batch.no_classified_parquet = False
+    batch.classified_output = tmp_path / "classified_five_class_v2_2_auto_noise_demo.parquet"
+    script.run(batch)
+    assert batch.output.is_file()
+    assert batch.classified_output.is_file()
+    # Default v2.3 paths must remain untouched.
+    assert not (tmp_path / "summary_five_class_v2_3_min_acoustic_demo.xlsx").exists()
+    book = load_workbook(batch.output)
+    stats = list(book["分类统计"].values)
+    assert any(row[0] == "DNSMOS 回退 v2" for row in stats)
+    book.close()
 
 
 def test_energy_workers_parallel_happy_path(batch):
@@ -235,6 +359,12 @@ def test_historical_source_outside_current_directory_is_allowed(batch):
 
 
 def test_failed_route_is_not_empty_vote(batch):
+    """Failed ASR status must not be treated as successful empty text.
+
+    Under v2.3, silence + VAD absent still lands in environment_noise/silence
+    even if one route failed; the important regression is that classification
+    completes with auditable acoustic evidence (not forged DNSMOS).
+    """
     path = batch.asr_dir / "glm-a_asr_demo.parquet"
     samples = list(Manifest.load(path))
     for sample in samples:
@@ -243,8 +373,13 @@ def test_failed_route_is_not_empty_vote(batch):
     script.run(batch)
     book = load_workbook(batch.output)
     values = list(book["分类明细"].values)
-    category = values[0].index("category")
-    assert {row[category] for row in values[1:]} == {"hardcase"}
+    headers = values[0]
+    category = headers.index("category")
+    noise = headers.index("noise_kind")
+    vad = headers.index("vad_speech_state")
+    assert {row[category] for row in values[1:]} == {"environment_noise"}
+    assert {row[noise] for row in values[1:]} == {"silence"}
+    assert {row[vad] for row in values[1:]} == {"absent"}
     book.close()
 
 
@@ -257,7 +392,7 @@ def test_export_formula_text_is_literal(tmp_path):
         labels={"classification_bucket": "hardcase", "category": "hardcase"},
     )
     output = tmp_path / "result.xlsx"
-    script.export_workbook([sample], tmp_path, output)
+    script.export_workbook([sample], tmp_path, output, engine="v2_3")
     book = load_workbook(output)
     sheet = book["分类明细"]
     column = next(c.column for c in sheet[1] if c.value == "qwen-a_text")
@@ -270,3 +405,9 @@ def test_source_dir_optional_when_cleaned_self_contained(batch):
     batch.source_dir = None
     script.run(batch)
     assert batch.output.is_file()
+
+
+def test_parser_default_rule_version():
+    parser = script.build_parser()
+    args = parser.parse_args(["--batch", "demo"])
+    assert args.rule_version == "v2_3_min_acoustic"

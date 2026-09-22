@@ -589,6 +589,12 @@ def apply_source_name_to_single_pipeline(
         # 020 shadow: write beside production classified, never overwrite it.
         if "shadow_020" in key:
             out = staged_manifest_path(f"classified_v3_{name}_shadow_020")
+        elif (
+            "five_class_v2_3" in key
+            or "v2_3_min_acoustic" in key
+            or "min_acoustic" in key
+        ):
+            out = staged_manifest_path(f"classified_five_class_v2_3_min_acoustic_{name}")
         elif "five_class_v2_2" in key or "v2_2_auto_noise" in key:
             out = staged_manifest_path(f"classified_five_class_v2_2_auto_noise_{name}")
         elif "five_class_v2" in key or "v2_auto_noise" in key:

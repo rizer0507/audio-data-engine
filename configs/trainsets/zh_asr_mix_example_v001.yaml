@@ -1,0 +1,21 @@
+# 036 示例配方（请复制后改 trainset_version / batches 路径再跑）
+#
+#   python scripts/assemble_training_parquet.py \
+#     --recipe configs/trainsets/zh_asr_mix_example_v001.yaml
+#
+# 默认输入习惯：classified_five_class_v2_3_min_acoustic_<batch>_with_gold.parquet
+# 自动 voicemail 不是金标；清洗只处理人工「不做训练*」标记（036 §4）。
+
+trainset_version: zh_asr_mix_example_v001
+rule_stem: classified_five_class_v2_3_min_acoustic
+categories:
+  - gold_candidate
+  - semantic_risk
+  - hardcase
+batches:
+  - batch: 20260814-1
+    parquet: datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_20260814-1_with_gold.parquet
+  - batch: 20260813-1
+    parquet: datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_20260813-1_with_gold.parquet
+exclude_markers_config: configs/selection/training_exclude_markers_v1.yaml
+duplicate_audio_policy: fail   # fail | keep_first

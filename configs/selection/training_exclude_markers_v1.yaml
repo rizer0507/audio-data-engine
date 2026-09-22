@@ -1,0 +1,41 @@
+# 036 · 训练汇总「不做训练」类标记清洗规则（版本化，勿只硬编码在脚本里）
+#
+# 匹配：去首尾空白后大小写不敏感；按 markers 顺序优先匹配（长短语在前）。
+# mode:
+#   exact  — 整串等于 marker（或仅含 marker、无其它有效正文）
+#   prefix — 以 marker 为前缀
+#
+# 命中后：category / training_category → hardcase；原文本进 gold_text_raw；
+#         gold_text 置空（不当作训练正文）。
+#
+# 注意：自动 voicemail（分类器正则）不是金标；本表只处理人工标注侧标记。
+#       详见 docs/04-改进需求/进行中/036-标注-训练数据汇总.md §4。
+
+version: training_exclude_markers_v1
+target_categories_before_clean:
+  - semantic_risk
+
+gold_text_after_clean: ""   # 固定策略：清空；禁止半空半留
+
+markers:
+  - match: "不做训练语音信箱"
+    reason: exclude_voicemail_marked
+    mode: exact
+  - match: "不作训练语音信箱"
+    reason: exclude_voicemail_marked
+    mode: exact
+  - match: "不做训练"
+    reason: exclude_from_training
+    mode: exact
+  - match: "不作训练"
+    reason: exclude_from_training
+    mode: exact
+
+# 近义只告警、不自动清洗（可选）
+near_synonym_warn:
+  - "不要训练"
+  - "不训练"
+  - "不作训练集"
+  - "不做训练集"
+  - "语音信箱不作训练"
+  - "语音信箱不做训练"

@@ -1,10 +1,14 @@
 # 已有六路 ASR 一键分类导出
 
-适用于已经用三个模型家族各跑两次、六路使用相同 batch 且分别指定过 `--asr-run` 的场景。脚本复用聚合、音频能量、DNSMOS 候选评分、v2.2 五分类和汇总导出工序，**不启动 ASR，不需要模型服务或 GPU 参数，不伪造 register/reservation/release**。
+适用于已经用三个模型家族各跑两次、六路使用相同 batch 且分别指定过 `--asr-run` 的场景。脚本复用聚合、音频能量、**Silero VAD（全量）+ EfficientAT（候选）+ 五类 v2.3** 与汇总导出工序，**不启动 ASR，不需要 ASR 模型服务，不伪造 register/reservation/release**。
 
-在项目环境中执行，依赖与项目相同（`pip install -e .`；DNSMOS 实际评分还需要 `pip install -e '.[dnsmos]'`）。
+在项目环境中执行，依赖与项目相同（`pip install -e .`）。v2.3 还需可读的 Silero / EfficientAT 权重（见 034 配置）；失败可审计，**不会伪造** `present`/`absent`。Legacy v2.2 若走 DNSMOS，另需 `pip install -e '.[dnsmos]'`。
 
-依据需求：[031 · 工序一后置统一分类分拣入口](../04-改进需求/进行中/031-工序一后置统一分类分拣入口.md)。
+依据需求：
+
+- [035 · 工序一后置分类入口同步 v2.3](../04-改进需求/进行中/035-工序一后置分类入口同步v2.3.md)（本入口默认）
+- [034 · v2.3 最小声学分拣](../04-改进需求/进行中/034-v2.3最小声学分拣正式需求.md)（规则与引擎）
+- [031 · 工序一后置统一分类分拣入口](../04-改进需求/进行中/031-工序一后置统一分类分拣入口.md)（体检与入口形态基线）
 
 服务器执行手册台账：[手册/dev/05-一条命令多步骤.txt](../../手册/dev/05-一条命令多步骤.txt) §2。
 
@@ -18,16 +22,22 @@ python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
 
 # 等价 CLI（同一实现；--workers 是 --energy-workers 别名）
 audio-data stage1 classify --batch "$BATCH" --energy-workers 32
+
+# 显式指定规则版本
+# audio-data stage1 classify --batch "$BATCH" --rule-version v2_3_min_acoustic
+# audio-data stage1 classify --batch "$BATCH" --rule-version v2_2_auto_noise   # legacy
 ```
 
 `--source-dir` 可选：仅做目录存在性提示，**不会重扫/重洗音频**。分类实际读取 cleaned 底表的 `audio.resampled_16k`。
 
-默认产物（与工序一正式交付对齐）：
+默认产物（与 034 正式交付对齐）：
 
 | 产物 | 默认路径 |
 |------|----------|
-| 完整分类 XLSX | `data/exports/summary_five_class_v2_2_auto_noise_${BATCH}.xlsx` |
-| 正式 classified parquet | `datasets/stage1/derived/classified_five_class_v2_2_auto_noise_${BATCH}.parquet` |
+| 完整分类 XLSX | `data/exports/summary_five_class_v2_3_min_acoustic_${BATCH}.xlsx` |
+| 正式 classified parquet | `datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}.parquet` |
+
+Legacy `--rule-version v2_2_auto_noise` 使用独立 stem `*_five_class_v2_2_auto_noise_*`，**不会**覆盖 v2.3 默认路径。
 
 仅要 XLSX 时加 `--no-classified-parquet`。可用 `--output` / `--classified-output` 覆盖；默认不覆盖已有文件，替换须 `--overwrite`。
 
@@ -69,12 +79,13 @@ python scripts/classify_asr_to_xlsx.py \
 
 ## 输入位置与可选参数
 
+- `--rule-version`：默认 `v2_3_min_acoustic`；legacy `v2_2_auto_noise`。
 - `--source-dir` / `--source_dir`：可选。目录须存在（若传入）；不改写底表路径、不重新扫描。`source_path` 可保留历史 PCM 来源。
 - `--cleaned`：默认 `datasets/stage1/cleaned/cleaned_<batch>.parquet`。必须是全量音频底表。
 - `--asr-dir`：默认 `datasets/stage1/asr`。读取每个 `<asr-run>_asr_<batch>.parquet`。
-- `--dnsmos-config`：默认 `configs/quality/dnsmos_p835.yaml`。服务器应配置可读的 ONNX `model_path`，保持 `calibrated: false`。
+- `--dnsmos-config`：仅 legacy v2.2 使用；默认 `configs/quality/dnsmos_p835.yaml`。**v2.3 默认不跑 DNSMOS，且不得用 DNSMOS 冒充 v2.3。**
 - `--output` / `--classified-output` / `--no-classified-parquet` / `--overwrite`：见上。
-- `--energy-workers` / `--workers`：仅加速音频能量步的线程并发，默认 `1`；服务器建议 `16~32`（受 CPU/磁盘限制，不占 GPU）。
+- `--energy-workers` / `--workers`：仅加速**音频能量**步的线程并发，默认 `1`；服务器建议 `16~32`（受 CPU/磁盘限制）。**不**控制 Silero / EfficientAT 并发。
 
 相对命令行路径以执行命令时的目录解释，内部规则配置以项目根目录解释。请在能够读取底表 `resampled_16k` 路径的服务器执行。
 
@@ -82,15 +93,22 @@ python scripts/classify_asr_to_xlsx.py \
 
 同一个 XLSX 包含：
 
-- **分类统计**：五类及 excluded 数量、总量、DNSMOS 回退数量。
-- **分类明细**：列契约对齐正式 `review export-summary`（六路文本、类别、子类、分类原因、候选金标、家族四态、音频能量、DNSMOS 证据等）。
+- **分类统计**：五类及 excluded 数量、总量；v2.3 另含 VAD failed、EfficientAT 候选调用数、`acoustic_state` 分布（不再把「DNSMOS 回退」当主 KPI）。
+- **分类明细**：列契约对齐正式 `review export-summary`（六路文本、类别、`noise_kind`、家族四态、能量、以及 `vad_speech_state` / `speech_ratio` / `audio_event_state` / `acoustic_state` / `decision_evidence` / `hardcase_reason` 等）。
 
-业务类别：`voicemail`、`semantic_risk`、`environment_noise`、`gold_candidate`、`hardcase`。`excluded` 保留原因，不是第六业务类。`gold_candidate` 是自动候选，不代表已成人工金标。
+业务类别：`voicemail`、`semantic_risk`、`environment_noise`、`gold_candidate`、`hardcase`。`excluded` 保留原因，不是第六业务类。`gold_candidate` 是自动候选，不代表已成人工金标。`noise_kind` 主推 `silence` / `background` / `human_noise`。
 
-引擎编排固定为 `audio_energy → dnsmos_v2_2_candidates → classify`（`selection_five_class_v2_2_auto_noise`）。若存在 `quality_sidecar_<batch>.parquet`，按样本 ID 与原音频哈希复用 DNSMOS；缺模型时行为与现行引擎一致（可审计 v2 回退，统计页可见）。
+### 引擎编排
+
+| `--rule-version` | 编排 | 配置 |
+|------------------|------|------|
+| `v2_3_min_acoustic`（默认） | `audio_energy → silero_vad → efficientat_candidates → efficientat → classify` | `zh_asr_five_class_v2_3_min_acoustic` + `silero_vad_v1` / `efficientat_v1` / `acoustic_evidence_v1` |
+| `v2_2_auto_noise`（legacy） | `audio_energy → dnsmos_v2_2_candidates → classify` | `zh_asr_five_class_v2_2_auto_noise` |
+
+默认路径与 `pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml` **语义等价**。若 034 依赖未齐，入口会明确失败并提示改用 legacy，**禁止静默回退到 DNSMOS**。
 
 成功对账后原子写入最终 XLSX（及默认 classified parquet）。单批上限 1,048,575 条。
 
 需要正式训练/评测集发布时，继续使用原来的 `register-asr-run → prepare_dataset_v3 → attach_asr_v3` 身份校验流程。
 
-依据：[服务器端五类完整自动分类与 XLSX 导出](服务器端五类完整自动分类与XLSX导出.md)、[v2.2 分类规则](../02-规范规则/数据挑选规则_v2_2_auto_noise.md)。
+依据：[服务器端五类完整自动分类与 XLSX 导出](服务器端五类完整自动分类与XLSX导出.md)、[034 需求](../04-改进需求/进行中/034-v2.3最小声学分拣正式需求.md)。

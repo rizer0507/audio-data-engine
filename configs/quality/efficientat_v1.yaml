@@ -1,0 +1,55 @@
+# EfficientAT v1 — AudioSet tagging for candidate samples only.
+policy_version: efficientat_v1
+input_audio_key: resampled_16k
+model_name: mn10_as
+# Local checkpoint preferred. Relative to repo root when not absolute.
+# Production: place mn10_as weights here (or set absolute path). Do not rely on GitHub download.
+checkpoint_path: EfficientAT-main/resources/mn10_as_mAP_471.pt
+# When false, missing local weights → efficientat_status=failed (never forge probs).
+allow_download: false
+# EfficientAT vendored root (sys.path only; not a production CLI entry).
+efficientat_root: EfficientAT-main
+labels_csv: EfficientAT-main/metadata/class_labels_indices.csv
+device: cuda
+# Mel preprocess (must match EfficientAT training defaults).
+sample_rate: 32000
+window_size: 800
+hop_size: 320
+n_mels: 128
+top_k: 10
+
+# Bucket → AudioSet display_name list (aggregated as max prob within bucket).
+label_buckets:
+  speech:
+    - Speech
+    - Male speech, man speaking
+    - Female speech, woman speaking
+    - Child speech, kid speaking
+  conversation:
+    - Conversation
+  speech_babble:
+    - Hubbub, speech noise, speech babble
+    - Chatter
+    - Crowd
+  environment_noise:
+    - Environmental noise
+  music:
+    - Music
+  vehicle:
+    - Vehicle
+    - Traffic noise, roadway noise
+    - Engine
+  mechanical:
+    - Mechanical fan
+  silence_tag:
+    - Silence
+
+# audio_event_state thresholds (all config-driven).
+audio_event:
+  speech_like_min: 0.35
+  human_background_babble_min: 0.30
+  human_background_conversation_min: 0.35
+  non_speech_env_min: 0.30
+  non_speech_speech_max: 0.20
+  mixed_speech_min: 0.25
+  mixed_noise_min: 0.25

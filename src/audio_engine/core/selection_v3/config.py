@@ -194,6 +194,13 @@ class SelectionV3Config:
     dnsmos_weak_sig: float = 2.8
     dnsmos_noisy_operator: str = "or"
     dnsmos_require_status_success: bool = True
+    # 034 Silero / EfficientAT / acoustic evidence (v2.3).
+    silero_vad_config_path: str = ""
+    silero_vad_policy_version: str = ""
+    efficientat_config_path: str = ""
+    efficientat_policy_version: str = ""
+    acoustic_evidence_config_path: str = ""
+    acoustic_evidence_policy_version: str = ""
 
     def all_transcript_keys(self) -> list[str]:
         """Ordered unique keys expected across configured families."""
@@ -489,6 +496,50 @@ class SelectionV3Config:
                     },
                 }
             )
+        silero_vad = params.get("silero_vad") or {}
+        silero_vad_path = str(
+            silero_vad.get("config_path")
+            or params.get("silero_vad_config")
+            or params.get("silero_vad_path")
+            or ""
+        )
+        silero_vad_policy = str(silero_vad.get("policy_version") or "")
+        if silero_vad_path:
+            silero_raw = yaml.safe_load(Path(silero_vad_path).read_text(encoding="utf-8")) or {}
+            if isinstance(silero_raw, dict):
+                silero_vad_policy = str(
+                    silero_vad_policy or silero_raw.get("policy_version") or ""
+                )
+        efficientat = params.get("efficientat") or {}
+        efficientat_path = str(
+            efficientat.get("config_path")
+            or params.get("efficientat_config")
+            or params.get("efficientat_path")
+            or ""
+        )
+        efficientat_policy = str(efficientat.get("policy_version") or "")
+        if efficientat_path:
+            eat_raw = yaml.safe_load(Path(efficientat_path).read_text(encoding="utf-8")) or {}
+            if isinstance(eat_raw, dict):
+                efficientat_policy = str(
+                    efficientat_policy or eat_raw.get("policy_version") or ""
+                )
+        acoustic_evidence = params.get("acoustic_evidence") or {}
+        acoustic_evidence_path = str(
+            acoustic_evidence.get("config_path")
+            or params.get("acoustic_evidence_config")
+            or params.get("acoustic_evidence_path")
+            or ""
+        )
+        acoustic_evidence_policy = str(acoustic_evidence.get("policy_version") or "")
+        if acoustic_evidence_path:
+            ae_raw = (
+                yaml.safe_load(Path(acoustic_evidence_path).read_text(encoding="utf-8")) or {}
+            )
+            if isinstance(ae_raw, dict):
+                acoustic_evidence_policy = str(
+                    acoustic_evidence_policy or ae_raw.get("policy_version") or ""
+                )
         homophone_pairs = []
         for item in tolerance.get("homophone_pairs") or []:
             if isinstance(item, (list, tuple)) and len(item) == 2:
@@ -820,6 +871,12 @@ class SelectionV3Config:
             dnsmos_require_status_success=bool(
                 dnsmos_thresholds.get("require_status_success", True)
             ),
+            silero_vad_config_path=silero_vad_path,
+            silero_vad_policy_version=silero_vad_policy,
+            efficientat_config_path=efficientat_path,
+            efficientat_policy_version=efficientat_policy,
+            acoustic_evidence_config_path=acoustic_evidence_path,
+            acoustic_evidence_policy_version=acoustic_evidence_policy,
         )
         cfg.validate_family_config()
         disposition = cfg.speech_rate_disposition
@@ -846,6 +903,7 @@ class SelectionV3Config:
         from audio_engine.core.selection_v3.types import (
             is_any_five_class_rule,
             is_five_class_v2_2_rule,
+            is_five_class_v2_3_rule,
             is_five_class_v2_rule,
         )
 
@@ -854,6 +912,7 @@ class SelectionV3Config:
         if (
             is_five_class_v2_rule(cfg.rule_version)
             or is_five_class_v2_2_rule(cfg.rule_version)
+            or is_five_class_v2_3_rule(cfg.rule_version)
         ) and not cfg.critical_short_responses:
             cfg.critical_short_responses = list(_DEFAULT_CRITICAL_SHORT_RESPONSES)
         if is_five_class_v2_2_rule(cfg.rule_version) and cfg.dnsmos_decision_enabled:
@@ -864,6 +923,21 @@ class SelectionV3Config:
                 )
             if not cfg.dnsmos_decision_policy_version:
                 raise ValueError("dnsmos_decision.policy_version must be non-empty")
+        if is_five_class_v2_3_rule(cfg.rule_version):
+            if not cfg.silero_vad_config_path:
+                raise ValueError(
+                    "selection_five_class_v2_3 requires silero_vad.config_path"
+                )
+            if not cfg.acoustic_evidence_config_path:
+                raise ValueError(
+                    "selection_five_class_v2_3 requires acoustic_evidence.config_path"
+                )
+            # EfficientAT config is required for candidate scoring wiring even when
+            # individual samples are skipped.
+            if not cfg.efficientat_config_path:
+                raise ValueError(
+                    "selection_five_class_v2_3 requires efficientat.config_path"
+                )
         if cfg.classify_text_echo_missing not in {"fail", "echo_list_missing"}:
             raise ValueError(
                 "classify_text.echo_missing must be 'fail' or 'echo_list_missing', "

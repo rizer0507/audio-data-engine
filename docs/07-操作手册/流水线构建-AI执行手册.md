@@ -35,7 +35,7 @@
 
 只问阻塞问题，例如：输入文件到底在哪、用哪张 GPU、热词原文是什么。不要让用户填技术表格。
 
-**五分类默认（028/029）**：工序一③正式入口为 `pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml`（N≥3×双跑，上游已做 VAD）；编排固定为 `audio_energy → dnsmos_v2_2_candidates → classify`。`classify_dataset_five_class_v2_auto_noise.yaml` 是无 DNSMOS 联合语义的对照，五类 v1 与旧 `classify_dataset_v3*` 只作历史/legacy 复现，不要再写成新批次默认路径。
+**五分类默认（028/029/034/035）**：`audio-data stage1 run` 内嵌 classify 步在影子验收前仍为 `pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml`（N≥3×双跑；编排 `audio_energy → dnsmos_v2_2_candidates → classify`）。**六路 ASR 已齐后的后置入口**（手册 `05` §2 / `stage1 classify` / `classify_asr_to_xlsx.py`）已由 [035](../04-改进需求/进行中/035-工序一后置分类入口同步v2.3.md) 默认切到 `v2_3_min_acoustic`（编排对齐 `pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml`）。`classify_dataset_five_class_v2_auto_noise.yaml` 是无 DNSMOS 联合语义的对照，五类 v1 与旧 `classify_dataset_v3*` 只作历史/legacy 复现，不要再写成新批次默认路径。
 
 ---
 

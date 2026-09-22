@@ -1,0 +1,19 @@
+# Silero VAD v1 — speech evidence on already-cut wav (no re-segmentation).
+policy_version: silero_vad_v1
+input_audio_key: resampled_16k
+sample_rate: 16000
+onnx: true
+opset_version: 16
+# Prefer vendored weights under silero-vad-master/; empty → package data.
+model_path: ""
+# Thresholds for vad_speech_state (must stay config-driven).
+min_speech_ratio_present: 0.10
+max_speech_ratio_absent: 0.02
+min_speech_duration_ms: 120
+# Forwarded to get_speech_timestamps when set.
+get_speech_timestamps:
+  threshold: 0.5
+  min_speech_duration_ms: 120
+  min_silence_duration_ms: 100
+  speech_pad_ms: 30
+  return_seconds: true

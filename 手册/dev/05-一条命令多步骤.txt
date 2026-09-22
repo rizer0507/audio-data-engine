@@ -49,26 +49,36 @@ audio-data stage1 wait <job_id>
 #   runs/stage1/jobs/<job_id>/
 #   datasets/stage1/cleaned/cleaned_${BATCH}.parquet
 #   datasets/stage1/asr/{qwen,glm,sensevoice}_{1,2}_asr_${BATCH}.parquet
-#   datasets/stage1/derived/classified_five_class_v2_2_auto_noise_${BATCH}.parquet
-#   data/exports/summary_five_class_v2_2_auto_noise_${BATCH}.xlsx
+#   datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}.parquet
+#   data/exports/summary_five_class_v2_3_min_acoustic_${BATCH}.xlsx
+# （stage1 run 内嵌 classify 步仍默认 v2.2，见 030/034 跟进；后置入口已切 v2.3）
 
 ================================================================================
-2. 工序一后置分类（031 · 六路 ASR 已齐）
+2. 工序一后置分类（035 · 六路 ASR 已齐 → 默认 v2.3）
 ================================================================================
-# 目标：已有六路 ASR → audio_energy → dnsmos_v2_2_candidates → classify → 完整 XLSX
+# 目标：已有六路 ASR → audio_energy → silero_vad → efficientat_candidates
+#       → efficientat → classify(v2.3) → 完整 XLSX
+# 与 pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml 语义等价
 # 前置：cleaned 底表 + 六路 {alias}_asr_${BATCH}.parquet 已齐；本机可读 resampled_16k
-# 不做：不启动 ASR、不占 GPU、不伪造 register/reservation/release
+# 不做：不启动 ASR、不重跑 ASR、不伪造 register/reservation/release
 # 别名：--family > dataset YAML > stage1 固定 qwen_1/2、glm_1/2、sensevoice_1/2
 # 缺路：按家族/路次列出期望路径后非零退出（不进半套分类）
 # 详解：docs/07-操作手册/已有六路ASR一键分类导出.md
-#       docs/04-改进需求/进行中/031-工序一后置统一分类分拣入口.md
-#       单条流水线执行命令.txt §0b；手册/dev/01 §3a-031
+#       docs/04-改进需求/进行中/035-工序一后置分类入口同步v2.3.md
+#       docs/04-改进需求/进行中/034-v2.3最小声学分拣正式需求.md
+#       单条流水线执行命令.txt §0b
 
-# stage1 固定双跑别名（最常见）
+# stage1 固定双跑别名（最常见；默认 v2.3）
 python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
 # 等价 CLI（同一实现；--workers 是 --energy-workers 别名）：
 # audio-data stage1 classify --batch "$BATCH" --energy-workers 32
 # audio-data stage1 classify --batch "$BATCH" --workers 32
+# audio-data stage1 classify --batch "$BATCH" --rule-version v2_3_min_acoustic
+
+# legacy v2.2（独立 stem，不覆盖 v2.3 默认路径）
+# python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32 \
+#   --rule-version v2_2_auto_noise
+# audio-data stage1 classify --batch "$BATCH" --rule-version v2_2_auto_noise
 
 # 历史/手工别名（须与推理 --asr-run 逐字一致）
 # python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32 \
@@ -78,12 +88,67 @@ python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
 
 # 可选：--source-dir 仅做目录存在性提示，不会重扫/重洗
 #       --output / --classified-output / --overwrite / --no-classified-parquet
-#       --energy-workers / --workers：仅加速音频能量步（默认 1；建议 16~32，看 CPU/磁盘）
+#       --energy-workers / --workers：仅加速音频能量步（默认 1；建议 16~32）
+#       不控制 Silero / EfficientAT 并发
 
-# 默认产物：
-#   data/exports/summary_five_class_v2_2_auto_noise_${BATCH}.xlsx
-#   datasets/stage1/derived/classified_five_class_v2_2_auto_noise_${BATCH}.parquet
+# 默认产物（v2.3）：
+#   data/exports/summary_five_class_v2_3_min_acoustic_${BATCH}.xlsx
+#   datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}.parquet
 
 ================================================================================
-（在此下方继续追加 3. / 4. / …）
+3. semantic_risk 听写标注（Mac Mini / VS Code Remote 播放）
+================================================================================
+# 目标：筛 semantic_risk → 边听边输入转写 → annotations.parquet
+#       → 按 sample_id + original_audio_sha256 回填五分类 parquet（未标行不变）
+# 前置：已有 classified_five_class_v2_3_min_acoustic_${BATCH}.parquet；
+#       样本 audio.resampled_16k（或 pcm_wav）在服务器上可读
+# 播放：Mac Mini 仅作播放器；脚本尝试 cursor/code 打开 wav（等同资源管理器点击）
+#       也可打开 work-dir/wav/ 序号软链目录手动点播
+# 不做：不改自动 category；不替代 annotation_v3 双审/仓库入仓
+# 详解：docs/07-操作手册/semantic_risk听写标注-VSCode远程.md
+#       scripts/annotate_semantic_risk_transcripts.py
+
+python scripts/annotate_semantic_risk_transcripts.py prepare --batch "$BATCH"
+python scripts/annotate_semantic_risk_transcripts.py label --batch "$BATCH" --annotator-id <你的id>
+python scripts/annotate_semantic_risk_transcripts.py merge --batch "$BATCH" --overwrite
+
+# 可选：
+#   prepare --classified PATH / --rule-stem ... / --no-link-wav / --overwrite-links
+#   label   --start-index N / --work-dir DIR
+#   merge   --output PATH / --strict / --annotations PATH
+
+# 产物：
+#   datasets/stage1/review/semantic_risk_transcripts/${BATCH}/queue.parquet
+#   datasets/stage1/review/semantic_risk_transcripts/${BATCH}/annotations.parquet
+#   datasets/stage1/review/semantic_risk_transcripts/${BATCH}/wav/   # 序号软链
+#   datasets/stage1/review/semantic_risk_transcripts/${BATCH}/playlist.md
+#   datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}_with_gold.parquet
+# label 命令：/skip /empty /replay /show /quit；直接输入文本=写入并下一条（支持断点续标）
+
+================================================================================
+4. 多 batch 标注 → 版本化训练 Manifest（036 · assemble_training_parquet）
+================================================================================
+# 目标：多 batch *_with_gold / 分类 parquet → 指定类别 → trainsets/<version>/
+#       semantic_risk 中「不做训练 / 不作训练语音信箱」→ hardcase（先洗再滤）
+# 前置：各 batch 已有分类/标注 parquet；配方显式列出 batch + 类别
+# 不做：032 配额/泄漏/Qwen 导出；不改 voicemail 正则；自动 voicemail 不是金标
+# 详解：docs/07-操作手册/标注后训练数据汇总.md
+#       docs/04-改进需求/进行中/036-标注-训练数据汇总.md
+#       单条流水线执行命令.txt §2f-v3-036
+
+python scripts/assemble_training_parquet.py \
+  --recipe configs/trainsets/zh_asr_mix_example_v001.yaml
+
+# 或：
+# python scripts/assemble_training_parquet.py \
+#   --version zh_asr_mix_20260921_v001 \
+#   --batch BATCH_A --batch BATCH_B \
+#   --categories gold_candidate,semantic_risk,hardcase
+
+# 产物：
+#   datasets/stage1/trainsets/<trainset_version>/manifest.parquet
+#   datasets/stage1/trainsets/<trainset_version>/{recipe.yaml,summary.json,summary.md,lineage.json,details.csv}
+
+================================================================================
+（在此下方继续追加 5. / 6. / …）
 ================================================================================

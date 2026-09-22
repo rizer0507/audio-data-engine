@@ -1,0 +1,16 @@
+# 036 · 多 batch 标注/分类 → 版本化训练 Manifest（可选编排说明）
+#
+# 本能力是 Manifest 级全局合并，生产入口为脚本（非逐样本算子）：
+#
+#   python scripts/assemble_training_parquet.py \
+#     --recipe configs/trainsets/zh_asr_mix_example_v001.yaml
+#
+# 产物目录：datasets/stage1/trainsets/<trainset_version>/
+# 需求：docs/04-改进需求/进行中/036-标注-训练数据汇总.md
+# 操作：docs/07-操作手册/标注后训练数据汇总.md
+# 台账：单条流水线执行命令.txt §2f-v3-036
+#
+# 注意：请勿对本文件执行 audio-data pipeline run（无逐步算子）。
+# 自动 voicemail 不是金标；清洗只处理人工「不做训练*」标记。
+
+name: assemble_training_parquet

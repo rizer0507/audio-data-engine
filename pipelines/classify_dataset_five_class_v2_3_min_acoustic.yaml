@@ -1,0 +1,52 @@
+# 034 五类分拣 v2.3 最小声学证据入口（selection_five_class_v2_3_min_acoustic）。
+# 独立产物，不覆盖 classified_five_class_v1_* / v2_auto_noise_* / v2_2_auto_noise_* /
+# classified_v3_* / 审核包 / release。
+# 输入前提：上游已做 VAD 切割；本流水线不重切段、不重跑 GPU ASR。
+# 编排：audio_energy → silero_vad（全量）→ efficientat_candidates → efficientat（候选）→ classify
+#
+#   audio-data pipeline run pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml \
+#     --source-name 0914-mixed-30000 \
+#     --config configs/selection/zh_asr_five_class_v2_3_min_acoustic_0914_mixed_30000.yaml
+
+name: classify_dataset_five_class_v2_3_min_acoustic
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: attach_audio_energy
+    operator: quality.audio_energy
+    params:
+      config_path: configs/quality/audio_energy_v1.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_3_min_acoustic.yaml
+  - name: attach_silero_vad
+    operator: quality.silero_vad
+    params:
+      config_path: configs/quality/silero_vad_v1.yaml
+  - name: select_efficientat_candidates
+    operator: quality.efficientat_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_3_min_acoustic.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_3_min_acoustic.yaml
+      efficientat_config: configs/quality/efficientat_v1.yaml
+  - name: score_efficientat_candidates
+    operator: quality.efficientat
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_3_min_acoustic.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_3_min_acoustic.yaml
+      efficientat_config: configs/quality/efficientat_v1.yaml
+      acoustic_evidence_config: configs/quality/acoustic_evidence_v1.yaml
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_3_min_acoustic.yaml
+      rule_version: selection_five_class_v2_3_min_acoustic
+      noise_policy: asr_anomaly_noise_v1
+      classify_text_policy: five_class_v1
+      quality:
+        calibrated: false
+        noise_policy: asr_anomaly_noise_v1
