@@ -1,0 +1,57 @@
+分类执行流程（按需声学0922）
+
+依据：重点数据筛选规则(简版0922).txt。只调整计算顺序，不改变分类条件。
+总流程：音频清洗 → 全量ASR → 转写结果清洗 → 语音信箱 → ASR预分流 → 候选按需Silero VAD → 分支按需energy或DNSMOS → 五类汇总。
+数据清洗是分类前置任务，不在分类过程中临时执行；第0、1步完成后，才能进入第2步及后续分类。
+
+0、前置任务：音频清洗
+剔除物理无效、零时长音频，生成有效wav清单；被剔除音频单独统计，不进入ASR和五类分类。
+
+1、前置任务：全量ASR与转写结果清洗
+有效wav全量执行四家族双跑，再按既定规则清洗转写结果：全文热词/提示词回声、GLM异常超长输出等置空。
+保留每路原始文本、最终文本、成功状态、清空原因，汇总家族稳定有字/稳定否定票/不稳定/不可用。
+原生空与清洗空都计否定票，但不能混淆“原始未转写”和“转写后被清空”。
+产出统一的清洗后分类输入；原始文本必须保留，供信箱命中和“是否发生过转写”判断使用。
+
+2、先分语音信箱
+任一路原始转写命中信箱关键词 → 语音信箱，结束；不跑Silero VAD、energy、DNSMOS。
+
+3、只用ASR证据预分流（按顺序匹配）
+A：四家族双跑全部成功 + Qwen至少一次原始有字 + 其他三家族双跑最终均为空。
+B：四家族双跑全部成功 + 八路原始文本全部为空。
+先保留A/B；剩余样本若有任一家族双跑不稳定 → hardcase，结束。
+C：至少两家族稳定有字 + 同一命题明确极性对立 + 没有任何否定票。
+D：至少两家族稳定有字 + 涉及关键短应答含义的实质歧义 + 命中名单 + 没有任何否定票。
+E：至少两家族稳定同文 + 其余有效非空文本全部同文 + 没有任何否定票。
+剩余全部 → hardcase，结束；不跑Silero VAD、energy、DNSMOS。
+A—E仅为计算队列，不是最终类别。D须未命中C；纯缺失不补票。
+
+4、仅对A—E计算Silero VAD
+A：有人声 → 第5步；无人声/不可用 → hardcase。
+B：无人声 → 第4.1步细分噪声；有人声 → 第5步；不可用 → hardcase。
+C：有人声 → semantic_risk：polarity_conflict；无人声/不可用 → hardcase。
+D：有人声 → semantic_risk：critical_polarity_response；无人声/不可用 → hardcase。
+E：有人声 → gold；无人声/不可用 → hardcase。
+C/D/E到此结束，不跑energy、DNSMOS。A/B的有人声分支只进入第5步，不跑energy。
+
+4.1、仅对“B且Silero VAD无人声”计算audio_energy
+混合声道前，全声道全部采样值为0 → 噪声：silence（静默噪声）。
+至少一个声道存在非零采样值 → 噪声：background_suspected（非静默背景噪声）。
+检查失败或结果缺失 → hardcase。
+该分支到此结束，不跑DNSMOS；其他分支不计算audio_energy。
+现有audio_energy需补充严格全零标记，不能用inaudible或低能量阈值代替。
+
+5、仅对“A或B且Silero VAD有人声”计算DNSMOS
+A + SIG低 → semantic_risk：qwen_hallucination_suspected。
+B + SIG低 → 噪声：human_noise。
+SIG非低/不可用 → hardcase。
+沿用配置中的SIG低档口径；未配置时不猜阈值，归hardcase并记录原因。
+分类只使用SIG；DNSMOS一次计算若同时产出BAK/OVRL，保存即可，不另设门槛。
+
+6、汇总
+每条分类输入最终只属于gold、semantic_risk、噪声、语音信箱、hardcase之一。
+分类输入总量 = 五类数量之和；前置剔除的无效音频另计。
+噪声子类为silence、background_suspected、human_noise，均归噪声主类，不新增第六类。
+已有同音频、同模型及同参数的有效声学结果直接复用；未计算与计算失败分别记录。
+
+注意：A必须在“双跑不稳定→hardcase”之前提取，允许Qwen一空一文或双跑异文，不能提前漏掉疑似Qwen幻觉。

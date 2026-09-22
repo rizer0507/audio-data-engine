@@ -1,0 +1,224 @@
+现行数据筛选规则（2026-09-22）
+================================
+
+口径：selection_five_class_v2_3_min_acoustic（简称 v2.3）
+正式入口：pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml
+一键分类：audio-data stage1 classify / scripts/classify_asr_to_xlsx.py（默认本规则）
+详细对照：docs/04-改进需求/进行中/034-v2.3最小声学分拣正式需求.md
+实现：src/audio_engine/core/selection_v3/five_class_v2_3_min_acoustic.py
+
+说明：DNSMOS 不再参与主分类（可旁路打 quality_tag）。旧版 v2.2 仅兼容复现，用 --rule-version v2_2_auto_noise。
+
+
+一、五个业务类别（互斥，命中即结束）
+------------------------------------
+
+1. voicemail（语音信箱）
+2. semantic_risk（语义风险：幻觉/极性反转等严格冲突）
+3. environment_noise（环境噪声，含子类）
+4. gold_candidate（金标候选）
+5. hardcase（疑难兜底）
+
+另有前置出口（不是第六业务类）：
+  excluded：物理无效，或全部 ASR 路次被前置规则排除（外语/热词回声等）→ category=null
+
+
+二、前置流水线（分类前必须齐）
+----------------------------
+
+1. 数据源登记 → 清洗落库（含 16k 重采样；本步不做业务分类）
+2. 多家族 ASR：默认 Qwen / GLM / SenseVoice，每族双跑（共六路）
+3. prepared / prepared_asr 对齐
+4. 证据计算（v2.3）：
+     quality.audio_energy          → 有没有物理声音
+     quality.silero_vad            → 有没有人类语音（全量）
+     quality.efficientat_candidates + efficientat  → 主要是什么声音事件（仅候选）
+5. quality.classify（本规则）
+6. 导出汇总 / 可选人审 / Release
+
+前置路次规则（在家族证据里消化）：
+  - 外语 / 全文热词回声 / 符号清洗等 → 该路 ROUTE_EXCLUDED
+  - 全部路次排除 → excluded，不进五类
+
+
+三、证据层（分类只认这些状态）
+----------------------------
+
+### 3.1 家族四态（每族双跑归并为一态）
+
+  stable_text     两路成功、有字、相等或仅无害差异
+  stable_empty    两路成功、清洗后均为空
+  unstable        一空一有字 / 实质冲突 / 仅一路成功等
+  unavailable     两路失败、缺失、无法形成证据
+
+注意：推理失败、缺失、外语/回声排除 → 不得计为 stable_empty。
+
+### 3.2 文本证据 text_evidence_state
+
+  all_empty          全部可用家族均为 stable_empty
+  single_text        恰好 1 个 stable_text，其余为 stable_empty
+  consensus_text     ≥2 个 stable_text 无害等价同文（无严格冲突）
+  strict_conflict    ≥2 个 stable_text 对同一命题明确对立（要/不要、是/不是等）
+  divergent_text     多族有字但不一致，且未达严格对立
+  insufficient       证据不足（含不稳定/不可用混杂等）
+
+### 3.3 声学证据 acoustic_state（Silero + EfficientAT 聚合）
+
+  silence                 无可闻声 + VAD 无人声
+  non_speech_noise        VAD 无人声 + 事件为非语音环境声
+  speech_supported        VAD 有人声，且非强烈人声背景污染
+  human_noise_suspected   VAD 有人声 + 疑似背景人声/babble
+  uncertain               证据冲突或不清
+  failed                  关键声学算子失败（不得伪造 silence/noise）
+
+职责拆分（禁止再混用旧等价）：
+  audio_energy → 有没有物理声音
+  Silero VAD   → 有没有人类语音
+  EfficientAT  → 主要是什么声音事件（候选）
+  ASR 家族     → 模型听成了什么、是否稳定
+
+禁止继续用：ASR 分歧≈噪声、audible≈有人声、DNSMOS noisy≈环境噪声。
+
+
+四、分拣决策顺序
+----------------
+
+成功进入决策的样本，必落五类之一。顺序固定：
+
+  0. 前置排除 → excluded
+  1. voicemail（任一有效成功路次命中信箱正则）
+  2. 声学算子失败 → hardcase（vad_failed / efficientat_failed / energy_failed）
+  3. family_unstable（且未形成 consensus/strict/divergent）：
+       · 强非语音（silence / non_speech_noise）→ environment_noise + 人审标记
+       · 否则 → hardcase / family_unstable
+  4. 按「文本证据 × 声学状态」决策矩阵落地
+  5. 仍未命中 → hardcase（写明 hardcase_reason）
+
+强声学否决（Strong Acoustic Veto）：
+  仅当 acoustic_state ∈ {silence, non_speech_noise}：
+  「ASR 有没有字都不能改变：当前段没有真实 speech 支撑」
+  → 即使多家族同文，也禁止进 gold，改入 environment_noise，并标记 hallucination。
+
+
+五、决策矩阵（核心）
+--------------------
+
+行 = text_evidence_state；列 = acoustic_state。
+
+                    silence / non_speech_noise          speech_supported              human_noise_suspected           uncertain
+--------------------------------------------------------------------------------------------------------------
+all_empty           env/silence 或 env/background       hardcase                      env/human_noise + 人审         hardcase
+                    （按声学态）                         empty_asr_but_speech_present   （疑似）                        empty_asr_acoustic_uncertain
+
+single_text         env + hallucination(single)         hardcase                      env/human_noise + 人审         hardcase
+                                                      single_text_family_…            ※若唯一文本是关键短应答
+                                                                                    → hardcase，禁止自动当噪声
+
+consensus_text      env + hallucination(multi)          gold / high                   gold / medium + 人审           gold / medium + 人审
+                                                      （禁止因 babble 推翻多族共识）   tag=human_background_suspected
+
+strict_conflict     env + hallucination(divergent)      semantic_risk                 semantic_risk                  semantic_risk
+
+divergent_text      env + hallucination(divergent)      hardcase                      hardcase                       hardcase
+
+insufficient        优先 hardcase（不足证据不伪造噪声）  hardcase                      hardcase                       hardcase
+
+
+六、各类细则（白话）
+--------------------
+
+### 6.1 voicemail
+  - 任一合格路次命中语音信箱正则 → 入类结束。
+  - 若同时 silence / non_speech_noise：主类仍是 voicemail，但 needs_review（声学矛盾）。
+
+### 6.2 semantic_risk
+  - ≥2 个 stable_text 家族对同一命题明确冲突（需要/不需要、是/不是等）。
+  - 「空转写 vs 有字」不算语义风险。
+  - 若同时强非语音：优先当幻觉噪声（environment_noise），不进本类。
+  - 声学不得改写「已成立的严格冲突」主类（无强否决时）。
+
+### 6.3 environment_noise（噪声子类）
+  noise_kind 仅三类：
+    silence      acoustic_state=silence
+    background   acoustic_state=non_speech_noise（环境/机械等非语音）
+    human_noise  典型：single_text + human_noise_suspected，且非关键短应答
+                 （含义是「疑似背景人声污染」，不是已确认串音）
+
+  本版本不再自动输出 crosstalk；短音频 too_short 不再直接当噪声出口，
+  只打 quality_tag=short_audio，继续走矩阵（保护「嗯/不/要」等短应答）。
+
+### 6.4 gold_candidate
+  最低条件：
+    consensus_text
+    AND 无 family_unstable
+    AND acoustic_state 不是 silence / non_speech_noise
+
+  - speech_supported → 金标，confidence=high
+  - uncertain / human_noise_suspected → 金标，confidence=medium，并标人审
+  - silence / non_speech_noise → 禁止金标（强否决 → 噪声+幻觉标记）
+
+### 6.5 hardcase（唯一业务兜底）
+  前序都未命中，或证据矛盾无法自动收敛。常见原因举例：
+    empty_asr_but_speech_present
+    single_text_family_supported_speech
+    critical_short_response_unsupported
+    family_unstable
+    insufficient_family_evidence
+    substantive_divergence_non_strict_risk
+    hardcase_fallback
+  needs_review 只是附属动作，不是独立出口。
+
+
+七、关键短应答保护
+------------------
+
+配置词表（可扩展）：要/不要、需要/不需要、可以/不可以、行/不行、
+是/不是、有/没有、嗯、对 … 等。
+
+single_text + human_noise_suspected + 命中关键短应答
+  → hardcase / critical_short_response_unsupported
+  → 禁止自动 environment_noise/human_noise
+
+业务优先级：
+  真实短语音误杀率
+  > hallucination Precision
+  > environment_noise Recall
+  > hardcase 压缩率
+  > 处理速度
+
+  → 宁愿进 hardcase，也不要误删真实「不需要 / 不行 / 没有」。
+
+
+八、一眼决策图
+--------------
+
+样本进入
+  │
+  ├─ 物理无效 / 全路排除 ──────────────────────────────► excluded
+  │
+  ├─ 信箱正则命中 ─────────────────────────────────────► voicemail
+  │
+  ├─ 声学算子失败 ─────────────────────────────────────► hardcase
+  │
+  ├─ 族内双跑不稳定（非共识/冲突结构）
+  │     ├─ 强非语音 ───────────────────────────────────► environment_noise + 人审
+  │     └─ 其余 ───────────────────────────────────────► hardcase
+  │
+  ├─ 文本 × 声学矩阵
+  │     ├─ 强非语音 + 任意有字结构 ─────────────────────► environment_noise（幻觉否决）
+  │     ├─ strict_conflict + 有 speech 支撑 ───────────► semantic_risk
+  │     ├─ consensus + speech/uncertain/人声背景疑似 ──► gold_candidate
+  │     ├─ 可自动判噪（silence / background / human）──► environment_noise
+  │     └─ 矛盾或不足 ─────────────────────────────────► hardcase
+  │
+  └─ 其余 ─────────────────────────────────────────────► hardcase
+
+
+九、产物命名（与旧版隔离）
+------------------------
+
+规则版本：selection_five_class_v2_3_min_acoustic
+分类产物：classified_five_class_v2_3_min_acoustic_<batch>.parquet
+汇总表：  summary_five_class_v2_3_min_acoustic_<batch>.xlsx
+
+不得覆盖 v1 / v2_auto_noise / v2_2_auto_noise / classified_v3_* / 审核包 / release。
