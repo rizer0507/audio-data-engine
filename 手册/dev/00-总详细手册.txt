@@ -13,7 +13,7 @@
   工序三「评测」            = 引擎⑤评测（本版服务器手册为 Model Registry 入口）
 
 【现行默认 · 2026-09 / 015·019·028·029】
-  工序一③正式：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v2_2_auto_noise
+  工序一③正式：prepare_dataset_v3 → attach_asr_v3 → classify_dataset_five_class_v3
   legacy 回退：classify_dataset_v3_asr_anomaly_noise + selection_v3.0
   噪声：分拣 YAML 内嵌 audio_energy + DNSMOS 候选评分；全量 sidecar 仅研究/复用。见下文「5b. 噪声打分」。
   家族契约：N≥3 × 每族双跑；四族/Kimi 为可选增强，非门票。
@@ -25,7 +25,7 @@
 工序总览原文（历史快照；分拣入口已由上框覆盖）：
 --------------------------------------------------------------------------------
 当前我的数据引擎工序是：
-①数据清洗、落库流水线(data_cleaning_source_A.yaml) --------> ②同源多结果 ASR（`--asr-run` 双跑，N≥3）+ register → prepare/attach -------> ③自动五分类（默认 classify_dataset_five_class_v2_2_auto_noise）+（可选）人审/build_dataset_v3 --------> ④训练流水线(当前尚未实现，在另一套框架中，未集成进来)  --------> ⑤评测流水线（与④完全解耦）：`eval register` → 各模型独立 vLLM 跑批（`--eval-name` + `--asr-run`）→ `eval_aggregate`（按 id 对齐）→ `eval_metric_pipeline`（相对 gold_text 多模型字准 + 按 type 导出）
+①数据清洗、落库流水线(data_cleaning_source_A.yaml) --------> ②同源多结果 ASR（`--asr-run` 双跑，N≥3）+ register → prepare/attach -------> ③自动五分类（默认 classify_dataset_five_class_v3）+（可选）人审/build_dataset_v3 --------> ④训练流水线(当前尚未实现，在另一套框架中，未集成进来)  --------> ⑤评测流水线（与④完全解耦）：`eval register` → 各模型独立 vLLM 跑批（`--eval-name` + `--asr-run`）→ `eval_aggregate`（按 id 对齐）→ `eval_metric_pipeline`（相对 gold_text 多模型字准 + 按 type 导出）
 
 工序②要点：
 - 同一 `--source-name` 下可多次跑任意模型/批次，用 `--asr-run <alias>` 区分产物（`{alias}_asr_<BATCH>.parquet` + transcript 键）
@@ -33,10 +33,11 @@
 - （legacy 诊断）聚拢+字准：`--aggregate-base` / `--join-manifest` / `asr_metric_pipeline`
 
 工序③要点（现行默认）：
-- 正式：`classify_dataset_five_class_v2_2_auto_noise` + `selection_five_class_v2_2_auto_noise`；产物 `classified_five_class_v2_2_auto_noise_*`
-- legacy：`classify_dataset_v3_asr_anomaly_noise` + `selection_v3.0`；产物 `classified_v3_*_asr_anomaly_noise_v1`
-- 规则 SSOT：docs/02-规范规则/数据挑选规则_v2_2_auto_noise.md；v2/v1 为对照，旧 v3.0 已废止作业务依据
-- 噪声：家族四态 + 音频能量 + 版本化 DNSMOS 状态联合判定；DNSMOS unavailable 时审计回退 v2 强规则
+- 正式：`classify_dataset_five_class_v3` + `selection_five_class_v3`；产物 `classified_five_class_v3_*`
+- 同引擎旧 stem：`classify_dataset_five_class_v2_4_on_demand_acoustic`；v2.3/v2.2/v2/v1 为对照
+- legacy：`classify_dataset_v3_asr_anomaly_noise` + `selection_v3.0`；产物 `classified_v3_*_asr_anomaly_noise_v1`（≠ 五类 v3）
+- 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.md
+- 噪声：ASR 预分流 + 按需 Silero / 严格全零 energy / DNSMOS(SIG)；EfficientAT 不在默认主路径
 - 文本相似度：rapidfuzz（019）
 - （更旧 legacy）v1：`pipelines/classify_dataset.yaml` 仅复现
 

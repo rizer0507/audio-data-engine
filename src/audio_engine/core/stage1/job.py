@@ -19,9 +19,9 @@ from audio_engine.core.stage1.cache_policy import (
 from audio_engine.core.stage1.digests import write_json
 
 _BATCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-SELECTION_RULE = "selection_five_class_v2_2_auto_noise"
-CLASSIFY_PIPELINE = "pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml"
-SELECTION_TEMPLATE = "configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml"
+SELECTION_RULE = "selection_five_class_v3"
+CLASSIFY_PIPELINE = "pipelines/classify_dataset_five_class_v3.yaml"
+SELECTION_TEMPLATE = "configs/selection/zh_asr_five_class_v3.yaml"
 DATASET_TEMPLATE = "configs/datasets/zh_asr_v3_three_family.yaml"
 CLEAN_PIPELINE = "pipelines/data_cleaning_source_A.yaml"
 PREPARE_PIPELINE = "pipelines/prepare_dataset_v3.yaml"

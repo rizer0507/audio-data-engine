@@ -45,6 +45,7 @@ from audio_engine.core.selection_v3.types import (
     is_five_class_rule,
     is_five_class_v2_2_rule,
     is_five_class_v2_3_rule,
+    is_five_class_v2_4_rule,
     is_five_class_v2_rule,
     is_semantic_tolerant_rule,
     DECISION_AUDIT_PENDING,
@@ -210,6 +211,14 @@ def classify_sample(
     *,
     voicemail_pattern: re.Pattern[str] | None = None,
 ) -> ClassificationResultV3:
+    if is_five_class_v2_4_rule(config.rule_version):
+        from audio_engine.core.selection_v3.five_class_v2_4_on_demand_acoustic import (
+            classify_five_class_v2_4_on_demand_acoustic,
+        )
+
+        return classify_five_class_v2_4_on_demand_acoustic(
+            sample, config, voicemail_pattern=voicemail_pattern
+        )
     if is_five_class_v2_3_rule(config.rule_version):
         from audio_engine.core.selection_v3.five_class_v2_3_min_acoustic import (
             classify_five_class_v2_3_min_acoustic,

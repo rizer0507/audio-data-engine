@@ -537,7 +537,7 @@ def build_status_view(
     elif state.updated_at:
         last_progress = f"updated_at={state.updated_at}"
 
-    classified = STAGE1_DERIVED_DIR / f"classified_five_class_v2_2_auto_noise_{batch}.parquet"
+    classified = STAGE1_DERIVED_DIR / f"classified_five_class_v3_{batch}.parquet"
     gaps = {
         "implementation": IMPLEMENTATION_GAPS,
         "notes": [

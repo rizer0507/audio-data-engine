@@ -16,7 +16,7 @@
 ================================================================================
 1. 工序一全链路（030 · stage1 run）
 ================================================================================
-# 目标：清洗 → 三族双跑 ASR → prepare/attach → 五类 v2.2 → export-summary
+# 目标：清洗 → 三族双跑 ASR → prepare/attach → 五类 v3 → export-summary
 # 前置：configs/stage1/server.yaml 已补齐；authorized_gpus / engine_python /
 #       families.qwen.vllm_bin / dnsmos.onnx_path；授权仅配置内 GPU
 # 不做：用户不必手敲 prepare→attach→classify→export
@@ -49,33 +49,42 @@ audio-data stage1 wait <job_id>
 #   runs/stage1/jobs/<job_id>/
 #   datasets/stage1/cleaned/cleaned_${BATCH}.parquet
 #   datasets/stage1/asr/{qwen,glm,sensevoice}_{1,2}_asr_${BATCH}.parquet
-#   datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}.parquet
-#   data/exports/summary_five_class_v2_3_min_acoustic_${BATCH}.xlsx
-# （stage1 run 内嵌 classify 步仍默认 v2.2，见 030/034 跟进；后置入口已切 v2.3）
+#   datasets/stage1/derived/classified_five_class_v3_${BATCH}.parquet
+#   data/exports/summary_five_class_v3_${BATCH}.xlsx
 
 ================================================================================
-2. 工序一后置分类（035 · 六路 ASR 已齐 → 默认 v2.3）
+2. 工序一后置分类（037 · 六路 ASR 已齐 → 默认五类 v3 按需声学）
 ================================================================================
-# 目标：已有六路 ASR → audio_energy → silero_vad → efficientat_candidates
-#       → efficientat → classify(v2.3) → 完整 XLSX
-# 与 pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml 语义等价
+# 目标：已有六路 ASR → asr_route → silero_vad(按需) → energy(按需严格全零)
+#       → dnsmos(按需SIG) → classify(v3) → 完整 XLSX
+# 与 pipelines/classify_dataset_five_class_v3.yaml 语义等价
+# 规范：docs/02-规范规则/数据挑选规则_v3.md
 # 前置：cleaned 底表 + 六路 {alias}_asr_${BATCH}.parquet 已齐；本机可读 resampled_16k
-# 不做：不启动 ASR、不重跑 ASR、不伪造 register/reservation/release
+# 不做：不启动 ASR、不重跑 ASR、不伪造 register/reservation/release；默认不跑 EfficientAT
 # 别名：--family > dataset YAML > stage1 固定 qwen_1/2、glm_1/2、sensevoice_1/2
 # 缺路：按家族/路次列出期望路径后非零退出（不进半套分类）
 # 详解：docs/07-操作手册/已有六路ASR一键分类导出.md
-#       docs/04-改进需求/进行中/035-工序一后置分类入口同步v2.3.md
-#       docs/04-改进需求/进行中/034-v2.3最小声学分拣正式需求.md
+#       docs/04-改进需求/进行中/037-按需声学五类分拣重构.md
+#       docs/02-规范规则/重点数据筛选规则(简版0922).txt
+#       docs/02-规范规则/分类执行流程(按需声学0922).txt
 #       单条流水线执行命令.txt §0b
 
-# stage1 固定双跑别名（最常见；默认 v2.3）
+# stage1 固定双跑别名（最常见；默认 v3）
 python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
 # 等价 CLI（同一实现；--workers 是 --energy-workers 别名）：
 # audio-data stage1 classify --batch "$BATCH" --energy-workers 32
 # audio-data stage1 classify --batch "$BATCH" --workers 32
+# audio-data stage1 classify --batch "$BATCH" --rule-version v3
+
+# 同引擎旧 stem（不覆盖 v3 默认路径）
+# audio-data stage1 classify --batch "$BATCH" --rule-version v2_4_on_demand_acoustic
+
+# legacy v2.3（独立 stem，不覆盖 v3 默认路径）
+# python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32 \
+#   --rule-version v2_3_min_acoustic
 # audio-data stage1 classify --batch "$BATCH" --rule-version v2_3_min_acoustic
 
-# legacy v2.2（独立 stem，不覆盖 v2.3 默认路径）
+# legacy v2.2（独立 stem，不覆盖 v3/v2.4/v2.3 默认路径）
 # python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32 \
 #   --rule-version v2_2_auto_noise
 # audio-data stage1 classify --batch "$BATCH" --rule-version v2_2_auto_noise
@@ -88,20 +97,20 @@ python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
 
 # 可选：--source-dir 仅做目录存在性提示，不会重扫/重洗
 #       --output / --classified-output / --overwrite / --no-classified-parquet
-#       --energy-workers / --workers：仅加速音频能量步（默认 1；建议 16~32）
-#       不控制 Silero / EfficientAT 并发
+#       --energy-workers / --workers：仅加速按需能量步（默认 1；建议 16~32）
+#       不控制 Silero / DNSMOS 并发
 
-# 默认产物（v2.3）：
-#   data/exports/summary_five_class_v2_3_min_acoustic_${BATCH}.xlsx
-#   datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}.parquet
+# 默认产物（v3）：
+#   data/exports/summary_five_class_v3_${BATCH}.xlsx
+#   datasets/stage1/derived/classified_five_class_v3_${BATCH}.parquet
 
 ================================================================================
 3. semantic_risk 听写标注（Mac Mini / VS Code Remote 播放）
 ================================================================================
 # 目标：筛 semantic_risk → 边听边输入转写 → annotations.parquet
 #       → 按 sample_id + original_audio_sha256 回填五分类 parquet（未标行不变）
-# 前置：已有 classified_five_class_v2_3_min_acoustic_${BATCH}.parquet；
-#       样本 audio.resampled_16k（或 pcm_wav）在服务器上可读
+# 前置：已有 classified_five_class_v3_${BATCH}.parquet
+#       （或显式 --rule-stem / --classified）；样本 audio.resampled_16k 可读
 # 播放：Mac Mini 仅作播放器；脚本尝试 cursor/code 打开 wav（等同资源管理器点击）
 #       也可打开 work-dir/wav/ 序号软链目录手动点播
 # 不做：不改自动 category；不替代 annotation_v3 双审/仓库入仓

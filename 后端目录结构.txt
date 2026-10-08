@@ -1,0 +1,716 @@
+﻿Audio Data Engine 后端目录结构与开发导航
+整理日期：2026-09-24
+适用工程：D:/Work/audio-data-engine
+
+一、范围与阅读约定
+本文件按当前工作区实际源码及现行文档整理，作为后续开发导航。
+当前后端是 Python 3.10+ 的 CLI / Pipeline 数据引擎，包名 audio_engine，
+命令入口为 audio-data -> audio_engine.cli.main:main。
+当前未将 Web API、账号系统、数据库 ORM 或前端列为已实现模块。
+039 文档描述独立标注平台与本引擎的交接契约，不表示本仓库已有平台后端。
+
+第二节是项目总览；第三节完整列出自有源码、配置、流水线、脚本及测试文件。
+第三节不展开运行数据、模型权重、第三方源码、缓存与 Python 字节码。
+第四节中的 <BATCH>、<alias>、<version>、<run_id> 是运行产物命名模板，
+不表示这些示例文件已存在。文件列表是本次快照，未来新增文件需同步维护。
+
+依据：
+- pyproject.toml、README.md、docs/README.md
+- docs/01-项目架构/工序总览.md
+- docs/01-项目架构/Manifest驱动数据引擎架构.md（部分内容为早期愿景）
+- docs/02-规范规则/数据源登记规范.md
+- datasets/README.md
+- docs/04-改进需求/进行中/039-语音标注平台构建先验.md
+- pipelines/classify_dataset_five_class_v3.yaml
+- configs/selection/zh_asr_five_class_v3.yaml
+- 当前 src/audio_engine/、scripts/、tests/ 实际文件
+
+二、项目总览及目录职责
+
+audio-data-engine/
+├── src/audio_engine/           自有后端 Python 包
+│   ├── cli/                    Typer 命令入口、参数解析和业务入口组装
+│   ├── core/                   样本、Manifest、执行引擎及业务规则
+│   │   ├── stage1/             工序一编排、任务状态、GPU 调度、重试和恢复
+│   │   │   └── adapters/       Qwen / GLM / SenseVoice 运行适配
+│   │   ├── selection_v3/       五类分拣及历史 v3 策略；目录名不等于策略版本
+│   │   ├── selection_v2/       旧版分拣实现与兼容
+│   │   ├── annotation_v3/      人审队列、审核包、导入契约与 Gold
+│   │   ├── dataset_v3/         数据预留、抽样、配额、分组、审计与 Release
+│   │   ├── warehouse/          batch 唯一仓库的标注导出、完整性检查与冻结
+│   │   └── quality/            DNSMOS、Silero、EfficientAT 等底层质量能力
+│   ├── operators/              可注册并由 Pipeline 调用的算子
+│   │   ├── ingest/             数据扫描与导入
+│   │   ├── audio/              PCM 转 WAV、重采样、VAD、降噪及 Kimi pad
+│   │   ├── asr/                各模型转写与 vLLM 适配
+│   │   ├── augmentation/       噪声、语速与音量增强
+│   │   ├── quality/            聚合、分拣、声学侧车、审核/数据集相关算子
+│   │   ├── runtime/            模型资源释放
+│   │   └── script/             自定义 Python 脚本算子
+│   ├── metrics/                文本对齐、归一化、CER、统计和业务门禁
+│   └── scripts/source_ingest/  包内数据源导入命名空间；具体内容见完整树
+├── configs/                    参数配置，与业务实现分开
+│   ├── asr/                    模型推理参数
+│   ├── annotation/             审核协议配置
+│   ├── augmentation/           数据增强配置
+│   ├── datasets/               数据集配置及批次运行身份
+│   ├── denoise/                降噪配置
+│   ├── metrics/                评测和业务风险指标配置
+│   ├── normalization/          文本归一化配置
+│   ├── quality/                声学质量模型与阈值配置
+│   ├── selection/              分拣规则、词表及批次策略
+│   ├── stage1/                 工序一服务器执行配置
+│   ├── trainsets/              训练汇总配方
+│   └── warehouse/              仓库类别、标注导出与冻结配置
+├── pipelines/                  YAML 流水线定义
+├── tasks/                      多步骤任务 DAG 定义
+├── resources/manifest.yaml     外部数据源统一登记入口
+├── scripts/                    标注、汇总、导出、迁移和诊断脚本
+├── tests/                      自有后端测试
+├── datasets/                   跨运行复用的业务 Manifest 与报告
+├── data/                       派生音频、缓存、导出物及产物目录等
+├── runs/                       单次运行日志、状态、checkpoint
+├── docs/                       架构、规则、需求、决策、变更和操作文档
+├── 手册/                       local / dev 环境执行分册
+├── third_party/                第三方依赖资源
+├── EfficientAT-main/           外部模型工程
+├── GLM-4-Voice/                外部模型工程
+├── Qwen3-ASR-main/             外部模型工程
+├── silero-vad-master/          外部模型工程
+├── 0914-30000/                 本地批次资料；不作为通用源码目录
+├── tmp/                       临时分析、样稿及中间文件
+├── .codex-tmp/                 工具临时工作区
+├── .env                       本机环境参数；此文不复制其内容
+├── .env.example               环境参数样例
+├── .gitignore                 版本管理忽略规则
+├── pyproject.toml             依赖、打包、CLI 入口、pytest / Ruff 设置
+├── README.md                  项目说明
+├── 目录.txt                    早期简化目录，仅作参考
+└── 后端目录结构.txt             本文件
+
+三、自有后端完整文件树（按当前实际文件生成）
+以下包含 rg 默认可见的 src、configs、pipelines、tasks、resources、scripts、
+tests 文件；排除 __pycache__ / .pyc。批次配置照实列出，不建议照抄为新批次配置。
+audio-data-engine/
+├── configs/
+│   ├── annotation/
+│   │   └── zh_asr_v3.yaml
+│   ├── asr/
+│   │   ├── doubao.yaml
+│   │   ├── glm.yaml
+│   │   ├── kimi_audio.yaml
+│   │   ├── kimi.yaml
+│   │   ├── qwen_asr.yaml
+│   │   └── sensevoice.yaml
+│   ├── augmentation/
+│   │   └── noise.yaml
+│   ├── datasets/
+│   │   ├── run_identities/
+│   │   │   ├── 0908-30000/
+│   │   │   │   ├── glm-asr-1_identity.template.yaml
+│   │   │   │   ├── glm-asr-1_identity.yaml
+│   │   │   │   ├── glm-asr-1_registered.yaml
+│   │   │   │   ├── glm-asr-2_identity.template.yaml
+│   │   │   │   ├── glm-asr-2_identity.yaml
+│   │   │   │   ├── glm-asr-2_registered.yaml
+│   │   │   │   ├── qwen3-asr-1_identity.template.yaml
+│   │   │   │   ├── qwen3-asr-1_identity.yaml
+│   │   │   │   ├── qwen3-asr-1_registered.yaml
+│   │   │   │   ├── qwen3-asr-2_identity.template.yaml
+│   │   │   │   ├── qwen3-asr-2_identity.yaml
+│   │   │   │   ├── qwen3-asr-2_registered.yaml
+│   │   │   │   ├── README.md
+│   │   │   │   ├── sensevoice-asr-1_identity.template.yaml
+│   │   │   │   ├── sensevoice-asr-1_identity.yaml
+│   │   │   │   ├── sensevoice-asr-1_registered.yaml
+│   │   │   │   ├── sensevoice-asr-2_identity.template.yaml
+│   │   │   │   ├── sensevoice-asr-2_identity.yaml
+│   │   │   │   └── sensevoice-asr-2_registered.yaml
+│   │   │   └── 0914-mixed-30000/
+│   │   │       ├── glm-base-1_identity.yaml
+│   │   │       ├── glm-base-1_registered.yaml
+│   │   │       ├── glm-base-2_identity.yaml
+│   │   │       ├── glm-base-2_registered.yaml
+│   │   │       ├── qwen-basr-1_identity.yaml
+│   │   │       ├── qwen-basr-1_registered.yaml
+│   │   │       ├── qwen-basr-2_identity.yaml
+│   │   │       ├── qwen-basr-2_registered.yaml
+│   │   │       ├── README.md
+│   │   │       ├── sv-base-1_identity.yaml
+│   │   │       ├── sv-base-1_registered.yaml
+│   │   │       ├── sv-base-2_identity.yaml
+│   │   │       └── sv-base-2_registered.yaml
+│   │   ├── zh_asr_v3_0908_30000.yaml
+│   │   ├── zh_asr_v3_0914_mixed_30000.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_cli-demo_fcf05492e6a3.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_0224cb406e03.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_3609246c5846.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_37194de79fd0.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_5769f3b13fae.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_6a9ef36f7ee0.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_6d78a8c05d48.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_864dca718198.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_8b9ff3070d28.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_a6c5943f0022.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_d2e7a6eeb228.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_d9d8454b67d2.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_de5dc3d42db7.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_demo-batch_fb383de7812c.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_155768f00a36.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_28f17aec38a0.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_29303579efdb.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_2f22b5ff9f3b.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_38fcf5edca40.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_3e5611d00b67.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_3e96faaa2150.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_3fb9c9560df8.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_61c0d3e064e7.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_6fb9e1142b12.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_788d00e61618.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_7ddda5af24ab.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_aee956f86b3b.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_b2e981299f7f.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_b50de997eceb.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_bf99a35c2f37.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_d97bd7c31ced.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_dbb512b86bf7.yaml
+│   │   ├── zh_asr_v3_stage1_stage1_fault-batch_f01a4c142845.yaml
+│   │   ├── zh_asr_v3_three_family.yaml
+│   │   └── zh_asr_v3.yaml
+│   ├── denoise/
+│   │   └── spectral_gate.yaml
+│   ├── metrics/
+│   │   ├── business_risk_v1.yaml
+│   │   ├── gold_agreement.yaml
+│   │   └── model_eval.yaml
+│   ├── normalization/
+│   │   ├── blank_exact_eval_interview_v1.yaml
+│   │   ├── blank_exact_eval_v1.yaml
+│   │   ├── blank_exact_qwen_v1.yaml
+│   │   └── zh_asr_v1.yaml
+│   ├── quality/
+│   │   ├── acoustic_evidence_v1.yaml
+│   │   ├── audio_energy_v1.yaml
+│   │   ├── dnsmos_decision_v2_2.yaml
+│   │   ├── dnsmos_p835.yaml
+│   │   ├── efficientat_v1.yaml
+│   │   └── silero_vad_v1.yaml
+│   ├── selection/
+│   │   ├── external_gold_v1.yaml
+│   │   ├── semantic_lexicon_zh_v2.yaml
+│   │   ├── semantic_lexicon_zh_v3.yaml
+│   │   ├── training_exclude_markers_v1.yaml
+│   │   ├── voicemail_patterns_v1.yaml
+│   │   ├── voicemail_strong_v1.yaml
+│   │   ├── zh_asr_five_class_v1_0914_mixed_30000.yaml
+│   │   ├── zh_asr_five_class_v1.yaml
+│   │   ├── zh_asr_five_class_v2_2_auto_noise_0914_mixed_30000.yaml
+│   │   ├── zh_asr_five_class_v2_2_auto_noise.yaml
+│   │   ├── zh_asr_five_class_v2_3_min_acoustic_0914_mixed_30000.yaml
+│   │   ├── zh_asr_five_class_v2_3_min_acoustic.yaml
+│   │   ├── zh_asr_five_class_v2_4_on_demand_acoustic_0914_mixed_30000.yaml
+│   │   ├── zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+│   │   ├── zh_asr_five_class_v2_auto_noise_0914_mixed_30000.yaml
+│   │   ├── zh_asr_five_class_v2_auto_noise.yaml
+│   │   ├── zh_asr_five_class_v3_0914_mixed_30000.yaml
+│   │   ├── zh_asr_five_class_v3.yaml  # 现行五类 v3 通用策略
+│   │   ├── zh_asr_v1.yaml
+│   │   ├── zh_asr_v2.yaml
+│   │   ├── zh_asr_v3_0908_30000_business_semantic_v4.yaml
+│   │   ├── zh_asr_v3_0908_30000_semantic_tolerant.yaml
+│   │   ├── zh_asr_v3_0908_30000_zh_only.yaml
+│   │   ├── zh_asr_v3_0908_30000.yaml
+│   │   ├── zh_asr_v3_0914_mixed_30000.yaml
+│   │   ├── zh_asr_v3_business_semantic_v4.yaml
+│   │   ├── zh_asr_v3_semantic_tolerant.yaml
+│   │   ├── zh_asr_v3_three_family.yaml
+│   │   ├── zh_asr_v3_zh_only.yaml
+│   │   └── zh_asr_v3.yaml
+│   ├── stage1/
+│   │   └── server.yaml
+│   ├── trainsets/
+│   │   └── zh_asr_mix_example_v001.yaml
+│   └── warehouse/
+│       ├── categories_five_class_v2_2.yaml
+│       ├── export_r1.yaml
+│       └── freeze_default.yaml
+├── pipelines/
+│   ├── asr_eval.yaml
+│   ├── asr_metric_pipeline.yaml
+│   ├── assemble_training_parquet.yaml
+│   ├── attach_asr_v3.yaml
+│   ├── audio_quality_sidecar.yaml
+│   ├── baseline_qwen.yaml
+│   ├── baseline_sensevoice.yaml
+│   ├── build_dataset_v3.yaml
+│   ├── build_training_set.yaml
+│   ├── classify_dataset_five_class_v1.yaml
+│   ├── classify_dataset_five_class_v2_2_auto_noise.yaml
+│   ├── classify_dataset_five_class_v2_3_min_acoustic.yaml
+│   ├── classify_dataset_five_class_v2_4_on_demand_acoustic.yaml
+│   ├── classify_dataset_five_class_v2_auto_noise.yaml
+│   ├── classify_dataset_five_class_v3.yaml  # 现行五类分拣入口
+│   ├── classify_dataset_v2.yaml
+│   ├── classify_dataset_v3_asr_anomaly_noise.yaml
+│   ├── classify_dataset_v3_business_semantic_v4.yaml
+│   ├── classify_dataset_v3_semantic_tolerant_asr_anomaly_noise.yaml
+│   ├── classify_dataset_v3_semantic_tolerant.yaml
+│   ├── classify_dataset_v3_shadow_020.yaml
+│   ├── classify_dataset_v3_zh_only.yaml
+│   ├── classify_dataset_v3.yaml
+│   ├── classify_dataset.yaml
+│   ├── classify_external_gold.yaml
+│   ├── data_cleaning_source_A.yaml
+│   ├── denoise_qwen.yaml
+│   ├── doubao_asr_batch.yaml
+│   ├── doubao_asr_single.yaml
+│   ├── eval_aggregate.yaml
+│   ├── eval_metric_pipeline.yaml
+│   ├── eval_metrics_v3.yaml
+│   ├── evaluate_registered_models.yaml
+│   ├── glm_asr_batch.yaml
+│   ├── ingest_baseline.yaml
+│   ├── kimi_asr_batch.yaml
+│   ├── kimi_audio_asr_batch.yaml
+│   ├── multi_asr_aggregate.yaml
+│   ├── prepare_dataset_v3.yaml
+│   ├── qwen_asr_batch.yaml
+│   ├── script_example.yaml
+│   ├── sensevoice_asr_batch.yaml
+│   ├── warehouse_export_annotation.yaml
+│   └── warehouse_freeze.yaml
+├── resources/
+│   └── manifest.yaml  # 逻辑数据源登记
+├── scripts/
+│   ├── examples/
+│   │   └── label_from_duration.py
+│   ├── align_xlsx_by_base.py
+│   ├── analyze_0908_sorting.py
+│   ├── annotate_semantic_risk_transcripts.py  # prepare / label / merge 听写闭环
+│   ├── assemble_training_parquet.py  # 标注后训练数据汇总
+│   ├── batch_availability_v3.py
+│   ├── calc_xlsx_char_acc.py
+│   ├── check_silero_vad.py
+│   ├── classify_asr_to_xlsx.py  # 已有 ASR 分类与 XLSX 导出
+│   ├── collect_wav_by_id.py
+│   ├── collect_wav_from_parquet.py
+│   ├── eval_external_baseline_cer.py
+│   ├── eval_gold_exact_by_type.py
+│   ├── export_multi_asr_xlsx.py
+│   ├── export_parquets_to_xlsx.py
+│   ├── gold_label_generator.py
+│   ├── merge_label_char_acc.py
+│   ├── merge_qwen_results.py
+│   ├── migrate_datasets_layout.py
+│   ├── patch_vllm_kimi_audio_batch.py
+│   ├── probe_glm_vllm.py
+│   ├── probe_kimi_audio.py
+│   ├── probe_kimi_vllm.py
+│   ├── rebuild_cleaned_from_asr.py
+│   ├── recalc_char_acc.py
+│   ├── register_0908_v3_pilot.py
+│   ├── run_eval_from_label_xlsx.py
+│   ├── run_eval_from_summary.py
+│   ├── sample_cleaned_parquet.py
+│   ├── sample_pcm_to_wav.py
+│   ├── sample_test_set.py
+│   ├── sftp_transfer.command
+│   ├── sftp_transfer.py
+│   ├── sftp_transfer.sh
+│   ├── shadow_asr_anomaly_noise.py
+│   ├── shadow_business_semantic_v4.py
+│   ├── shadow_classify_text_zh_only.py
+│   ├── shadow_compare_semantic_tolerant.py
+│   ├── sync_to_usb.bat
+│   ├── test_kimi_single.py
+│   ├── validate_sensevoice_pipeline.py
+│   └── verify_0908_sorting.py
+├── src/
+│   └── audio_engine/
+│       ├── cli/
+│       │   ├── __init__.py
+│       │   └── main.py  # audio-data 命令主入口
+│       ├── core/
+│       │   ├── annotation_v3/
+│       │   │   ├── __init__.py
+│       │   │   ├── config.py
+│       │   │   ├── contract.py
+│       │   │   ├── gold.py
+│       │   │   ├── import_workflow.py
+│       │   │   ├── package.py
+│       │   │   ├── queue.py
+│       │   │   └── types.py
+│       │   ├── dataset_v3/
+│       │   │   ├── __init__.py
+│       │   │   ├── audit_plan.py
+│       │   │   ├── audit.py
+│       │   │   ├── grouping.py
+│       │   │   ├── quota_solver.py
+│       │   │   ├── release.py
+│       │   │   ├── reservation.py
+│       │   │   └── sampling.py
+│       │   ├── quality/
+│       │   │   ├── __init__.py
+│       │   │   ├── acoustic_evidence.py
+│       │   │   ├── dnsmos_p835.py
+│       │   │   ├── efficientat.py
+│       │   │   └── silero_vad.py
+│       │   ├── selection_v2/
+│       │   │   ├── __init__.py
+│       │   │   ├── audio_precheck.py
+│       │   │   ├── config.py
+│       │   │   ├── dataset_builder.py
+│       │   │   ├── engine.py
+│       │   │   ├── family_consensus.py
+│       │   │   ├── result.py
+│       │   │   ├── semantic_risk_gate.py
+│       │   │   └── types.py
+│       │   ├── selection_v3/
+│       │   │   ├── __init__.py
+│       │   │   ├── acoustic_evidence.py
+│       │   │   ├── annotation_tasks.py
+│       │   │   ├── audio_energy.py
+│       │   │   ├── business_semantic.py
+│       │   │   ├── classifier.py
+│       │   │   ├── classify_text.py
+│       │   │   ├── config.py
+│       │   │   ├── consensus.py
+│       │   │   ├── disposition.py
+│       │   │   ├── dnsmos_decision.py
+│       │   │   ├── family_evidence.py
+│       │   │   ├── five_class_v2_2.py
+│       │   │   ├── five_class_v2_3_min_acoustic.py
+│       │   │   ├── five_class_v2_4_on_demand_acoustic.py  # 现行五类 v3 复用的按需声学实现
+│       │   │   ├── five_class_v2.py
+│       │   │   ├── five_class.py
+│       │   │   ├── gold_select.py
+│       │   │   ├── input_contract.py
+│       │   │   ├── legacy_map.py
+│       │   │   ├── noise_trigger.py
+│       │   │   ├── quality_gate.py
+│       │   │   ├── result.py
+│       │   │   ├── review_router.py
+│       │   │   ├── semantic_risk_strict.py
+│       │   │   ├── semantic_risk.py
+│       │   │   ├── semantic_tolerant.py
+│       │   │   ├── semantic_verify.py
+│       │   │   ├── speech_rate.py
+│       │   │   ├── spot_audit.py
+│       │   │   ├── text_tolerance.py
+│       │   │   ├── text.py
+│       │   │   ├── types.py
+│       │   │   └── voicemail_strong.py
+│       │   ├── stage1/
+│       │   │   ├── adapters/
+│       │   │   │   ├── __init__.py
+│       │   │   │   ├── base.py
+│       │   │   │   ├── glm.py
+│       │   │   │   ├── qwen.py
+│       │   │   │   └── sensevoice.py
+│       │   │   ├── __init__.py
+│       │   │   ├── benchmark.py
+│       │   │   ├── cache_policy.py
+│       │   │   ├── config_gen.py
+│       │   │   ├── daemon.py
+│       │   │   ├── digests.py
+│       │   │   ├── gpu_inventory.py
+│       │   │   ├── gpu_lease.py
+│       │   │   ├── gpu_scheduler.py
+│       │   │   ├── identity.py
+│       │   │   ├── job.py
+│       │   │   ├── locks.py
+│       │   │   ├── orchestrator.py
+│       │   │   ├── probe.py
+│       │   │   ├── process.py
+│       │   │   ├── reconcile.py
+│       │   │   ├── retry_policy.py
+│       │   │   ├── runtime_config.py
+│       │   │   ├── status_view.py
+│       │   │   └── worker.py
+│       │   ├── warehouse/
+│       │   │   ├── __init__.py
+│       │   │   ├── categories.py
+│       │   │   ├── completion.py
+│       │   │   ├── export.py
+│       │   │   ├── freeze.py
+│       │   │   ├── identity.py
+│       │   │   └── import_support.py
+│       │   ├── __init__.py
+│       │   ├── artifacts.py  # 原子写入及派生产物工具
+│       │   ├── catalog.py  # 产物目录及注册
+│       │   ├── checkpoint.py  # 断点状态
+│       │   ├── dotenv.py  # 环境参数加载
+│       │   ├── eval_ready.py  # 评测集就绪与金标检查
+│       │   ├── manifest.py  # Manifest 读写、音频探测与摘要
+│       │   ├── operator.py  # 算子基类、配置及结果契约
+│       │   ├── pipeline.py  # Pipeline 配置与执行
+│       │   ├── progress.py  # 运行进度
+│       │   ├── registry.py  # 算子注册机制
+│       │   ├── sample.py  # Sample 数据模型
+│       │   ├── selection_engine.py  # 早期分拣引擎
+│       │   ├── sharded_run.py  # 分片执行
+│       │   ├── source_naming.py  # 业务产物命名与路径解析
+│       │   ├── source.py  # 逻辑数据源
+│       │   ├── task.py  # 任务编排
+│       │   ├── training.py  # 外部训练框架接入
+│       │   └── transcript_reconcile.py  # 转写结果清洗核对
+│       ├── metrics/
+│       │   ├── __init__.py
+│       │   ├── align.py
+│       │   ├── business.py
+│       │   ├── cer.py
+│       │   ├── gate.py
+│       │   ├── normalization.py
+│       │   ├── runner.py
+│       │   ├── semantic_judge.py
+│       │   └── stat.py
+│       ├── operators/
+│       │   ├── asr/
+│       │   │   ├── __init__.py
+│       │   │   ├── base.py
+│       │   │   ├── doubao.py
+│       │   │   ├── glm.py
+│       │   │   ├── kimi_audio.py
+│       │   │   ├── kimi.py
+│       │   │   ├── qwen.py
+│       │   │   ├── sensevoice.py
+│       │   │   └── vllm.py
+│       │   ├── audio/
+│       │   │   ├── __init__.py
+│       │   │   ├── denoise.py
+│       │   │   ├── kimi_pad.py
+│       │   │   ├── pcm.py
+│       │   │   ├── resample.py
+│       │   │   └── vad.py
+│       │   ├── augmentation/
+│       │   │   ├── __init__.py
+│       │   │   ├── noise.py
+│       │   │   ├── speed.py
+│       │   │   └── volume.py
+│       │   ├── ingest/
+│       │   │   ├── __init__.py
+│       │   │   └── scan.py
+│       │   ├── quality/
+│       │   │   ├── __init__.py
+│       │   │   ├── aggregate_manifests.py
+│       │   │   ├── asr_anomaly_noise.py
+│       │   │   ├── asr_edit_distance.py
+│       │   │   ├── asr_route_v2_4.py
+│       │   │   ├── attach_asr_v3.py
+│       │   │   ├── audio_energy.py
+│       │   │   ├── build_dataset_v3.py
+│       │   │   ├── cer.py
+│       │   │   ├── classify.py
+│       │   │   ├── copy_transcripts.py
+│       │   │   ├── dnsmos_v2_2_candidates.py
+│       │   │   ├── dnsmos.py
+│       │   │   ├── efficientat_candidates.py
+│       │   │   ├── efficientat.py
+│       │   │   ├── evaluation_report.py
+│       │   │   ├── external_gold.py
+│       │   │   ├── filter.py
+│       │   │   ├── inject_external_gold.py
+│       │   │   ├── normalize_transcripts.py
+│       │   │   ├── on_demand_acoustic_candidates.py
+│       │   │   ├── prepare_dataset_v3.py
+│       │   │   ├── probe.py
+│       │   │   ├── select.py
+│       │   │   ├── silero_vad.py
+│       │   │   ├── snr.py
+│       │   │   ├── split_dataset.py
+│       │   │   ├── text_metrics.py
+│       │   │   ├── warehouse_export_annotation.py
+│       │   │   └── warehouse_freeze.py
+│       │   ├── runtime/
+│       │   │   ├── __init__.py
+│       │   │   └── release_models.py
+│       │   ├── script/
+│       │   │   ├── __init__.py
+│       │   │   └── python.py
+│       │   └── __init__.py
+│       ├── scripts/
+│       │   └── source_ingest/
+│       │       └── __init__.py
+│       └── __init__.py
+├── tasks/
+│   └── train_and_evaluate.example.yaml
+└── tests/
+    ├── test_annotate_semantic_risk_transcripts.py
+    ├── test_annotation_v3.py
+    ├── test_asr_edit_distance.py
+    ├── test_assemble_training_parquet.py
+    ├── test_business_metrics_v1.py
+    ├── test_catalog.py
+    ├── test_classify_asr_to_xlsx.py
+    ├── test_core.py
+    ├── test_dataset_v3_build.py
+    ├── test_dataset_workflow.py
+    ├── test_doubao_asr.py
+    ├── test_eval_decoupled.py
+    ├── test_eval_external_baseline_cer.py
+    ├── test_external_gold.py
+    ├── test_glm_asr.py
+    ├── test_kimi_asr.py
+    ├── test_kimi_audio_asr.py
+    ├── test_kimi_pad.py
+    ├── test_pcm_to_wav.py
+    ├── test_progress.py
+    ├── test_qwen_asr.py
+    ├── test_sample_cleaned_parquet.py
+    ├── test_script_operator.py
+    ├── test_selection_engine.py
+    ├── test_selection_five_class_v1.py
+    ├── test_selection_five_class_v2_2_auto_noise.py
+    ├── test_selection_five_class_v2_3_min_acoustic.py
+    ├── test_selection_five_class_v2_4_on_demand_acoustic.py
+    ├── test_selection_five_class_v2_auto_noise.py
+    ├── test_selection_v2.py
+    ├── test_selection_v3_020_refactor.py
+    ├── test_selection_v3_asr_anomaly_noise.py
+    ├── test_selection_v3_business_semantic.py
+    ├── test_selection_v3_classify_text.py
+    ├── test_selection_v3_classify.py
+    ├── test_selection_v3_contract.py
+    ├── test_selection_v3_semantic_tolerant.py
+    ├── test_selection_v3_text_levenshtein.py
+    ├── test_sensevoice_asr.py
+    ├── test_sharded_pipeline.py
+    ├── test_silero_vad_soundfile_io.py
+    ├── test_source_naming.py
+    ├── test_stage1_fault_injection.py
+    ├── test_stage1_gpu_scheduler.py
+    ├── test_stage1_orchestrator.py
+    ├── test_stage1_runtime_adapters.py
+    ├── test_stage1_status_view.py
+    ├── test_task.py
+    ├── test_text_metrics.py
+    ├── test_training_and_evaluation.py
+    ├── test_transcript_reconcile.py
+    ├── test_v3_audit_regressions.py
+    ├── test_vllm_asr.py
+    └── test_warehouse_033.py
+
+四、业务数据与运行产物目录约定（模板，不是现存文件清单）
+
+datasets/
+├── stage1/
+│   ├── cleaned/                    cleaned_<BATCH>.parquet
+│   ├── asr/                        <alias>_asr_<BATCH>.parquet
+│   ├── derived/                    聚合、分拣、金标回填等可复用产物
+│   │                               classified_five_class_v3_<BATCH>.parquet
+│   │                               classified_*_<BATCH>_with_gold.parquet
+│   ├── review/
+│   │   └── semantic_risk_transcripts/<BATCH>/
+│   │       ├── queue.parquet        待标队列
+│   │       ├── playlist.md          听音清单
+│   │       └── wav/                 可选音频链接或副本
+│   └── trainsets/<version>/        训练汇总版本及其产物
+├── stage3/
+│   ├── eval_sets/                  eval_<BATCH>.parquet
+│   ├── asr/                        <alias>_asr_eval_<BATCH>.parquet
+│   ├── derived/                    eval_aggregate_* / eval_metrics_*
+│   └── reports/<eval_name>/        evaluation.json / evaluation.xlsx
+└── manifests/                      旧扁平路径，只读兼容
+
+data/
+├── derived/                        处理生成的音频等派生资产
+├── cache/                          可重建计算缓存
+├── exports/                        XLSX 等交付物
+└── catalog/                        不可变产物注册目录（默认）
+
+runs/<run_id>/
+├── config.yaml                     本次实际配置
+├── manifest.parquet                运行输出或中间快照，视流水线而定
+├── metrics.json                    运行指标
+├── run.log                         运行日志
+├── script_logs/                    自定义算子的结构化日志
+└── reports/                        报告副本，视流水线而定
+checkpoint、分片状态和 stage1 任务状态由对应执行器写入，具体文件名以实现为准。
+
+边界：
+1. 外部原始音频只读引用；resources/manifest.yaml 记录外部路径。
+   根 README / 旧目录中的 data/raw/ 不是要求把生产音频迁入 Git 仓库。
+2. Manifest 是数据集真相源；XLSX 是交付格式，runs 是执行痕迹。
+3. ASR 结果昂贵，不能当临时缓存随意清理。
+4. warehouse 冻结与 dataset_v3 Release 是不同业务概念；
+   输出位置应遵守对应配置/调用参数，不能仅因名字近似而合并目录。
+5. 外部训练框架和模型权重有自己的存储位置，本文件不虚构仓库内训练实现。
+
+五、按开发任务定位修改位置
+
+1. 增加音频处理能力
+   operators/audio/ 或 operators/augmentation/ 实现算子；
+   复用 core/operator.py，通过 registry 注册并在包初始化中导入；
+   configs/ 放参数，pipelines/ 放组合，tests/ 验证输入输出与边界。
+
+2. 增加 ASR 模型
+   先看 operators/asr/base.py，再看对应模型及 vllm.py；
+   参数放 configs/asr/，运行流程放 pipelines/；
+   若接入 stage1 自动调度，还需对齐 core/stage1/adapters/ 与资源管理。
+
+3. 调整现行五类分拣
+   先读 docs/02-规范规则/数据挑选规则_v3.md；
+   配置入口为 configs/selection/zh_asr_five_class_v3.yaml；
+   流水线入口为 pipelines/classify_dataset_five_class_v3.yaml；
+   规则实现在 core/selection_v3/，算子包装在 operators/quality/。
+   当前业务名 v3 复用 five_class_v2_4_on_demand_acoustic.py 等工程实现，
+   不能仅根据文件名中的 v2_4 判断它已过时。
+   旧 selection_v3.0 与现行 selection_five_class_v3 不是同一套策略。
+
+4. 修改断点恢复、重试、GPU 并发
+   core/stage1/ 管理任务、进程、GPU 租约、调度和状态；
+   样本流水线执行查看 core/pipeline.py、checkpoint.py、sharded_run.py；
+   对应 tests/test_stage1_*.py、test_sharded_pipeline.py。
+
+5. 修改人工听写或标注平台对接
+   scripts/annotate_semantic_risk_transcripts.py 是现行 prepare / label / merge；
+   core/annotation_v3/ 处理正式人审协议，勿把两种审核含义直接等同。
+   对接规范看 039；(sample_id, original_audio_sha256) 为合并键。
+   candidate_text 仅为参考；平台回传 gold_text、gold_kind、status 等字段；
+   annotated 对应 speech + 非空文本，empty 对应 non_speech + 空文本，
+   skipped 不写入 gold；回填不修改 category。
+   平台 Task、播放器、Web API 属于独立项目开发范围。
+
+6. 修改仓库冻结或训练汇总
+   core/warehouse/、configs/warehouse/ 和 warehouse_* 流水线负责仓库；
+   scripts/assemble_training_parquet.py、configs/trainsets/ 和
+   pipelines/assemble_training_parquet.yaml 负责训练数据汇总；
+   core/dataset_v3/ 负责数据集 Release；
+   core/training.py 仅通过约定接口接入外部训练框架。
+
+7. 修改评测和报告
+   metrics/ 放指标能力，operators/quality/ 放指标及报告算子；
+   configs/metrics/、configs/normalization/ 放口径；
+   pipelines/eval_aggregate.yaml、eval_metric_pipeline.yaml 编排评测。
+   评测不强依赖训练节点或 Model Registry，输入与金标须按身份对齐。
+
+8. 修改命令行或新增配置
+   cli/main.py 保持入口职责，业务逻辑尽量放既有 core / operators 模块；
+   参数、流程分别放 configs / pipelines，避免硬编码某个批次路径；
+   测试按现有 tests/test_*.py 风格组织，不要求先重构测试目录。
+
+六、文档冲突与后续开发约定
+
+- 现行五类默认入口以当前规则文档、配置和流水线交叉确认。
+  README 和工序总览部分段落仍有 v2.2 / 旧 v3 描述，不能混用。
+- 架构蓝图中的 data/batches、datasets/batches 等属于早期愿景；
+  数据源登记采用 resources/manifest.yaml。
+- docs/04-改进需求/ 的设计不等于全部已实现；
+  docs/99-历史归档/ 不作为当前开发规范。
+- 不必为了符合通用 Web 项目模板而搬动现有 src/audio_engine 包。
+  将来确需 HTTP 服务时，应单独确认接口与部署范围后再增加服务层。
+- 新功能优先沿用“CLI/任务入口 -> Pipeline -> Operator -> 核心能力
+  -> Manifest/产物注册”的职责划分。
+- 本文件仅新增开发文档，没有创建空目录、移动源码或修改业务逻辑。
+
+七、开发检查命令（供后续使用，本次文档整理未执行测试）
+
+安装开发依赖：pip install -e ".[dev]"
+查看命令入口：audio-data --help
+查看已注册算子：audio-data operators
+运行相关测试：python -m pytest tests/test_core.py
+完整回归测试：python -m pytest
+静态检查：ruff check src tests scripts
+
+实际开发时按变更范围选择相关测试；真实模型、GPU、外部服务相关验证
+需要对应运行环境。源码/测试文件存在不代表业务验收或测试已经通过。

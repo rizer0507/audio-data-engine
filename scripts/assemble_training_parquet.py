@@ -21,7 +21,7 @@
     --version zh_asr_mix_20260921_v001 \\
     --batch BATCH_A --batch BATCH_B \\
     --categories gold_candidate,semantic_risk,hardcase \\
-    --rule-stem classified_five_class_v2_3_min_acoustic
+    --rule-stem classified_five_class_v3
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from audio_engine.core.manifest import Manifest, file_sha256
 from audio_engine.core.sample import Sample
 from audio_engine.core.selection_v3.input_contract import original_audio_sha256
 
-DEFAULT_RULE_STEM = "classified_five_class_v2_3_min_acoustic"
+DEFAULT_RULE_STEM = "classified_five_class_v3"
 DEFAULT_EXCLUDE_MARKERS = "configs/selection/training_exclude_markers_v1.yaml"
 SCRIPT_VERSION = "1.0.0"
 AUDIO_KEYS = ("resampled_16k", "pcm_wav", "pcm_to_wav", "raw", "pcm_wav_path")

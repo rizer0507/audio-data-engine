@@ -90,6 +90,35 @@ class AudioEnergyOperator(BaseOperator):
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         params = dict(config.params)
+        # 037 on-demand: skip non-candidates; never forge silence from missing energy.
+        if params.get("respect_candidates"):
+            labels = sample.labels if isinstance(sample.labels, dict) else {}
+            cand = labels.get("audio_energy_v2_4_candidate")
+            required = False
+            if isinstance(cand, dict):
+                required = bool(cand.get("required"))
+            elif cand is True:
+                required = True
+            if not required:
+                from audio_engine.core.selection_v3.types import ACOUSTIC_STATUS_NOT_REQUIRED
+
+                quality = dict(sample.quality or {})
+                quality.update(
+                    {
+                        "energy_status": ACOUSTIC_STATUS_NOT_REQUIRED,
+                        "strict_all_channels_zero": None,
+                        "any_channel_nonzero": None,
+                    }
+                )
+                return {
+                    "quality": quality,
+                    "lineage_entry": {
+                        "operator": self.full_name,
+                        "version": self.version,
+                        "params": {"respect_candidates": True, "skipped": True},
+                    },
+                }
+
         energy_cfg = _load_energy_config(params)
         sel = _selection_config_for_energy(params)
         input_key = str(energy_cfg.get("input_audio_key") or "resampled_16k")
@@ -99,14 +128,22 @@ class AudioEnergyOperator(BaseOperator):
         except Exception:  # noqa: BLE001
             audio_path = (sample.audio or {}).get(input_key) or sample.source_path
 
+        # On-demand path: ignore stale energy fields so strict-zero is always computed.
+        prior_quality = (
+            {}
+            if params.get("respect_candidates")
+            else (sample.quality if isinstance(sample.quality, dict) else {})
+        )
         evidence = compute_audio_energy_for_sample(
             audio_path=audio_path,
             config=sel,
             duration_sec=float(sample.duration) if sample.duration is not None else None,
-            quality=sample.quality if isinstance(sample.quality, dict) else {},
+            quality=prior_quality,
         )
         quality = evidence.as_dict()
-        # Drop None-only noise; keep explicit failed state.
+        quality["energy_status"] = (
+            "failed" if evidence.energy_state == "failed" else "success"
+        )
         return {
             "quality": quality,
             "lineage_entry": {
@@ -115,6 +152,7 @@ class AudioEnergyOperator(BaseOperator):
                 "params": {
                     "policy_version": evidence.energy_policy_version,
                     "input_audio_key": input_key,
+                    "strict_all_channels_zero": evidence.strict_all_channels_zero,
                 },
                 "input_key": input_key,
             },

@@ -19,16 +19,17 @@
 
 ## 规范规则
 
-现行五分类生产口径为 **v2.2 / `selection_five_class_v2_2_auto_noise`**（依据 [028](04-改进需求/已完成/028-五分类自动噪声归类与互斥准入修复.md) 与 [029](04-改进需求/已完成/029-五分类v2.2-DNSMOS联合判定修复.md)）。它在家族四态和音频能量之上联合 DNSMOS，并与 v1/v2 产物隔离。v2 是无 DNSMOS 联合语义的基线，v1 仅作历史对照。冲突时以 028/029 和 v2.2 规则为准。代码交付不等于业务门禁 `publish_status=pass`。
+现行五分类生产口径为 **五类 v3 / `selection_five_class_v3`**（按需声学；工程曾称 v2.4；依据 [037](04-改进需求/进行中/037-按需声学五类分拣重构.md)）。与 v2.4/v2.3/v2.2/v2/v1 及旧 `selection_v3.0` 产物隔离。冲突时以简版0922 + [数据挑选规则_v3](02-规范规则/数据挑选规则_v3.md) 为准。代码交付不等于业务门禁 `publish_status=pass`。
 
 系统目前必须遵守的规则（Single Source of Truth）：
 
 - [数据源登记规范](02-规范规则/数据源登记规范.md) — `resources/manifest.yaml` 字段与登记约定
-- [五类分拣规则与决策流程](02-规范规则/五类分拣规则与决策流程.md) — **现行五类总览**：类别定义、证据层、完整决策流程与产物（优先阅读）
-- [数据挑选规则_v2_2_auto_noise](02-规范规则/数据挑选规则_v2_2_auto_noise.md) — **现行生产口径：029 DNSMOS 联合五类**（入口 `classify_dataset_five_class_v2_2_auto_noise`；不覆盖 v1/v2 产物）
-- [数据挑选规则_v2_auto_noise](02-规范规则/数据挑选规则_v2_auto_noise.md) — **028 自动噪声五类**（入口 `classify_dataset_five_class_v2_auto_noise`；不覆盖 v1 产物）
-- [数据挑选规则_v1](02-规范规则/数据挑选规则_v1.md) — 027 历史对照（入口 `classify_dataset_five_class_v1`）；配套简表：[xlsx](02-规范规则/数据挑选规则_v1.xlsx)
-- legacy 回退：`classify_dataset_v3_asr_anomaly_noise` + `selection_v3.0`（勿再当新批次默认）
+- [数据挑选规则_v3](02-规范规则/数据挑选规则_v3.md) — **现行生产口径：五类 v3 按需声学**（入口 `classify_dataset_five_class_v3` / `stage1 classify`；产物 `*_five_class_v3_*`）
+- [五类分拣规则与决策流程](02-规范规则/五类分拣规则与决策流程.md) — 五类总览入口（现行指向 v3；文内保留 v2.2 历史对照）
+- [数据挑选规则_v2_2_auto_noise](02-规范规则/数据挑选规则_v2_2_auto_noise.md) — legacy：029 DNSMOS 联合五类
+- [数据挑选规则_v2_auto_noise](02-规范规则/数据挑选规则_v2_auto_noise.md) — legacy：028 自动噪声五类
+- [数据挑选规则_v1](02-规范规则/数据挑选规则_v1.md) — 027 历史对照；配套简表：[xlsx](02-规范规则/数据挑选规则_v1.xlsx)
+- 更早 legacy：`classify_dataset_v3_asr_anomaly_noise` + `selection_v3.0`（与五类 v3 **不是**同一套规则）
 
 ## 流水线
 
@@ -55,8 +56,8 @@
 
 目录说明与需求模板：[04-改进需求/README](04-改进需求/README.md)、[需求文档模板](04-改进需求/需求文档模板.md)
 
-- [033-人工标注到batch唯一数据仓库](04-改进需求/进行中/033-人工标注到batch唯一数据仓库.md) — 当前阶段：人工标注、回填校验、batch 唯一仓库冻结，附 Cursor 执行提示词（需求，未实现）
 - [032-工序一标注到Qwen3-ASR训练数据流水线设计](04-改进需求/进行中/032-工序一标注到Qwen3-ASR训练数据流水线设计.md) — 完整闭环设计参考；当前实施范围以 033 为准（设计，未实现）
+- [039-语音标注平台构建先验](04-改进需求/进行中/039-语音标注平台构建先验.md) — **独立空仓库**用：semantic_risk 待标池导入、切 Task、无登录 Web 听写台、导出回填契约（基于 CLI 听写 + 静态样稿）
 
 ## 已完成的改进需求
 
@@ -101,6 +102,7 @@
 - [GLM-ASR-vLLM识别流水线](07-操作手册/GLM-ASR-vLLM识别流水线.md)
 - [外源基线字准率脚本](07-操作手册/外源基线字准率脚本.md)
 - [豆包ASR-API参考](07-操作手册/豆包ASR-API参考.md)
+- [semantic_risk听写标注-VSCode远程](07-操作手册/semantic_risk听写标注-VSCode远程.md) — CLI 听写；Web 台先验见 [039](04-改进需求/进行中/039-语音标注平台构建先验.md)
 
 仓库根目录 `手册/dev/`、`手册/local/` 为三大工序一键执行分册；另有根目录 `全自动训练评测闭环执行手册-*.txt`、`单条流水线执行命令.txt` 等与本文档互补。
 

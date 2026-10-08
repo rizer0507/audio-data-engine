@@ -4,11 +4,12 @@
 改批次：用 --source-name（+ 清洗时的 --source-dir），一般不用改 YAML 路径。
 改并行度 / 卡号：改对应 pipelines/*.yaml 的 sharding。
 分拣默认：工序一③ = classify_dataset_five_class_v2_2_auto_noise（029，影子验收前仍为正式）；
-         v2.3 候选默认 = classify_dataset_five_class_v2_3_min_acoustic（034，影子验收后可切）；
+         后置入口默认 = classify_dataset_five_class_v2_4_on_demand_acoustic（037）；
+         v2.3 legacy = classify_dataset_five_class_v2_3_min_acoustic（034）；
          028/v1 为对照；legacy = asr_anomaly + selection_v3.0。
 执行顺序：1 清洗 → 2 ASR（≥3 族双跑 + register）→ 3 prepare/attach → energy/声学证据 → 五分类。
          噪声全量 sidecar 仅研究；聚合+字准（2d/2e）与 classify_dataset(v1) 仅为诊断 / legacy。
-噪声速查：§2f-noise；正式五类入口：§2f-v3-029；v2.3 最小声学：§2f-v3-034。
+噪声速查：§2f-noise；正式五类入口：§2f-v3-029；v2.4 按需声学：§2f-v3-037；v2.3：§2f-v3-034。
 服务器过夜批跑：手工 vLLM / pipeline 必须进 tmux（见 手册/dev/00 §2.0）；
   Tabby/VS Code 不能保活。stage1 单命令（0a/030）本身后台跑，SSH 断开可继续。
 
@@ -49,28 +50,32 @@ audio-data stage1 retry <job_id> --export-only
 #   datasets/stage1/asr/{qwen,glm,sensevoice}_{1,2}_asr_${BATCH}.parquet
 #   datasets/stage1/derived/classified_five_class_v2_2_auto_noise_${BATCH}.parquet
 #   data/exports/summary_five_class_v2_2_auto_noise_${BATCH}.xlsx
-# 说明：stage1 run 内嵌 classify 仍默认 v2.2（030/034 跟进）；六路已齐后置入口见 §0b（已切 v2.3）
+# 说明：stage1 run 内嵌 classify 仍默认 v2.2（030/034 跟进）；六路已齐后置入口见 §0b（已切 v2.4）
 # 缺口：服务器整批验收、双卡吞吐基准（见 stage1/benchmark.py）尚未实测
 
 
 -------------------------------------------------------
-0b. 工序一后置分类（035；六路 ASR 已齐，默认 v2.3；不启 ASR）
+0b. 工序一后置分类（037；六路 ASR 已齐，默认 v2.4 按需声学；不启 ASR）
 -------------------------------------------------------
-# 统一入口：五类 v2.3（audio_energy → silero_vad → efficientat_candidates
-#           → efficientat → classify）→ 完整 XLSX
-# 与 pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml 语义等价
+# 统一入口：五类 v2.4（asr_route → silero 按需 → energy 按需严格全零
+#           → dnsmos 按需 SIG → classify）→ 完整 XLSX
+# 与 pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml 语义等价
 # 别名：显式 --family > dataset YAML > stage1 固定 qwen_1/2、glm_1/2、sensevoice_1/2
 # 缺任何一路：按家族/路次列出期望路径后非零退出；不伪造 register/reservation/release
 # 手册：docs/07-操作手册/已有六路ASR一键分类导出.md
 # 台账：手册/dev/05-一条命令多步骤.txt §2
-# 需求：035；规则：034
+# 需求：037；条件：简版0922；顺序：按需声学0922
 
-# stage1 固定双跑别名（最常见；默认 v2.3）
+# stage1 固定双跑别名（最常见；默认 v2.4）
 python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
 # 等价：
 # audio-data stage1 classify --batch "$BATCH" --energy-workers 32
 # audio-data stage1 classify --batch "$BATCH" --workers 32
-# audio-data stage1 classify --batch "$BATCH" --rule-version v2_3_min_acoustic
+# audio-data stage1 classify --batch "$BATCH" --rule-version v2_4_on_demand_acoustic
+
+# legacy v2.3（独立 stem，不覆盖 v2.4）
+# python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32 \
+#   --rule-version v2_3_min_acoustic
 
 # legacy v2.2（独立 stem）
 # python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32 \
@@ -82,9 +87,9 @@ python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
 #   --family glm=glm-base-1,glm-base-2 \
 #   --family sensevoice=sv-base-1,sv-base-2
 
-# 默认产物（v2.3）：
-#   data/exports/summary_five_class_v2_3_min_acoustic_${BATCH}.xlsx
-#   datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}.parquet
+# 默认产物（v2.4）：
+#   data/exports/summary_five_class_v2_4_on_demand_acoustic_${BATCH}.xlsx
+#   datasets/stage1/derived/classified_five_class_v2_4_on_demand_acoustic_${BATCH}.parquet
 # 覆盖已有文件须加 --overwrite；仅 XLSX 加 --no-classified-parquet
 
 
@@ -496,11 +501,11 @@ audio-data pipeline run pipelines/classify_dataset_five_class_v2_2_auto_noise.ya
 
 
 -------------------------------------------------------
-2f-v3-034. 五类 v2.3 最小声学证据分拣（候选默认 / 影子验收）
+2f-v3-034. 五类 v2.3 最小声学证据分拣（legacy）
 -------------------------------------------------------
 # 034：用 Silero VAD（全量）+ EfficientAT（候选）替代 DNSMOS 作为主声学证据。
-# 正式切默认前需完成影子验收；当前生产默认仍为 §2f-v3-029。
-# 不覆盖 v1 / v2_auto_noise / v2_2_auto_noise 产物。前置：prepared_asr_v3_<name>；服务器可读音频。
+# 后置入口默认已切 v2.4（§0b / §2f-v3-037）；本条保留复现/对照。
+# 不覆盖 v1 / v2_auto_noise / v2_2_auto_noise / v2_4 产物。前置：prepared_asr_v3_<name>；服务器可读音频。
 # 产物：datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_<name>.parquet
 # YAML：audio_energy → silero_vad → efficientat_candidates → efficientat → classify
 # EfficientAT 权重：configs/quality/efficientat_v1.yaml → checkpoint_path（默认
@@ -533,6 +538,52 @@ audio-data pipeline run pipelines/classify_dataset_five_class_v2_3_min_acoustic.
 # 规则测试：
 #   pytest tests/test_selection_five_class_v2_3_min_acoustic.py -q
 # 需求：docs/04-改进需求/进行中/034-v2.3最小声学分拣正式需求.md
+
+
+-------------------------------------------------------
+2f-v3-037. 五类 v2.4 按需声学分拣（后置入口默认）
+-------------------------------------------------------
+# 037：ASR 预分流 A—E → 按需 Silero / 严格全零 energy / DNSMOS(SIG)；EfficientAT 退出默认主路径。
+# 不覆盖 v2.3 / v2.2 / v2 / v1 产物。前置：prepared_asr_v3_<name> 或六路 ASR 已齐后置入口。
+# 产物：datasets/stage1/derived/classified_five_class_v2_4_on_demand_acoustic_<name>.parquet
+# YAML：asr_route → silero_vad_candidates → silero_vad → audio_energy_candidates
+#       → audio_energy → dnsmos_v2_4_candidates → classify
+#
+# 0914-mixed-30000（PowerShell）：
+audio-data pipeline run pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml `
+  --source-name 0914-mixed-30000 `
+  --config configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic_0914_mixed_30000.yaml `
+  --force
+
+# Linux / Git Bash：
+# audio-data pipeline run pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml \
+#   --source-name 0914-mixed-30000 \
+#   --config configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic_0914_mixed_30000.yaml \
+#   --force
+#
+# 续跑：同一命令加 --force 会重算；不加则按 checkpoint 续跑未完成样本。
+# 导出 XLSX：
+# audio-data review export-summary \
+#   datasets/stage1/derived/classified_five_class_v2_4_on_demand_acoustic_0914-mixed-30000.parquet \
+#   --output data/exports/summary_five_class_v2_4_on_demand_acoustic_0914-mixed-30000.xlsx \
+#   --max-rows 20000
+#
+# 后置一键入口（推荐，与 §0b / 手册 05 §2 同一实现）：
+#   python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
+#   audio-data stage1 classify --batch "$BATCH" --energy-workers 32
+#
+# 规则/质量配置：
+#   configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+#   configs/quality/silero_vad_v1.yaml
+#   configs/quality/audio_energy_v1.yaml
+#   configs/quality/dnsmos_decision_v2_2.yaml（仅 weak_sig 低档）
+#   configs/quality/dnsmos_p835.yaml
+# 规则测试：
+#   pytest tests/test_selection_five_class_v2_4_on_demand_acoustic.py -q
+#   pytest tests/test_classify_asr_to_xlsx.py -q
+# 需求：docs/04-改进需求/进行中/037-按需声学五类分拣重构.md
+# 条件：docs/02-规范规则/重点数据筛选规则(简版0922).txt
+# 顺序：docs/02-规范规则/分类执行流程(按需声学0922).txt
 
 
 -------------------------------------------------------
@@ -738,8 +789,9 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 [ ] （可选 GLM vLLM）先跑 probe_glm_vllm.py：短 WAV、目录并发、--repeat 2（不要 --pad）
 [ ] v3：V3_DATASET_CFG / V3_SELECTION_CFG；runs: register 后的 artifact_id
 [ ] （存量 0908）方案 B 配置 zh_asr_v3_0908_30000.yaml + run_identities/
-[ ] （029 正式五类）pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml + zh_asr_five_class_v2_2_auto_noise_*.yaml；产物 classified_five_class_v2_2_auto_noise_*；勿覆盖 v1/v2
-[ ] （034 v2.3 候选默认）pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml + zh_asr_five_class_v2_3_min_acoustic_*.yaml；产物 classified_five_class_v2_3_min_acoustic_*；勿覆盖 v1/v2/v2.2；影子验收前勿切生产默认
+[ ] （029 正式五类 / stage1 内嵌）pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml + zh_asr_five_class_v2_2_auto_noise_*.yaml；产物 classified_five_class_v2_2_auto_noise_*；勿覆盖 v1/v2
+[ ] （037 后置入口默认 v2.4）pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml + zh_asr_five_class_v2_4_on_demand_acoustic_*.yaml；产物 classified_five_class_v2_4_on_demand_acoustic_*；勿覆盖 v2.3/v2.2/v2/v1
+[ ] （034 v2.3 legacy）pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml + zh_asr_five_class_v2_3_min_acoustic_*.yaml；产物 classified_five_class_v2_3_min_acoustic_*
 [ ] （033 人审入仓）pipelines/warehouse_export_annotation.yaml → 人工 review import → pipelines/warehouse_freeze.yaml；产物 warehouses/<batch>/；见 §2f-v3-033
 [ ] （027 历史对照）pipelines/classify_dataset_five_class_v1.yaml + zh_asr_five_class_v1_*.yaml；产物 classified_five_class_v1_*
 [ ] （028 自动噪声）pipelines/classify_dataset_five_class_v2_auto_noise.yaml + zh_asr_five_class_v2_auto_noise_*.yaml；产物 classified_five_class_v2_auto_noise_*；勿覆盖 v1

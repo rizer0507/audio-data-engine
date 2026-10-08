@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
 """工序一后置统一分类分拣入口：六路 ASR 已齐 → 五类分拣 → 完整 XLSX。
 
-默认（035 / 034）：五类 v2.3 最小声学证据
-  audio_energy → silero_vad → efficientat_candidates → efficientat → classify
-  产物 stem：*_five_class_v2_3_min_acoustic_*
-  与 pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml 语义等价。
+默认（五类 v3 / 037）：按需声学
+  asr_route → silero_vad(按需) → energy(按需严格全零) → dnsmos(按需SIG) → classify
+  产物 stem：*_five_class_v3_*
+  与 pipelines/classify_dataset_five_class_v3.yaml 语义等价。
+  规范：docs/02-规范规则/数据挑选规则_v3.md
 
-兼容旧批：--rule-version v2_2_auto_noise
-  audio_energy → dnsmos_v2_2_candidates → classify(v2.2)
-  产物 stem：*_five_class_v2_2_auto_noise_*（隔离，不覆盖 v2.3 默认路径）
+兼容：
+  --rule-version v2_4_on_demand_acoustic  # 同引擎，旧 stem
+  --rule-version v2_3_min_acoustic
+  --rule-version v2_2_auto_noise
 
 不启动 ASR、不伪造 register/reservation/release。
 
-别名解析顺序：
-  1. 显式 --family qwen=run1,run2（可重复三次）
-  2. 批次 dataset YAML 的 model_families
-  3. stage1 固定别名 qwen_1/2、glm_1/2、sensevoice_1/2
-
-示例（默认 v2.3）::
+示例（默认 v3）::
 
   python scripts/classify_asr_to_xlsx.py --batch \"$BATCH\" --energy-workers 32
-
-显式 legacy v2.2::
-
-  python scripts/classify_asr_to_xlsx.py --batch \"$BATCH\" \\
-    --rule-version v2_2_auto_noise --energy-workers 32
 """
 
 from __future__ import annotations
@@ -53,25 +45,51 @@ from audio_engine.core.selection_v3.input_contract import (
 from audio_engine.core.selection_v3.types import (
     RULE_VERSION_FIVE_CLASS_V2_2,
     RULE_VERSION_FIVE_CLASS_V2_3,
+    RULE_VERSION_FIVE_CLASS_V2_4,
+    RULE_VERSION_FIVE_CLASS_V3,
 )
 from audio_engine.core.source_naming import validate_asr_run, validate_source_name
 from audio_engine.core.stage1.cache_policy import FAMILY_RUN_ALIASES, REQUIRED_FAMILIES
 from audio_engine.operators.quality.aggregate_manifests import AggregateManifestsOperator
+from audio_engine.operators.quality.asr_route_v2_4 import AsrRouteV24Operator
 from audio_engine.operators.quality.audio_energy import AudioEnergyOperator
 from audio_engine.operators.quality.classify import ClassifyOperator
 from audio_engine.operators.quality.dnsmos_v2_2_candidates import DnsmosV22CandidatesOperator
 from audio_engine.operators.quality.efficientat import EfficientAtOperator
 from audio_engine.operators.quality.efficientat_candidates import EfficientAtCandidatesOperator
+from audio_engine.operators.quality.on_demand_acoustic_candidates import (
+    AudioEnergyCandidatesOperator,
+    DnsmosV24CandidatesOperator,
+    SileroVadCandidatesOperator,
+)
 from audio_engine.operators.quality.silero_vad import SileroVadOperator
 
 CATEGORIES = {"voicemail", "semantic_risk", "environment_noise", "gold_candidate", "hardcase"}
 
-# CLI short names (035); map to selection rule_version / stems / configs.
+# CLI short names；业务正式默认 = v3（037 按需声学）。
+RULE_CLI_V3 = "v3"
+RULE_CLI_V24 = "v2_4_on_demand_acoustic"
 RULE_CLI_V23 = "v2_3_min_acoustic"
 RULE_CLI_V22 = "v2_2_auto_noise"
-DEFAULT_RULE_VERSION = RULE_CLI_V23
+DEFAULT_RULE_VERSION = RULE_CLI_V3
 
 RULE_PROFILES = {
+    RULE_CLI_V3: {
+        "selection_rule": RULE_VERSION_FIVE_CLASS_V3,
+        "selection_config": "configs/selection/zh_asr_five_class_v3.yaml",
+        "xlsx_stem": "summary_five_class_v3",
+        "classified_stem": "classified_five_class_v3",
+        "pipeline_yaml": "pipelines/classify_dataset_five_class_v3.yaml",
+        "engine": "v2_4",
+    },
+    RULE_CLI_V24: {
+        "selection_rule": RULE_VERSION_FIVE_CLASS_V2_4,
+        "selection_config": "configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml",
+        "xlsx_stem": "summary_five_class_v2_4_on_demand_acoustic",
+        "classified_stem": "classified_five_class_v2_4_on_demand_acoustic",
+        "pipeline_yaml": "pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml",
+        "engine": "v2_4",
+    },
     RULE_CLI_V23: {
         "selection_rule": RULE_VERSION_FIVE_CLASS_V2_3,
         "selection_config": "configs/selection/zh_asr_five_class_v2_3_min_acoustic.yaml",
@@ -89,6 +107,13 @@ RULE_PROFILES = {
         "engine": "v2_2",
     },
 }
+
+V24_QUALITY_CONFIGS = (
+    "configs/quality/silero_vad_v1.yaml",
+    "configs/quality/audio_energy_v1.yaml",
+    "configs/quality/dnsmos_decision_v2_2.yaml",
+    "configs/quality/dnsmos_p835.yaml",
+)
 
 V23_QUALITY_CONFIGS = (
     "configs/quality/silero_vad_v1.yaml",
@@ -126,9 +151,44 @@ def resolve_rule_profile(rule_version: str) -> dict:
     if key not in RULE_PROFILES:
         raise ValueError(
             f"不支持的 --rule-version={rule_version!r}；"
-            f"可选: {RULE_CLI_V23}（默认）, {RULE_CLI_V22}（legacy）"
+            f"可选: {RULE_CLI_V3}（默认）, {RULE_CLI_V24}（同引擎旧 stem）, "
+            f"{RULE_CLI_V23}（legacy）, {RULE_CLI_V22}（legacy）"
         )
     return dict(RULE_PROFILES[key])
+
+
+def assert_v24_dependencies_ready() -> None:
+    """Fail loudly if v3 / 037 artifacts are missing."""
+    missing: list[str] = []
+    profile = RULE_PROFILES[RULE_CLI_V3]
+    for rel in (
+        profile["pipeline_yaml"],
+        profile["selection_config"],
+        *V24_QUALITY_CONFIGS,
+    ):
+        path = ROOT / rel
+        if not path.is_file():
+            missing.append(rel)
+    try:
+        from audio_engine.operators.quality import (  # noqa: F401
+            asr_route_v2_4,
+            on_demand_acoustic_candidates,
+            silero_vad,
+            audio_energy,
+        )
+        from audio_engine.core.selection_v3.classifier import classify_sample  # noqa: F401
+        from audio_engine.core.selection_v3.types import is_five_class_v3_rule
+
+        if not is_five_class_v3_rule(RULE_VERSION_FIVE_CLASS_V3):
+            missing.append("selection_five_class_v3 classifier hook")
+    except ImportError as exc:
+        missing.append(f"import: {exc}")
+    if missing:
+        raise FileNotFoundError(
+            "五类 v3 入口依赖未就绪。缺失：\n  - "
+            + "\n  - ".join(missing)
+            + f"\n可改用 --rule-version {RULE_CLI_V23} 或 {RULE_CLI_V22} 复现旧口径。"
+        )
 
 
 def assert_v23_dependencies_ready() -> None:
@@ -331,7 +391,52 @@ def _append_summary_stats(summary, samples, *, engine: str) -> None:
     for name, count in sorted(counts.items()):
         summary.append([name, count])
     summary.append(["总计", len(samples)])
-    if engine == "v2_3":
+
+    noise_kinds = Counter(
+        str(s.labels.get("noise_kind") or "")
+        for s in samples
+        if s.labels.get("category") == "environment_noise"
+    )
+    if any(noise_kinds.values()):
+        summary.append(["噪声子类合计", sum(noise_kinds.values())])
+        for kind, count in sorted(noise_kinds.items()):
+            if kind:
+                summary.append([f"  noise_kind={kind}", count])
+
+    if engine == "v2_4":
+        queue_counts = Counter()
+        silero_n = energy_n = dnsmos_n = 0
+        for s in samples:
+            route = (s.labels or {}).get("asr_route_v2_4") or {}
+            if isinstance(route, dict):
+                qid = route.get("early_category") or f"queue_{route.get('queue_id')}"
+                queue_counts[str(qid)] += 1
+            for key, flag in (
+                ("silero_vad_v2_4_candidate", "silero"),
+                ("audio_energy_v2_4_candidate", "energy"),
+                ("dnsmos_v2_4_candidate", "dnsmos"),
+            ):
+                cand = (s.labels or {}).get(key)
+                if isinstance(cand, dict) and cand.get("required"):
+                    if flag == "silero":
+                        silero_n += 1
+                    elif flag == "energy":
+                        energy_n += 1
+                    else:
+                        dnsmos_n += 1
+        summary.append(["ASR 预分流分布", str(dict(sorted(queue_counts.items())))])
+        summary.append(["Silero 按需调用数", silero_n])
+        summary.append(["energy 按需调用数", energy_n])
+        summary.append(["DNSMOS 按需调用数", dnsmos_n])
+        summary.append(
+            [
+                "说明",
+                "v2.4：ASR 预分流后按需 Silero/energy/DNSMOS(SIG)；EfficientAT 不在默认路径；"
+                "静默用严格全零；gold_candidate 为候选金标；excluded 保留排除原因；"
+                "配置家族=三族六路（映射简版四族/八路）",
+            ]
+        )
+    elif engine == "v2_3":
         vad_failed = sum(
             1
             for s in samples
@@ -355,7 +460,7 @@ def _append_summary_stats(summary, samples, *, engine: str) -> None:
         summary.append(
             [
                 "说明",
-                "v2.3：主声学证据为 Silero+EfficientAT；DNSMOS 不参与类别决策；"
+                "legacy v2.3：主声学证据为 Silero+EfficientAT；DNSMOS 不参与类别决策；"
                 "gold_candidate 为候选金标；excluded 保留排除原因",
             ]
         )
@@ -464,13 +569,74 @@ def attach_audio_energy(samples, energy_cfg: OperatorConfig, workers: int):
 
 
 def attach_silero_vad(samples, vad_cfg: OperatorConfig):
-    """Full-pass Silero; failures stay auditable (never forge present/absent)."""
+    """Silero pass; with respect_candidates only scores required samples."""
     vad = SileroVadOperator()
     total = len(samples)
     for i, sample in enumerate(samples):
         samples[i] = vad.process(sample, vad_cfg).sample
         if (i + 1) % 1000 == 0 or (i + 1) == total:
             print(f"  silero_vad {i + 1}/{total}", flush=True)
+    return samples
+
+
+def run_v24_engine(
+    samples,
+    *,
+    cfg,
+    cfg_path: Path,
+    batch: str,
+    dnsmos_config: Path,
+    energy_workers: int,
+    selection_rule: str = RULE_VERSION_FIVE_CLASS_V3,
+):
+    """Match pipelines/classify_dataset_five_class_v3.yaml (v2.4 engine)."""
+    print("[2/7] ASR 预分流", flush=True)
+    samples = AsrRouteV24Operator().run(
+        samples,
+        cfg(config_path=str(cfg_path), selection_config=str(cfg_path)),
+    )
+    print("[3/7] Silero VAD 候选 + 按需评分", flush=True)
+    samples = SileroVadCandidatesOperator().run(
+        samples,
+        cfg(config_path=str(cfg_path), selection_config=str(cfg_path)),
+    )
+    samples = attach_silero_vad(
+        samples,
+        cfg(config_path="configs/quality/silero_vad_v1.yaml", respect_candidates=True),
+    )
+    print("[4/7] audio_energy 候选 + 按需严格全零", flush=True)
+    samples = AudioEnergyCandidatesOperator().run(
+        samples,
+        cfg(config_path=str(cfg_path), selection_config=str(cfg_path)),
+    )
+    energy_cfg = cfg(
+        config_path="configs/quality/audio_energy_v1.yaml",
+        selection_config=str(cfg_path),
+        respect_candidates=True,
+    )
+    samples = attach_audio_energy(samples, energy_cfg, workers=energy_workers)
+    print("[5/7] DNSMOS 按需候选评分", flush=True)
+    sidecar = ROOT / f"datasets/stage1/derived/quality_sidecar_{batch}.parquet"
+    samples = DnsmosV24CandidatesOperator().run(
+        samples,
+        cfg(
+            config_path=str(cfg_path),
+            selection_config=str(cfg_path),
+            dnsmos_config=str(dnsmos_config),
+            quality_sidecar_manifest=str(sidecar) if sidecar.is_file() else None,
+        ),
+    )
+    print("[6/7] 五类 v3 分类", flush=True)
+    samples = ClassifyOperator().run(
+        samples,
+        cfg(
+            config_path=str(cfg_path),
+            rule_version=selection_rule,
+            noise_policy="asr_anomaly_noise_v1",
+            classify_text_policy="five_class_v1",
+            quality={"calibrated": False, "noise_policy": "asr_anomaly_noise_v1"},
+        ),
+    )
     return samples
 
 
@@ -529,7 +695,9 @@ def run_v22_engine(samples, *, cfg, cfg_path: Path, batch: str, dnsmos_config: P
 def run(args):
     validate_source_name(args.batch)
     profile = resolve_rule_profile(args.rule_version)
-    if profile["engine"] == "v2_3":
+    if profile["engine"] == "v2_4":
+        assert_v24_dependencies_ready()
+    elif profile["engine"] == "v2_3":
         assert_v23_dependencies_ready()
 
     families, family_source = resolve_families(args)
@@ -569,7 +737,7 @@ def run(args):
 
     output.parent.mkdir(parents=True, exist_ok=True)
     route_lines = "\n".join(format_route_inventory(routes))
-    steps = 5 if profile["engine"] == "v2_3" else 4
+    steps = {"v2_4": 7, "v2_3": 5, "v2_2": 4}.get(profile["engine"], 5)
     print(
         f"[0/{steps}] 前置检查通过 batch={args.batch} "
         f"rule_version={args.rule_version} engine={profile['engine']} "
@@ -612,15 +780,32 @@ def run(args):
                 require_hashes=True,
             ),
         )
-        print(f"[2/{steps}] 计算音频能量", flush=True)
-        energy_cfg = cfg(
-            config_path="configs/quality/audio_energy_v1.yaml", selection_config=str(cfg_path)
-        )
-        samples = attach_audio_energy(samples, energy_cfg, workers=args.energy_workers)
 
-        if profile["engine"] == "v2_3":
+        if profile["engine"] == "v2_4":
+            samples = run_v24_engine(
+                samples,
+                cfg=cfg,
+                cfg_path=cfg_path,
+                batch=args.batch,
+                dnsmos_config=args.dnsmos_config,
+                energy_workers=args.energy_workers,
+                selection_rule=profile["selection_rule"],
+            )
+        elif profile["engine"] == "v2_3":
+            print(f"[2/{steps}] 计算音频能量（全量）", flush=True)
+            energy_cfg = cfg(
+                config_path="configs/quality/audio_energy_v1.yaml",
+                selection_config=str(cfg_path),
+            )
+            samples = attach_audio_energy(samples, energy_cfg, workers=args.energy_workers)
             samples = run_v23_engine(samples, cfg=cfg, cfg_path=cfg_path, batch=args.batch)
         else:
+            print(f"[2/{steps}] 计算音频能量（全量）", flush=True)
+            energy_cfg = cfg(
+                config_path="configs/quality/audio_energy_v1.yaml",
+                selection_config=str(cfg_path),
+            )
+            samples = attach_audio_energy(samples, energy_cfg, workers=args.energy_workers)
             samples = run_v22_engine(
                 samples,
                 cfg=cfg,
@@ -651,8 +836,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_RULE_VERSION,
         choices=sorted(RULE_PROFILES.keys()),
         help=(
-            f"分拣规则短名；默认 {RULE_CLI_V23}（034 最小声学）；"
-            f"{RULE_CLI_V22} 为 legacy DNSMOS 口径"
+            f"分拣规则短名；默认 {RULE_CLI_V3}（五类 v3 / 按需声学）；"
+            f"{RULE_CLI_V24} 同引擎旧 stem；{RULE_CLI_V23} / {RULE_CLI_V22} 为 legacy"
         ),
     )
     parser.add_argument(
@@ -678,7 +863,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--dnsmos-config",
         type=Path,
         default=ROOT / "configs/quality/dnsmos_p835.yaml",
-        help=f"仅 --rule-version {RULE_CLI_V22} 使用；v2.3 默认不跑 DNSMOS",
+        help=(
+            f"DNSMOS 模型配置；默认 v2.4 按需候选与 legacy {RULE_CLI_V22} 使用；"
+            f"legacy {RULE_CLI_V23} 不跑 DNSMOS"
+        ),
     )
     parser.add_argument(
         "--output",

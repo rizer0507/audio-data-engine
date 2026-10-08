@@ -31,9 +31,42 @@ class AudioEnergyEvidence:
     energy_policy_version: str
     source: str = "computed"
     error: str | None = None
+    strict_all_channels_zero: bool | None = None
+    any_channel_nonzero: bool | None = None
+    channel_count: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def compute_strict_channel_zero(samples: np.ndarray) -> dict[str, Any]:
+    """Strict all-zero check *before* mono mix. Never use RMS thresholds here."""
+    arr = np.asarray(samples)
+    if arr.size == 0:
+        return {
+            "strict_all_channels_zero": True,
+            "any_channel_nonzero": False,
+            "channel_count": 0,
+        }
+    if arr.ndim == 1:
+        channels = [arr]
+    elif arr.ndim == 2:
+        # soundfile always_2d → (frames, channels)
+        if arr.shape[1] <= arr.shape[0] or arr.shape[0] < 8:
+            channels = [arr[:, i] for i in range(arr.shape[1])]
+        else:
+            # Rare (channels, frames) layout.
+            channels = [arr[i, :] for i in range(arr.shape[0])]
+    else:
+        flat = arr.reshape(-1)
+        channels = [flat]
+    all_zero = all(bool(np.all(ch == 0)) for ch in channels)
+    any_nonzero = any(bool(np.any(ch != 0)) for ch in channels)
+    return {
+        "strict_all_channels_zero": all_zero,
+        "any_channel_nonzero": any_nonzero,
+        "channel_count": len(channels),
+    }
 
 
 def _to_mono(data: np.ndarray) -> np.ndarray:
@@ -145,13 +178,15 @@ def read_energy_from_path(
     import soundfile as sf
 
     data, sr = sf.read(str(path), always_2d=False)
+    arr = np.asarray(data)
     metrics = compute_energy_from_array(
-        np.asarray(data),
+        arr,
         int(sr),
         frame_ms=frame_ms,
         silence_frame_dbfs=silence_frame_dbfs,
     )
     metrics["sample_rate"] = int(sr)
+    metrics.update(compute_strict_channel_zero(arr))
     return metrics
 
 
@@ -182,6 +217,9 @@ def energy_evidence_from_quality(
     peak = q.get("peak_dbfs")
     ratio = q.get("non_silent_ratio")
     state = str(q.get("energy_state") or "").strip()
+    strict_zero = q.get("strict_all_channels_zero")
+    any_nonzero = q.get("any_channel_nonzero")
+    channel_count = q.get("channel_count")
 
     if state in {
         ENERGY_STATE_TOO_SHORT,
@@ -198,6 +236,13 @@ def energy_evidence_from_quality(
             energy_state=state,
             energy_policy_version=policy,
             source="quality_fields",
+            strict_all_channels_zero=(
+                bool(strict_zero) if strict_zero is not None else None
+            ),
+            any_channel_nonzero=(
+                bool(any_nonzero) if any_nonzero is not None else None
+            ),
+            channel_count=int(channel_count) if channel_count is not None else None,
         )
 
     if duration_ms is not None and rms is not None and peak is not None and ratio is not None:
@@ -311,6 +356,13 @@ def compute_audio_energy_for_sample(
             energy_state=state,
             energy_policy_version=config.audio_energy_policy_version,
             source="computed",
+            strict_all_channels_zero=bool(metrics.get("strict_all_channels_zero")),
+            any_channel_nonzero=bool(metrics.get("any_channel_nonzero")),
+            channel_count=(
+                int(metrics["channel_count"])
+                if metrics.get("channel_count") is not None
+                else None
+            ),
         )
     except Exception as exc:  # noqa: BLE001 — isolate per-sample IO failures
         return AudioEnergyEvidence(

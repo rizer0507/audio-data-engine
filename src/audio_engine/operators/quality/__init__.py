@@ -21,6 +21,12 @@ from audio_engine.operators.quality.dnsmos_v2_2_candidates import DnsmosV22Candi
 from audio_engine.operators.quality.silero_vad import SileroVadOperator
 from audio_engine.operators.quality.efficientat_candidates import EfficientAtCandidatesOperator
 from audio_engine.operators.quality.efficientat import EfficientAtOperator
+from audio_engine.operators.quality.asr_route_v2_4 import AsrRouteV24Operator
+from audio_engine.operators.quality.on_demand_acoustic_candidates import (
+    AudioEnergyCandidatesOperator,
+    DnsmosV24CandidatesOperator,
+    SileroVadCandidatesOperator,
+)
 from audio_engine.operators.quality.build_dataset_v3 import BuildDatasetV3Operator
 from audio_engine.operators.quality.warehouse_export_annotation import (
     WarehouseExportAnnotationOperator,

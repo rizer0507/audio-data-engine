@@ -3541,9 +3541,9 @@ def stage1_wait(
 def stage1_classify(
     batch: str = typer.Option(..., "--batch", help="与各家族推理时同一 batch / source-name"),
     rule_version: str = typer.Option(
-        "v2_3_min_acoustic",
+        "v3",
         "--rule-version",
-        help="默认 v2_3_min_acoustic（034）；legacy 用 v2_2_auto_noise",
+        help="默认 v3（五类按需声学）；legacy: v2_4_on_demand_acoustic / v2_3_min_acoustic / v2_2_auto_noise",
     ),
     source_dir: Optional[Path] = typer.Option(
         None,
@@ -3564,17 +3564,17 @@ def stage1_classify(
     dnsmos_config: Path = typer.Option(
         Path("configs/quality/dnsmos_p835.yaml"),
         "--dnsmos-config",
-        help="仅 --rule-version v2_2_auto_noise 使用；v2.3 默认不跑 DNSMOS",
+        help="v2.4 按需 DNSMOS 与 legacy v2.2 使用；v2.3 不跑 DNSMOS",
     ),
     output: Optional[Path] = typer.Option(
         None,
         "--output",
-        help="默认 data/exports/summary_five_class_v2_3_min_acoustic_<batch>.xlsx",
+        help="默认 data/exports/summary_five_class_v3_<batch>.xlsx",
     ),
     classified_output: Optional[Path] = typer.Option(
         None,
         "--classified-output",
-        help="默认 datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_<batch>.parquet",
+        help="默认 datasets/stage1/derived/classified_five_class_v3_<batch>.parquet",
     ),
     no_classified_parquet: bool = typer.Option(
         False, "--no-classified-parquet", help="仅交付 XLSX，不写正式 classified parquet"
@@ -3583,14 +3583,14 @@ def stage1_classify(
         1,
         "--energy-workers",
         "--workers",
-        help="仅加速音频能量步线程并发（默认 1；不控制 Silero/EfficientAT）",
+        help="仅加速按需/全量音频能量步线程并发（默认 1）",
     ),
     overwrite: bool = typer.Option(False, "--overwrite"),
 ) -> None:
-    """六路 ASR 已齐后的统一五类分类入口（031/035）；默认 v2.3 最小声学。
+    """六路 ASR 已齐后的统一五类分类入口；默认五类 v3（按需声学）。
 
     复用 ``scripts/classify_asr_to_xlsx.py`` 同一实现；不伪造 register/reservation/release。
-    与 ``pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml`` 语义等价。
+    与 ``pipelines/classify_dataset_five_class_v3.yaml`` 语义等价。
     """
     import importlib.util
 

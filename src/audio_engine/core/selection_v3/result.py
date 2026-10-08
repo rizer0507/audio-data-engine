@@ -19,6 +19,7 @@ from audio_engine.core.selection_v3.types import (
     is_five_class_rule,
     is_five_class_v2_2_rule,
     is_five_class_v2_3_rule,
+    is_five_class_v2_4_rule,
     is_five_class_v2_rule,
 )
 
@@ -309,7 +310,9 @@ class ClassificationResultV3:
                 )
         if is_five_class_v2_rule(self.rule_version) or is_five_class_v2_2_rule(
             self.rule_version
-        ) or is_five_class_v2_3_rule(self.rule_version):
+        ) or is_five_class_v2_3_rule(self.rule_version) or is_five_class_v2_4_rule(
+            self.rule_version
+        ):
             labels["is_human_verified"] = False
             if self.outcome == "classified":
                 if self.category not in BUSINESS_CATEGORIES_FIVE_CLASS:

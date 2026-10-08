@@ -130,14 +130,15 @@ def test_parse_model_and_gpus():
     assert parse_gpus_option("4,5") == ["4", "5"]
 
 
-def test_plan_uses_v2_2_rule_and_six_aliases(tmp_path: Path):
+def test_plan_uses_v3_rule_and_six_aliases(tmp_path: Path):
     runtime = _filled_runtime(tmp_path)
     source = tmp_path / "wavs"
     source.mkdir()
     req = _request(tmp_path, runtime, source)
     summary = plan_job_summary(req)
     assert summary["selection_rule"] == SELECTION_RULE
-    assert "classify_dataset_five_class_v2_2_auto_noise" in summary["classify_pipeline"]
+    assert SELECTION_RULE == "selection_five_class_v3"
+    assert "classify_dataset_five_class_v3" in summary["classify_pipeline"]
     assert len(all_run_aliases()) == 6
     assert "asr_qwen_1" in default_stage_names()
     assert "asr_qwen_2" in default_stage_names()

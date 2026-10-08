@@ -48,7 +48,7 @@ from audio_engine.core.manifest import Manifest
 from audio_engine.core.sample import Sample
 from audio_engine.core.selection_v3.input_contract import original_audio_sha256
 
-DEFAULT_RULE_STEM = "classified_five_class_v2_3_min_acoustic"
+DEFAULT_RULE_STEM = "classified_five_class_v3"
 CATEGORY = "semantic_risk"
 AUDIO_KEYS = ("resampled_16k", "pcm_wav", "pcm_to_wav", "raw", "pcm_wav_path")
 CLOSER_EXT_DIR = Path(__file__).resolve().parent / "annotate_audio_closer_ext"

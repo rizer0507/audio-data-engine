@@ -35,7 +35,7 @@
 
 只问阻塞问题，例如：输入文件到底在哪、用哪张 GPU、热词原文是什么。不要让用户填技术表格。
 
-**五分类默认（028/029/034/035）**：`audio-data stage1 run` 内嵌 classify 步在影子验收前仍为 `pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml`（N≥3×双跑；编排 `audio_energy → dnsmos_v2_2_candidates → classify`）。**六路 ASR 已齐后的后置入口**（手册 `05` §2 / `stage1 classify` / `classify_asr_to_xlsx.py`）已由 [035](../04-改进需求/进行中/035-工序一后置分类入口同步v2.3.md) 默认切到 `v2_3_min_acoustic`（编排对齐 `pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml`）。`classify_dataset_five_class_v2_auto_noise.yaml` 是无 DNSMOS 联合语义的对照，五类 v1 与旧 `classify_dataset_v3*` 只作历史/legacy 复现，不要再写成新批次默认路径。
+**五分类默认（037 → 业务正式名 v3）**：`audio-data stage1 run` 内嵌 classify 与后置入口（手册 `05` §2 / `stage1 classify` / `classify_asr_to_xlsx.py`）**均默认** `selection_five_class_v3`（编排对齐 `pipelines/classify_dataset_five_class_v3.yaml`：ASR 预分流 → 按需 Silero / energy / DNSMOS(SIG) → classify）。工程兼容 ID `selection_five_class_v2_4_on_demand_acoustic` / CLI `--rule-version v2_4_on_demand_acoustic` 同引擎、旧 stem。`v2_3_min_acoustic` / `v2_2_auto_noise` 仍可通过 `--rule-version` 复现。五类 v1/v2 与旧 `classify_dataset_v3*` / `selection_v3.0` 只作历史/legacy 复现，不要再写成新批次默认路径。规范：[数据挑选规则_v3](../02-规范规则/数据挑选规则_v3.md)。
 
 ---
 

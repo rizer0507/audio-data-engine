@@ -3,10 +3,10 @@
 # 对齐：docs/01-项目架构/工序总览.md · 工序一
 # 详解：手册/dev/00-总详细手册.txt
 # 一条命令多步骤：手册/dev/05-一条命令多步骤.txt（030 全链路 / 031 后置分类）
-# 分拣默认：selection_five_class_v2_2_auto_noise（029）；v2/v1 对照；legacy 回退 asr_anomaly + selection_v3.0
+# 分拣默认：selection_five_class_v3（037 按需声学）；v2.4/v2.3/v2.2/v2/v1 对照；legacy 回退 asr_anomaly + selection_v3.0
 # 家族数 N≥3×双跑（015），三族无需补 Kimi
-# 规则 SSOT：docs/02-规范规则/数据挑选规则_v2_2_auto_noise.md
-# 噪声：audio_energy + DNSMOS 候选联合判定；全量 sidecar 仅研究/复用。详解见下方 §3b
+# 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.md
+# 噪声：ASR 预分流 + 按需 Silero/energy/DNSMOS(SIG)；全量 sidecar 仅研究/复用。详解见下方 §3b
 # 依赖：classify 文本相似度需 rapidfuzz（019；pip install -e . 已含）
 # 前置：tmux 内已起好所需 ASR 服务（见 00 §2.0）；勿用裸 VS Code/Tabby 终端过夜
 #       vLLM 与本批 pipeline 分开会话；Ctrl+b d 脱离后断线不停

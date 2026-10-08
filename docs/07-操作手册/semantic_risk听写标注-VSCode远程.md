@@ -46,7 +46,7 @@ export BATCH=<批次名>
 
 | 项 | 要求 |
 |----|------|
-| 分类产物 | 默认 `datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}.parquet` |
+| 分类产物 | 默认 `datasets/stage1/derived/classified_five_class_v3_${BATCH}.parquet` |
 | 音频可读 | 样本 `audio.resampled_16k`（或 `pcm_wav` / `pcm_to_wav`）在服务器上存在 |
 | Remote | VS Code / Cursor 已 Remote-SSH 到该服务器；资源管理器能打开并播放 `.wav` |
 | 批次数 | `--batch` 与分类时一致 |
@@ -99,7 +99,7 @@ datasets/stage1/review/semantic_risk_transcripts/${BATCH}/
 | 选项 | 含义 |
 |------|------|
 | `--classified PATH` | 指定分类 parquet（非默认路径时用） |
-| `--rule-stem STEM` | 默认 `classified_five_class_v2_3_min_acoustic`；legacy 可改 v2.2 stem |
+| `--rule-stem STEM` | 默认 `classified_five_class_v3`；legacy 可改 v2.4/v2.3/v2.2 stem |
 | `--work-dir DIR` | 自定义工作目录 |
 | `--no-link-wav` | 不建软链（仍写 queue + playlist；听音用绝对路径） |
 | `--overwrite-links` | 重建 `wav/` 目录 |
@@ -190,8 +190,8 @@ python scripts/annotate_semantic_risk_transcripts.py merge \
 默认输出：
 
 ```text
-datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}_with_gold.parquet
-datasets/stage1/derived/classified_five_class_v2_3_min_acoustic_${BATCH}_with_gold.parquet.merge_report.json
+datasets/stage1/derived/classified_five_class_v3_${BATCH}_with_gold.parquet
+datasets/stage1/derived/classified_five_class_v3_${BATCH}_with_gold.parquet.merge_report.json
 ```
 
 ---
@@ -303,3 +303,13 @@ PY
 | 双审门禁 | 无 | 有 |
 
 本入口适合快速听写校准、补 `gold_text`；若要进入正式训练金标与 batch 仓库冻结，请转 [batch唯一数据仓库-人工标注入仓.md](./batch唯一数据仓库-人工标注入仓.md)。
+
+---
+
+## 10. 独立 Web 标注台（另一仓库）
+
+若要用 Web 台替代本 CLI 的 `label` 环节（无登录、按 Task 外部分配），先验与导入/导出契约见：
+
+[039-语音标注平台构建先验](../04-改进需求/进行中/039-语音标注平台构建先验.md)
+
+交互样稿：`tmp/0924/语音标注平台_静态页面方案.html`。平台导出的 annotations 仍可用本节 `merge` 回填。

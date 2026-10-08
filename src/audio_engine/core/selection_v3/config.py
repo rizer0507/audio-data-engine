@@ -904,6 +904,7 @@ class SelectionV3Config:
             is_any_five_class_rule,
             is_five_class_v2_2_rule,
             is_five_class_v2_3_rule,
+            is_five_class_v2_4_rule,
             is_five_class_v2_rule,
         )
 
@@ -913,6 +914,7 @@ class SelectionV3Config:
             is_five_class_v2_rule(cfg.rule_version)
             or is_five_class_v2_2_rule(cfg.rule_version)
             or is_five_class_v2_3_rule(cfg.rule_version)
+            or is_five_class_v2_4_rule(cfg.rule_version)
         ) and not cfg.critical_short_responses:
             cfg.critical_short_responses = list(_DEFAULT_CRITICAL_SHORT_RESPONSES)
         if is_five_class_v2_2_rule(cfg.rule_version) and cfg.dnsmos_decision_enabled:
@@ -923,6 +925,16 @@ class SelectionV3Config:
                 )
             if not cfg.dnsmos_decision_policy_version:
                 raise ValueError("dnsmos_decision.policy_version must be non-empty")
+        if is_five_class_v2_4_rule(cfg.rule_version):
+            if not cfg.silero_vad_config_path:
+                raise ValueError(
+                    "selection_five_class_v3/v2_4 requires silero_vad.config_path"
+                )
+            if getattr(cfg, "dnsmos_weak_sig", None) is None:
+                raise ValueError(
+                    "selection_five_class_v3/v2_4 requires dnsmos_decision thresholds "
+                    "(weak_sig) via dnsmos_decision.config_path"
+                )
         if is_five_class_v2_3_rule(cfg.rule_version):
             if not cfg.silero_vad_config_path:
                 raise ValueError(

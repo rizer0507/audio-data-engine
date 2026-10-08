@@ -122,9 +122,9 @@ class Stage1Orchestrator:
             "prepared": STAGE1_DERIVED_DIR / f"prepared_v3_{batch}.parquet",
             "prepared_asr": STAGE1_DERIVED_DIR / f"prepared_asr_v3_{batch}.parquet",
             "classified": STAGE1_DERIVED_DIR
-            / f"classified_five_class_v2_2_auto_noise_{batch}.parquet",
+            / f"classified_five_class_v3_{batch}.parquet",
             "export": Path("data/exports")
-            / f"summary_five_class_v2_2_auto_noise_{batch}.xlsx",
+            / f"summary_five_class_v3_{batch}.xlsx",
             "dataset": self.job_root / "dataset.yaml",
             "selection": self.job_root / "selection.yaml",
             **{f"asr_{k}": v for k, v in asr.items()},

@@ -1,0 +1,61 @@
+# 五类分拣 v3（业务正式名）= 037 按需声学
+# 规范：docs/02-规范规则/数据挑选规则_v3.md
+# 独立产物 *_five_class_v3_*，不覆盖 v2.4 / v2.3 / v2.2 / v2 / v1 / 旧 classified_v3_*。
+# 编排：asr_route → silero 按需 → energy 按需严格全零 → dnsmos 按需 SIG → classify
+#
+#   audio-data pipeline run pipelines/classify_dataset_five_class_v3.yaml \
+#     --source-name 0914-mixed-30000 \
+#     --config configs/selection/zh_asr_five_class_v3_0914_mixed_30000.yaml
+
+name: classify_dataset_five_class_v3
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_five_class_v3_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: asr_route
+    operator: quality.asr_route_v2_4
+    params:
+      config_path: configs/selection/zh_asr_five_class_v3.yaml
+      selection_config: configs/selection/zh_asr_five_class_v3.yaml
+  - name: select_silero_candidates
+    operator: quality.silero_vad_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v3.yaml
+      selection_config: configs/selection/zh_asr_five_class_v3.yaml
+  - name: attach_silero_vad
+    operator: quality.silero_vad
+    params:
+      config_path: configs/quality/silero_vad_v1.yaml
+      respect_candidates: true
+  - name: select_energy_candidates
+    operator: quality.audio_energy_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v3.yaml
+      selection_config: configs/selection/zh_asr_five_class_v3.yaml
+  - name: attach_audio_energy
+    operator: quality.audio_energy
+    params:
+      config_path: configs/quality/audio_energy_v1.yaml
+      selection_config: configs/selection/zh_asr_five_class_v3.yaml
+      respect_candidates: true
+  - name: select_and_score_dnsmos
+    operator: quality.dnsmos_v2_4_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v3.yaml
+      selection_config: configs/selection/zh_asr_five_class_v3.yaml
+      dnsmos_config: configs/quality/dnsmos_p835.yaml
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_five_class_v3.yaml
+      rule_version: selection_five_class_v3
+      noise_policy: asr_anomaly_noise_v1
+      classify_text_policy: five_class_v1
+      quality:
+        calibrated: false
+        noise_policy: asr_anomaly_noise_v1

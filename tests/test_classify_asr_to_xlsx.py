@@ -102,29 +102,96 @@ def batch(tmp_path, monkeypatch, stub_silero):
         family=[f"{f}={','.join(a)}" for f, a in families.items()],
         output=tmp_path / "out.xlsx",
         no_classified_parquet=True,
-        rule_version=script.RULE_CLI_V23,
+        rule_version=script.DEFAULT_RULE_VERSION,
     )
 
 
-def test_default_rule_version_is_v23():
-    assert script.DEFAULT_RULE_VERSION == "v2_3_min_acoustic"
+def test_default_rule_version_is_v3():
+    assert script.DEFAULT_RULE_VERSION == "v3"
     profile = script.resolve_rule_profile(script.DEFAULT_RULE_VERSION)
+    assert profile["xlsx_stem"] == "summary_five_class_v3"
+    assert profile["classified_stem"] == "classified_five_class_v3"
+    assert profile["engine"] == "v2_4"
+    assert profile["selection_rule"] == "selection_five_class_v3"
+
+
+def test_v24_rule_version_isolated_stems():
+    profile = script.resolve_rule_profile("v2_4_on_demand_acoustic")
+    assert profile["xlsx_stem"] == "summary_five_class_v2_4_on_demand_acoustic"
+    assert profile["classified_stem"] == "classified_five_class_v2_4_on_demand_acoustic"
+    assert profile["engine"] == "v2_4"
+    default = script.resolve_rule_profile(script.DEFAULT_RULE_VERSION)
+    assert profile["xlsx_stem"] != default["xlsx_stem"]
+    assert profile["classified_stem"] != default["classified_stem"]
+
+
+def test_legacy_v23_rule_version_isolated_stems():
+    profile = script.resolve_rule_profile("v2_3_min_acoustic")
     assert profile["xlsx_stem"] == "summary_five_class_v2_3_min_acoustic"
     assert profile["classified_stem"] == "classified_five_class_v2_3_min_acoustic"
     assert profile["engine"] == "v2_3"
-    assert profile["selection_rule"] == "selection_five_class_v2_3_min_acoustic"
+    # Must not collide with v2.4 defaults.
+    default = script.resolve_rule_profile(script.DEFAULT_RULE_VERSION)
+    assert profile["xlsx_stem"] != default["xlsx_stem"]
+    assert profile["classified_stem"] != default["classified_stem"]
 
 
 def test_legacy_rule_version_isolated_stems():
     profile = script.resolve_rule_profile("v2_2_auto_noise")
     assert profile["xlsx_stem"] == "summary_five_class_v2_2_auto_noise"
+    assert profile["classified_stem"] == "classified_five_class_v2_2_auto_noise"
     assert profile["engine"] == "v2_2"
-    assert "v2_3" not in profile["xlsx_stem"]
+    default = script.resolve_rule_profile(script.DEFAULT_RULE_VERSION)
+    assert profile["xlsx_stem"] != default["xlsx_stem"]
+    assert profile["classified_stem"] != default["classified_stem"]
+    assert "v2_4" not in profile["xlsx_stem"]
 
 
 def test_unknown_rule_version_rejected():
     with pytest.raises(ValueError, match="不支持的 --rule-version"):
         script.resolve_rule_profile("v9_fake")
+
+
+def test_v3_pipeline_steps_match_yaml_order():
+    """Default entrance orchestration must stay aligned with the formal v3 pipeline YAML."""
+    text = (ROOT / "pipelines/classify_dataset_five_class_v3.yaml").read_text(
+        encoding="utf-8"
+    )
+    for needle in (
+        "quality.asr_route_v2_4",
+        "quality.silero_vad_candidates",
+        "quality.silero_vad",
+        "quality.audio_energy_candidates",
+        "quality.audio_energy",
+        "quality.dnsmos_v2_4_candidates",
+        "quality.classify",
+        "selection_five_class_v3",
+    ):
+        assert needle in text
+    assert "quality.efficientat" not in text
+    src = (ROOT / "scripts/classify_asr_to_xlsx.py").read_text(encoding="utf-8")
+    assert "run_v24_engine" in src
+    assert "AsrRouteV24Operator" in src
+    assert "DnsmosV24CandidatesOperator" in src
+
+
+def test_v24_pipeline_steps_match_yaml_order():
+    """Legacy v2.4 stem pipeline must stay aligned with its formal YAML."""
+    text = (ROOT / "pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml").read_text(
+        encoding="utf-8"
+    )
+    for needle in (
+        "quality.asr_route_v2_4",
+        "quality.silero_vad_candidates",
+        "quality.silero_vad",
+        "quality.audio_energy_candidates",
+        "quality.audio_energy",
+        "quality.dnsmos_v2_4_candidates",
+        "quality.classify",
+        "selection_five_class_v2_4_on_demand_acoustic",
+    ):
+        assert needle in text
+    assert "quality.efficientat" not in text
 
 
 def test_v23_pipeline_steps_match_yaml_order():
@@ -164,8 +231,6 @@ def test_end_to_end_single_workbook(batch):
     for col in (
         "vad_speech_state",
         "speech_ratio",
-        "audio_event_state",
-        "acoustic_state",
         "decision_evidence",
         "hardcase_reason",
         "noise_kind",
@@ -174,21 +239,22 @@ def test_end_to_end_single_workbook(batch):
     assert {r["vad_speech_state"] for r in rows} == {"absent"}
     assert len([h for h in headers if h.endswith(("-a_text", "-b_text"))]) == 6
     stats = list(book["分类统计"].values)
-    assert any(row[0] == "VAD failed" for row in stats)
+    assert any(row[0] == "Silero 按需调用数" for row in stats)
+    assert any(row[0] == "energy 按需调用数" for row in stats)
     assert not any(row[0] == "DNSMOS 回退 v2" for row in stats)
+    assert not any(row[0] == "EfficientAT 调用/有状态条数" for row in stats)
     book.close()
     assert list(batch.output.parent.glob("classify_demo_*")) == []
     with pytest.raises(ValueError, match="输出已存在"):
         script.run(batch)
 
 
-def test_default_output_stems_are_v23(batch, tmp_path):
+def test_default_output_stems_are_v3(batch, tmp_path):
     batch.output = None
     batch.no_classified_parquet = False
     batch.classified_output = None
-    # Redirect defaults into tmp by patching helpers.
-    xlsx = tmp_path / "summary_five_class_v2_3_min_acoustic_demo.xlsx"
-    parquet = tmp_path / "classified_five_class_v2_3_min_acoustic_demo.parquet"
+    xlsx = tmp_path / "summary_five_class_v3_demo.xlsx"
+    parquet = tmp_path / "classified_five_class_v3_demo.parquet"
     batch.output = xlsx
     batch.classified_output = parquet
     script.run(batch)
@@ -196,14 +262,16 @@ def test_default_output_stems_are_v23(batch, tmp_path):
     assert parquet.is_file()
     classified = list(Manifest.load(parquet))
     assert all(
-        str(s.labels.get("rule_version") or "").startswith("selection_five_class_v2_3")
+        str(s.labels.get("rule_version") or "").startswith(
+            "selection_five_class_v3"
+        )
         for s in classified
     )
-    # No DNSMOS decision fields as primary evidence.
-    assert all(not s.labels.get("v2_fallback") for s in classified)
+    assert all(s.labels.get("category") == "environment_noise" for s in classified)
+    assert all(s.labels.get("noise_kind") == "silence" for s in classified)
 
 
-def test_legacy_v22_isolated_from_v23_defaults(batch, tmp_path, monkeypatch):
+def test_legacy_v22_isolated_from_v3_defaults(batch, tmp_path, monkeypatch):
     batch.rule_version = script.RULE_CLI_V22
     batch.output = tmp_path / "summary_five_class_v2_2_auto_noise_demo.xlsx"
     batch.no_classified_parquet = False
@@ -211,7 +279,9 @@ def test_legacy_v22_isolated_from_v23_defaults(batch, tmp_path, monkeypatch):
     script.run(batch)
     assert batch.output.is_file()
     assert batch.classified_output.is_file()
-    # Default v2.3 paths must remain untouched.
+    # Default v3 / v2.4 paths must remain untouched.
+    assert not (tmp_path / "summary_five_class_v3_demo.xlsx").exists()
+    assert not (tmp_path / "summary_five_class_v2_4_on_demand_acoustic_demo.xlsx").exists()
     assert not (tmp_path / "summary_five_class_v2_3_min_acoustic_demo.xlsx").exists()
     book = load_workbook(batch.output)
     stats = list(book["分类统计"].values)
@@ -361,9 +431,8 @@ def test_historical_source_outside_current_directory_is_allowed(batch):
 def test_failed_route_is_not_empty_vote(batch):
     """Failed ASR status must not be treated as successful empty text.
 
-    Under v2.3, silence + VAD absent still lands in environment_noise/silence
-    even if one route failed; the important regression is that classification
-    completes with auditable acoustic evidence (not forged DNSMOS).
+    Under v2.4, a failed route blocks queue B (all dual success + raw empty) and
+    lands in hardcase — never forged silence from incomplete family evidence.
     """
     path = batch.asr_dir / "glm-a_asr_demo.parquet"
     samples = list(Manifest.load(path))
@@ -375,11 +444,7 @@ def test_failed_route_is_not_empty_vote(batch):
     values = list(book["分类明细"].values)
     headers = values[0]
     category = headers.index("category")
-    noise = headers.index("noise_kind")
-    vad = headers.index("vad_speech_state")
-    assert {row[category] for row in values[1:]} == {"environment_noise"}
-    assert {row[noise] for row in values[1:]} == {"silence"}
-    assert {row[vad] for row in values[1:]} == {"absent"}
+    assert {row[category] for row in values[1:]} == {"hardcase"}
     book.close()
 
 
@@ -410,4 +475,4 @@ def test_source_dir_optional_when_cleaned_self_contained(batch):
 def test_parser_default_rule_version():
     parser = script.build_parser()
     args = parser.parse_args(["--batch", "demo"])
-    assert args.rule_version == "v2_3_min_acoustic"
+    assert args.rule_version == "v3"

@@ -95,6 +95,37 @@ class SileroVadOperator(BaseOperator):
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         params = dict(config.params)
+        # 037 on-demand: skip non-candidates without forging present/absent.
+        if params.get("respect_candidates"):
+            labels = sample.labels if isinstance(sample.labels, dict) else {}
+            cand = labels.get("silero_vad_v2_4_candidate")
+            required = False
+            if isinstance(cand, dict):
+                required = bool(cand.get("required"))
+            elif cand is True:
+                required = True
+            quality = dict(sample.quality or {})
+            if not required:
+                from audio_engine.core.selection_v3.types import ACOUSTIC_STATUS_NOT_REQUIRED
+
+                if quality.get("vad_status") != ACOUSTIC_STATUS_NOT_REQUIRED:
+                    quality.update(
+                        {
+                            "vad_status": ACOUSTIC_STATUS_NOT_REQUIRED,
+                            "vad_speech_state": None,
+                            "speech_ratio": None,
+                            "vad_error": None,
+                        }
+                    )
+                return {
+                    "quality": quality,
+                    "lineage": {
+                        "operator": self.full_name,
+                        "version": self.version,
+                        "params": {"respect_candidates": True, "skipped": True},
+                    },
+                }
+
         vad_cfg = _load_vad_config(params)
         input_key = str(vad_cfg.input_audio_key or "resampled_16k")
         try:

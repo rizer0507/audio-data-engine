@@ -1,0 +1,64 @@
+# 037 五类分拣 v2.4 按需声学入口（selection_five_class_v2_4_on_demand_acoustic）。
+# 独立产物，不覆盖 classified_five_class_v2_3_min_acoustic_* / v2_2 / v2 / v1 /
+# classified_v3_* / 审核包 / release。
+# 输入前提：上游已做清洗 + 全量 ASR；本流水线不重跑 GPU ASR、不做音频清洗。
+# 编排：asr_route → silero_vad_candidates → silero_vad(按需)
+#       → audio_energy_candidates → audio_energy(按需严格全零)
+#       → dnsmos_v2_4_candidates → classify
+#
+#   audio-data pipeline run pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml \
+#     --source-name 0914-mixed-30000 \
+#     --config configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic_0914_mixed_30000.yaml
+
+name: classify_dataset_five_class_v2_4_on_demand_acoustic
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/classified_five_class_v2_4_on_demand_acoustic_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+pipeline:
+  - name: asr_route
+    operator: quality.asr_route_v2_4
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+  - name: select_silero_candidates
+    operator: quality.silero_vad_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+  - name: attach_silero_vad
+    operator: quality.silero_vad
+    params:
+      config_path: configs/quality/silero_vad_v1.yaml
+      respect_candidates: true
+  - name: select_energy_candidates
+    operator: quality.audio_energy_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+  - name: attach_audio_energy
+    operator: quality.audio_energy
+    params:
+      config_path: configs/quality/audio_energy_v1.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+      respect_candidates: true
+  - name: select_and_score_dnsmos
+    operator: quality.dnsmos_v2_4_candidates
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+      selection_config: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+      dnsmos_config: configs/quality/dnsmos_p835.yaml
+  - name: classify
+    operator: quality.classify
+    params:
+      config_path: configs/selection/zh_asr_five_class_v2_4_on_demand_acoustic.yaml
+      rule_version: selection_five_class_v2_4_on_demand_acoustic
+      noise_policy: asr_anomaly_noise_v1
+      classify_text_policy: five_class_v1
+      quality:
+        calibrated: false
+        noise_policy: asr_anomaly_noise_v1

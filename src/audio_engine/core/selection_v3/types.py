@@ -15,6 +15,10 @@ RULE_VERSION_FIVE_CLASS_V2 = "selection_five_class_v2_auto_noise"
 RULE_VERSION_FIVE_CLASS_V2_2 = "selection_five_class_v2_2_auto_noise"
 # 034 min acoustic evidence (Silero + EfficientAT). Independent of v2.2.
 RULE_VERSION_FIVE_CLASS_V2_3 = "selection_five_class_v2_3_min_acoustic"
+# 037 on-demand acoustic (Silero / energy / DNSMOS SIG). Independent of v2.3.
+RULE_VERSION_FIVE_CLASS_V2_4 = "selection_five_class_v2_4_on_demand_acoustic"
+# 业务正式名：五类分拣 v3（与 v2.4 同一实现；产物 stem 用 five_class_v3）。
+RULE_VERSION_FIVE_CLASS_V3 = "selection_five_class_v3"
 TOLERANCE_VERSION = "text_tolerance_v1"
 # 025 opt-in text pre-layer. Production default stays legacy until an explicit switch.
 CLASSIFY_TEXT_VERSION = "classify_text_zh_only_v1"
@@ -331,9 +335,32 @@ def is_five_class_rule(rule_version: str | None) -> bool:
     return text == RULE_VERSION_FIVE_CLASS or text.startswith("selection_five_class_v1")
 
 
+def is_five_class_v3_rule(rule_version: str | None) -> bool:
+    """True for production five-class v3 (037 / 简版0922 on-demand acoustic)."""
+    text = str(rule_version or "").strip()
+    if text == RULE_VERSION_FIVE_CLASS_V3 or text.startswith("selection_five_class_v3"):
+        # Avoid colliding with historical selection_v3.0 / five_class_v2_3.
+        if text.startswith("selection_five_class_v2"):
+            return False
+        return True
+    return False
+
+
+def is_five_class_v2_4_rule(rule_version: str | None) -> bool:
+    """True for 037 engineering id or production v3 alias."""
+    text = str(rule_version or "").strip()
+    if is_five_class_v3_rule(text):
+        return True
+    return text == RULE_VERSION_FIVE_CLASS_V2_4 or text.startswith(
+        "selection_five_class_v2_4"
+    )
+
+
 def is_five_class_v2_3_rule(rule_version: str | None) -> bool:
     """True only for 034 ``selection_five_class_v2_3_min_acoustic``."""
     text = str(rule_version or "").strip()
+    if is_five_class_v2_4_rule(text):
+        return False
     return text == RULE_VERSION_FIVE_CLASS_V2_3 or text.startswith(
         "selection_five_class_v2_3"
     )
@@ -348,9 +375,13 @@ def is_five_class_v2_2_rule(rule_version: str | None) -> bool:
 
 
 def is_five_class_v2_rule(rule_version: str | None) -> bool:
-    """True only for 028 ``selection_five_class_v2_auto_noise`` (not v2.2/v2.3)."""
+    """True only for 028 ``selection_five_class_v2_auto_noise`` (not v2.2+)."""
     text = str(rule_version or "").strip()
-    if is_five_class_v2_2_rule(text) or is_five_class_v2_3_rule(text):
+    if (
+        is_five_class_v2_2_rule(text)
+        or is_five_class_v2_3_rule(text)
+        or is_five_class_v2_4_rule(text)
+    ):
         return False
     return text == RULE_VERSION_FIVE_CLASS_V2 or text.startswith(
         "selection_five_class_v2"
@@ -358,12 +389,13 @@ def is_five_class_v2_rule(rule_version: str | None) -> bool:
 
 
 def is_any_five_class_rule(rule_version: str | None) -> bool:
-    """True for five-class strategies (v1, v2, v2.2, or v2.3)."""
+    """True for five-class strategies (v1, v2, v2.2, v2.3, v2.4/v3)."""
     return (
         is_five_class_rule(rule_version)
         or is_five_class_v2_rule(rule_version)
         or is_five_class_v2_2_rule(rule_version)
         or is_five_class_v2_3_rule(rule_version)
+        or is_five_class_v2_4_rule(rule_version)
     )
 
 
@@ -403,3 +435,14 @@ NOISE_KIND_HUMAN_NOISE = "human_noise"
 NOISE_KIND_SILENCE = "silence"
 NOISE_KIND_AUDIO_TOO_SHORT = "audio_too_short"
 NOISE_KIND_CROSSTALK = "crosstalk"
+# 037 / 简版0922：非静默背景噪声（禁止用单纯 background 冒充本口径）。
+NOISE_KIND_BACKGROUND_SUSPECTED = "background_suspected"
+
+# 037 semantic_risk subtypes (简版0922).
+RISK_TAG_QWEN_HALLUCINATION_SUSPECTED = "qwen_hallucination_suspected"
+RISK_TAG_POLARITY_CONFLICT = "polarity_conflict"
+RISK_TAG_CRITICAL_POLARITY_RESPONSE = "critical_polarity_response"
+
+# On-demand operator status (037). Distinct from success/failed.
+ACOUSTIC_STATUS_NOT_REQUIRED = "not_required"
+ACOUSTIC_STATUS_PENDING = "pending"
