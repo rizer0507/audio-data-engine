@@ -1,0 +1,169 @@
+audio-qwen3-asr-train/                         # V1 建议框架；新增能力分步实现
+│                                             # 主链路：治理 → 标注 → 治理质检与冻结 → 训练 → 评测 → 治理回流
+│
+├── README.md                                 # 项目入口：三平台关系、目录说明、实验操作入口
+├── pyproject.toml                            # 项目打包及依赖声明；区分训练、评测依赖
+├── upstream.lock.json                        # 固定 Qwen 上游版本、来源及本地补丁信息
+├── .gitignore                                # 排除音频、权重、缓存及运行产物；保留目录说明
+│
+├── qwen_asr/                                 # 【保留】上游模型、processor 与推理核心
+│
+├── finetuning/                               # 【保留】现有训练基线；逐步由业务层统一封装
+│   ├── qwen3_asr_sft.py                       # 现有全参数 SFT 入口
+│   ├── qwen3_asr_lora.py                      # 现有 LoRA 入口
+│   └── configs/                              # 现有配置作为迁移参照；新实验配置统一放根 configs/
+│
+├── asr_engine/                               # 自定义训练平台核心：承接三平台契约与实验流程
+│   │
+│   ├── contracts/                            # 跨平台数据契约，明确字段、身份、状态及版本含义
+│   │   ├── sample.py                         # batch/sample_id/原始音频摘要；保留类别、标注及排除语义
+│   │   ├── release.py                        # DatasetRelease、artifact 引用与四类数据分区契约
+│   │   └── artifacts.py                      # 训练输入、模型、评测和回流制品的元数据契约
+│   │
+│   ├── integrations/                         # 外部平台交接层，隔离文件、catalog、CLI 和 API 差异
+│   │   ├── governance.py                     # 解析治理 Release/artifact；交接质检、模型及评测记录
+│   │   ├── labeling.py                       # 标注进度、导出及来源关联；正式数据仍经治理发布
+│   │   └── training_bridge.py                # 桥接治理 AUDIO_DATA_* 环境变量与训练参数；统一启动归属
+│   │
+│   ├── data/                                 # 将冻结治理数据转换成训练输入
+│   │   ├── manifest.py                       # 读取 Parquet/JSONL，解析 JSON 字符串列与字段映射
+│   │   ├── admission.py                      # 复验标签来源、审核策略、分区及泄漏证据
+│   │   │                                     # 先硬排除多人/other/排除标记；区分 null 与空字符串
+│   │   ├── audio.py                          # 服务器路径映射、解码、采样率、时长与实际音频摘要检查
+│   │   ├── qwen_adapter.py                   # Manifest → audio/text/prompt；统一语言前缀和目标编码
+│   │   ├── lineage.py                        # JSONL 行号 → 原始身份、标注来源、音频变体及摘要
+│   │   └── augmentation.py                   # 【后置】训练分区内的噪声等增强；记录参数与派生血缘
+│   │
+│   ├── models/                               # 模型与训练方法解耦，统一模型装载和产物识别
+│   │   ├── loader.py                         # 加载 Base、全参 checkpoint、Base+LoRA
+│   │   └── export.py                         # LoRA 合并、完整性检查、重新加载验证及模型记录生成
+│   │
+│   ├── training/                             # 共享训练流程，通过方法配置开展对照实验
+│   │   ├── runner.py                         # 数据、processor、collator、优化器、dev 验证及保存流程
+│   │   ├── methods/
+│   │   │   ├── full_sft.py                   # 全参数 SFT；显式确定音频塔、投影层、解码器训练范围
+│   │   │   └── lora.py                       # LoRA；控制 thinker/audio/audio_thinker 与注入模块
+│   │   └── extensions/                       # 【后置】自定义 loss、采样、冻结策略等实验扩展
+│   │
+│   ├── evaluation/                           # 独立评测链路；dev 用于训练验证，固定评测集用于比较
+│   │   ├── inference.py                      # Base/全参/LoRA 使用固定推理配置，输出带身份的预测
+│   │   ├── metrics.py                        # 对接治理评测；统一并补齐 CER/NFR/FAR/NAHR/FAER
+│   │   ├── slices.py                         # 否定、噪声、串音、语气词、clean/easy 等切片统计
+│   │   └── report.py                         # 汇总样本量、对照差异、多 seed 结果及治理门禁状态
+│   │
+│   ├── feedback/                             # 将模型问题接回治理与标注链路
+│   │   ├── mining.py                         # 从预测和评测中提取困难样本与模型分歧
+│   │   ├── routing.py                        # 区分 ASR、VAD、标注、串音和下游语义错误
+│   │   └── export.py                         # 输出带原身份的回流包；固定评测身份及同源组保持保留
+│   │
+│   └── runtime/                              # 单台 8 卡服务器的执行管理
+│       ├── launcher.py                       # torchrun 启动、GPU 选择、资源互斥与日志接管
+│       ├── preflight.py                      # 开跑前检查数据、模型、依赖、挂载与分布式参数
+│       └── state.py                          # 持久化任务状态、进程信息、取消及恢复记录
+│
+├── configs/                                  # 可复用配置模板；具体实验组合引用这些配置
+│   ├── model/                                # 模型家族、具体 revision、processor 与加载方式
+│   ├── data/
+│   │   ├── admission.yaml                    # 标签审核、伪标签、硬排除策略；无语音训练默认关闭
+│   │   ├── adapter.yaml                      # 音频选择、语言、prompt、文本编码及长度约束
+│   │   └── recipes/                          # 数据配方及训练采样配比；改选数据交治理发布新版本
+│   ├── train/
+│   │   ├── full_sft.yaml                      # 全参超参数、训练范围及冻结设置
+│   │   ├── lora_thinker.yaml                  # 文本解码侧 LoRA
+│   │   ├── lora_audio.yaml                    # 音频编码侧 LoRA
+│   │   └── lora_audio_thinker.yaml            # 音频与文本两侧 LoRA
+│   ├── eval/
+│   │   ├── inference.yaml                    # 固定解码、语言和上下文策略
+│   │   ├── metrics.yaml                      # 归一化、风险词表、指标及切片版本
+│   │   └── gates.yaml                        # 晋级条件与人工复核条件，保留 needs_review 等真实状态
+│   └── runtime/
+│       ├── local.yaml                        # 本机路径与结构检查配置
+│       ├── a800_8gpu.yaml                     # 服务器单机 8 卡配置、挂载、精度与缓存路径
+│       └── distributed/                      # torchrun/DDP 配置；按需预留 DeepSpeed 等策略
+│
+├── experiments/                              # Git 管理的实验定义；同一 EXP 可有多次运行和多 seed
+│   ├── template.yaml                         # 假设、对照实验、变化变量、数据/模型/配置引用模板
+│   └── EXP-XXX/
+│       ├── experiment.yaml                   # 本实验配置组合；引用 DOCS 中对应实验计划
+│       └── runs.json                         # 服务器 run_id、产物地址及结果摘要索引
+│
+├── scripts/                                  # 薄命令入口，具体逻辑调用 asr_engine/
+│   ├── data/                                 # 接收 Release、执行准入与音频预检、生成训练输入
+│   ├── train/                                # 提交、查看、取消与恢复训练
+│   ├── eval/                                 # 基座评测、checkpoint 评测与实验比较
+│   ├── export/                               # 模型导出、LoRA 合并及回流包交接
+│   └── tools/                                # 【保留】现有转换、CER 评测和 LoRA 冒烟工具
+│
+├── tests/                                    # 验证三平台衔接与训练边界
+│   ├── contracts/                            # 身份守恒、协议兼容、null/空串及分类排除语义
+│   ├── data/                                 # 输入适配、音频映射、血缘与分区泄漏复验
+│   ├── integration/                          # 治理制品 → 训练输入 → 评测/回流的文件闭环
+│   └── smoke/                                # 服务器小样本训练、续训、adapter 保存和模型加载
+│
+├── docker/                                   # 服务器可复现运行环境
+│   ├── Dockerfile.train                      # 训练镜像
+│   ├── Dockerfile.eval                       # 按需独立的推理评测镜像
+│   ├── requirements.train.lock               # 锁定训练依赖
+│   └── requirements.eval.lock                # 锁定推理评测依赖
+│
+├── workspace/                                # 服务器运行存储；本机仅保留结构说明与占位
+│   │                                         # 实际根路径由 runtime 配置指定，可位于独立数据盘
+│   ├── README.md                             # 存储、挂载、保留与归档约定
+│   │
+│   ├── releases/
+│   │   └── <release_id>/                      # 治理发布的不可变快照；保留上游版本及分区
+│   │       ├── release.json                  # 发布策略、版本和 artifact 引用
+│   │       ├── manifests/
+│   │       │   ├── train.parquet             # 训练分区
+│   │       │   ├── dev.parquet               # 训练验证与 checkpoint 选择分区
+│   │       │   ├── eval_core.parquet         # 固定核心评测分区
+│   │       │   └── eval_random.parquet       # 独立随机评测分区
+│   │       ├── provenance/                   # annotations 快照、源版本、完整导出结果及血缘引用
+│   │       └── reports/                      # 上游准入、排除、去重、分组及泄漏检查报告
+│   │
+│   ├── training_inputs/
+│   │   └── <input_id>/                        # 指定 Release 与适配策略生成的冻结输入
+│   │       ├── train.jsonl                    # Qwen 训练输入
+│   │       ├── dev.jsonl                      # Qwen 训练过程验证输入
+│   │       ├── identity_index.parquet        # split/行号与原始身份、标签来源的对应关系
+│   │       ├── audio_inventory.parquet       # 实际读取的音频 URI、变体与内容摘要
+│   │       ├── input.lock.json               # Release、适配器、策略、输入哈希和数量
+│   │       └── preflight_report.json         # 训练节点实检结果及拒绝原因
+│   │
+│   ├── models/
+│   │   └── base/<model_revision>/            # 固定基座权重或只读挂载，长期保留
+│   │
+│   ├── runs/
+│   │   └── EXP-XXX/<run_id>/                  # 每次实际运行独立存储，支持复跑及多 seed
+│   │       ├── snapshot/                     # 最终配置、代码提交与补丁、依赖/GPU环境及输入锁
+│   │       ├── state.json                    # 排队、运行、成功、失败或取消状态
+│   │       ├── trainable_parameters.json     # 实际可训练/冻结参数，核对 Full 与 LoRA 的真实范围
+│   │       ├── logs/                         # 训练日志、loss、学习率、资源使用及事件文件
+│   │       ├── checkpoints/                  # 全参或 adapter 检查点及优化器、调度器恢复状态
+│   │       ├── evaluation/<eval_id>/
+│   │       │   ├── inputs/                   # 独立评测输入、身份索引与评测版本锁
+│   │       │   ├── predictions.parquet       # 按原身份对齐的预测结果
+│   │       │   ├── metrics.json              # 总体指标、分母、样本量与切片结果
+│   │       │   └── reports/                  # 对照报告、eval_trust 与 publish_status
+│   │       ├── export/                       # 全参模型、LoRA/合并模型及基座关联、加载验证记录
+│   │       ├── feedback/<badcase_version>/   # 原身份、原版本、预测和错误来源组成的回流包
+│   │       └── artifacts.json                # 本次运行所有制品及治理模型登记的关联索引
+│   │
+│   └── cache/                                # 可重建的预处理、下载与临时缓存
+│
+├── DOCS/                                     # 【保留】现有唯一实验文档体系
+│   ├── 00_运维/                              # 本机与服务器同步、部署和操作约定
+│   ├── 00_实验总览/                          # 三平台对接上下文、当前状态与项目约定
+│   ├── 01_数据体系/                          # 治理 Release、数据版本和标注准入说明
+│   ├── 02_实验计划/                          # EXP 假设、对照设计与实验结论
+│   ├── 03_实验结果/                          # 模型比较、学习曲线及 badcase 分析
+│   ├── 04_问题与改进策略/                    # 问题池、错误分流及待验证假设
+│   ├── 05_后续计划/                          # 实验与数据扩量路线
+│   ├── 06_决策记录/                          # 架构、训练策略和门禁的 ADR
+│   ├── 07_实验配置/                          # 配置字段与版本约定
+│   ├── 08_平台架构/                          # 【新增】目录职责、跨平台契约及公开框架参考
+│   └── 99_历史归档/                          # 历史训练、旧配置与运维笔记
+│
+├── examples/                                 # 【保留】上游使用示例
+├── assets/                                   # 【保留】说明文档资源
+└── .github/                                  # 【保留】代码与契约检查工作流

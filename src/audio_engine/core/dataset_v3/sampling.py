@@ -24,6 +24,7 @@ from audio_engine.core.annotation_v3.types import (
     STATE_ADJUDICATED,
     STATE_SECOND_REVIEW,
 )
+from audio_engine.core import human_category as hc
 from audio_engine.core.dataset_v3.reservation import ReservationArtifact
 from audio_engine.core.sample import Sample
 from audio_engine.core.selection_v3.text import comparison_text
@@ -40,6 +41,9 @@ from audio_engine.core.selection_v3.types import (
     RISK_SHORT_UTTERANCE,
     TYPE_PSEUDO_HIGH,
 )
+
+# 061: plan.excluded reason / exclude_reason label for multi_speaker & exclude_from_training
+TRAIN_EXCLUDE_REASON_061 = "training_exclusion_061"
 
 
 # ---------------------------------------------------------------------------
@@ -1063,6 +1067,7 @@ def build_sampling_plan(
 
     # ---- train four pools ----
     train_pool_samples: dict[str, list[Sample]] = defaultdict(list)
+    hard_excluded_train_ids: set[str] = set()
     for sample in samples:
         role = _reservation_role(sample, reservation)
         if role != RESERVATION_TRAIN_POOL:
@@ -1070,6 +1075,19 @@ def build_sampling_plan(
         if group_of[sample.id] in blocked_train_groups:
             continue
         if sample.id in used_ids:
+            continue
+        # 061 hard exclusion (multi_speaker / exclude_from_training) BEFORE
+        # non_speech policy, pool assignment, quota and target text.
+        exclusion_codes = hc.training_exclusion_reasons(sample.labels)
+        if exclusion_codes:
+            hard_excluded_train_ids.add(sample.id)
+            plan.excluded.append(
+                {
+                    "id": sample.id,
+                    "reason": TRAIN_EXCLUDE_REASON_061,
+                    "detail": ";".join(exclusion_codes),
+                }
+            )
             continue
         # Pending non_speech when adapter does not support empty targets
         kind = str(sample.labels.get("gold_kind") or "")
@@ -1155,6 +1173,26 @@ def build_sampling_plan(
     plan.train_pool_assignment = train_pool_assignment
 
     selected_train = [by_id[sid] for sid in train_ids]
+    # 061 identity assertion: train ID set ∩ multi_speaker/excluded ID set must be empty,
+    # and no selected train sample may still match the exclusion rule.
+    leaked_061 = set(train_ids) & hard_excluded_train_ids
+    if leaked_061:
+        raise ValueError(
+            "dataset_v3 sampling leaked 061-excluded sample identities into train: "
+            + ", ".join(sorted(leaked_061)[:20])
+        )
+    for sample in selected_train:
+        codes = hc.training_exclusion_reasons(sample.labels)
+        if codes:
+            raise ValueError(
+                f"dataset_v3 sampling selected 061-excluded train sample {sample.id}: "
+                + ";".join(codes)
+            )
+    if hard_excluded_train_ids:
+        notes.append(
+            f"061_training_exclusion: {len(hard_excluded_train_ids)} train-pool samples "
+            "hard-excluded (multi_speaker / exclude_from_training); none in train"
+        )
     plan.shortfalls.extend(
         _cross_constraint_shortfalls(
             selected_train,
@@ -1242,8 +1280,18 @@ def apply_sampling_plan_to_samples(
             if split == "train":
                 pool = plan.train_pool_assignment.get(sample.id)
                 sample.labels["train_pool"] = pool
+                # 061 defence in depth: never write a train target for multi_speaker /
+                # exclude_from_training, even if a plan was built by an older sampler.
+                exclusion_codes = hc.training_exclusion_reasons(sample.labels)
+                if exclusion_codes:
+                    sample.labels["split"] = "excluded"
+                    sample.labels["dataset_role"] = "excluded"
+                    sample.labels["exclude_reason"] = TRAIN_EXCLUDE_REASON_061
+                    sample.labels["exclude_detail"] = ";".join(exclusion_codes)
+                    sample.labels["train_target_text"] = None
+                    sample.labels["train_target_source"] = "blocked"
                 # Target text: human gold vs audited pseudo candidate
-                if blocked_speech_train_target(sample):
+                elif blocked_speech_train_target(sample):
                     sample.labels["split"] = "excluded"
                     sample.labels["exclude_reason"] = blocked_speech_train_target(sample)
                     sample.labels["train_target_text"] = None

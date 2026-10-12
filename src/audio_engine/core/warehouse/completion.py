@@ -97,6 +97,11 @@ def is_explicitly_excluded(sample: Sample) -> bool:
     ).lower()
     if decision in {"reject", "rejected"}:
         return True
+    # 061: multi_speaker / exclude_from_training are formally completed but never train-eligible.
+    from audio_engine.core import human_category as hc
+
+    if hc.training_exclusion_reasons(labels):
+        return True
     return False
 
 

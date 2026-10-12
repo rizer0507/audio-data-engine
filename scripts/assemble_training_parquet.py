@@ -41,13 +41,15 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from audio_engine.core import human_category as hc
 from audio_engine.core.manifest import Manifest, file_sha256
 from audio_engine.core.sample import Sample
 from audio_engine.core.selection_v3.input_contract import original_audio_sha256
 
 DEFAULT_RULE_STEM = "classified_five_class_v3"
 DEFAULT_EXCLUDE_MARKERS = "configs/selection/training_exclude_markers_v1.yaml"
-SCRIPT_VERSION = "1.0.0"
+# 1.1.0: 061 人工分类硬排除（multi_speaker / exclude_from_training）与 null gold_text 保留
+SCRIPT_VERSION = "1.1.0"
 AUDIO_KEYS = ("resampled_16k", "pcm_wav", "pcm_to_wav", "raw", "pcm_wav_path")
 
 HELP_EPILOG = """
@@ -110,13 +112,24 @@ def dump_json(data: Any, path: Path) -> None:
 # ──────────────────────────────────────────────
 
 def category_before_clean(sample: Sample) -> str:
-    """人工纠正优先 reviewed_category → labels.category → type。"""
-    labels = sample.labels or {}
-    for key in ("reviewed_category", "category", "type"):
-        val = labels.get(key)
-        if val is not None and str(val).strip():
-            return str(val).strip()
-    return ""
+    """人工纠正优先 reviewed_category → category → type → training_category。
+
+    source_category 仅作溯源，不得压过更新后的人工正式结果。
+    统一委托 :mod:`audio_engine.core.human_category`。
+    """
+    return hc.effective_category(sample.labels or {})
+
+
+def is_hard_training_excluded(sample: Sample) -> tuple[bool, str]:
+    """061 硬排除：multi_speaker / exclude_from_training，先于文本回退与类别选择。
+
+    规则与 :func:`audio_engine.core.human_category.training_exclusion_reasons` 完全一致
+    （所有训练出口共用），返回 ``(是否排除, 原因代码;分隔)``。
+    """
+    reasons = hc.training_exclusion_reasons(sample.labels or {})
+    if reasons:
+        return True, ";".join(reasons)
+    return False, ""
 
 
 def _norm_text(text: str) -> str:
@@ -426,6 +439,16 @@ def assemble(recipe: AssembleRecipe) -> AssembleResult:
     skipped_duplicate = 0
 
     generated_at = _now_iso()
+    hard_excluded_ids: set[str] = set()
+    hard_exclude_reasons: Counter[str] = Counter()
+    # 061: 显式请求 multi_speaker 不提供纳入开关，仅记录说明与排除计数
+    multi_speaker_requested = hc.CATEGORY_MULTI_SPEAKER in selected
+    if multi_speaker_requested:
+        print(
+            "[WARN] recipe.categories 含 multi_speaker：该类别按 061 强制排除训练，"
+            "不会写入训练集；排除计数见 summary.clean_stats.multi_speaker_hard_exclude",
+            file=sys.stderr,
+        )
 
     for src in recipe.batches:
         path = src.parquet
@@ -446,6 +469,33 @@ def assemble(recipe: AssembleRecipe) -> AssembleResult:
         ordered = sorted(manifest.samples, key=lambda s: str(s.id))
         for sample in ordered:
             s = sample.model_copy(deep=True)
+
+            # 061: hard exclude multi_speaker BEFORE text normalize / category / quota.
+            hard, hard_reason = is_hard_training_excluded(s)
+            if hard:
+                hard_excluded_ids.add(s.id)
+                clean_stats["multi_speaker_hard_exclude"] += 1
+                for code in hard_reason.split(";"):
+                    hard_exclude_reasons[code] += 1
+                details.append(
+                    {
+                        "sample_id": s.id,
+                        "batch": src.batch,
+                        "category_before": category_before_clean(s),
+                        "category_after": category_before_clean(s),
+                        "clean_reason": hard_reason,
+                        "matched_marker": "",
+                        "has_gold_text": s.labels.get("gold_text") is not None
+                        and str(s.labels.get("gold_text") or "") != "",
+                        "duration": float(s.duration) if s.duration is not None else None,
+                        "original_audio_sha256": original_audio_sha256(s),
+                        "selected": False,
+                        "dropped_after_clean": False,
+                        "skip_reason": "multi_speaker_hard_exclude",
+                    }
+                )
+                continue
+
             cat_pre = category_before_clean(s)
             if not cat_pre:
                 missing_category += 1
@@ -453,7 +503,9 @@ def assemble(recipe: AssembleRecipe) -> AssembleResult:
             if not has_audio_ref(s):
                 missing_audio += 1
 
-            gold_raw = _norm_text(s.labels.get("gold_text") or "")
+            # Preserve null gold_text: only stringify when present.
+            gold_val = s.labels.get("gold_text")
+            gold_raw = "" if gold_val is None else _norm_text(gold_val)
             near = warn_near_synonym(gold_raw, markers_cfg)
             if near and cat_pre in markers_cfg.target_categories:
                 near_synonym_warnings.append(
@@ -570,6 +622,22 @@ def assemble(recipe: AssembleRecipe) -> AssembleResult:
         key=lambda s: (batch_order.get(str(s.labels.get("source_batch") or ""), 10**9), str(s.id))
     )
 
+    # Identity assertion: training set must not contain hard-excluded multi_speaker IDs.
+    selected_ids = {str(s.id) for s in selected_samples}
+    leaked = selected_ids & hard_excluded_ids
+    if leaked:
+        raise ValueError(
+            "training assemble leaked multi_speaker sample identities: "
+            + ", ".join(sorted(leaked)[:20])
+        )
+    # Also re-check labels on selected rows (defense in depth).
+    for s in selected_samples:
+        hard, reason = is_hard_training_excluded(s)
+        if hard:
+            raise ValueError(
+                f"training assemble selected hard-excluded sample {s.id}: {reason}"
+            )
+
     counts_table: list[dict[str, Any]] = []
     for src in recipe.batches:
         for cat in recipe.categories:
@@ -609,7 +677,20 @@ def assemble(recipe: AssembleRecipe) -> AssembleResult:
             "to_hardcase_total": int(clean_stats.get("to_hardcase_total", 0)),
             "exclude_from_training": int(clean_stats.get("exclude_from_training", 0)),
             "exclude_voicemail_marked": int(clean_stats.get("exclude_voicemail_marked", 0)),
+            "multi_speaker_hard_exclude": int(clean_stats.get("multi_speaker_hard_exclude", 0)),
+            "multi_speaker_hard_exclude_reasons": dict(hard_exclude_reasons),
             "dropped_after_clean": dropped_after_clean,
+        },
+        "training_exclusion_061": {
+            "protocol": hc.PROTOCOL_WEB_V2,
+            "rule": "reviewed_category>category>type>training_category; source_category 仅溯源",
+            "multi_speaker_requested": multi_speaker_requested,
+            "multi_speaker_in_training": 0,
+            "hard_excluded_ids": sorted(hard_excluded_ids),
+            "note": (
+                "multi_speaker 样本无论 categories 是否包含均强制排除，无纳入开关；"
+                "空语音三类（silence/background_suspected/human_noise）按 environment_noise 空文本目标处理。"
+            ),
         },
         "gold_text_presence": gold_presence,
         "warnings": {
@@ -664,6 +745,15 @@ def render_summary_md(summary: dict[str, Any]) -> str:
     notes = summary.get("notes") or {}
     if notes.get("voicemail_auto_not_gold"):
         lines.append(f"> 说明：{notes['voicemail_auto_not_gold']}")
+        lines.append("")
+    excl = summary.get("training_exclusion_061") or {}
+    if excl:
+        n_hard = int((summary.get("clean_stats") or {}).get("multi_speaker_hard_exclude", 0))
+        lines.append(
+            f"> 061 训练排除：multi_speaker/exclude_from_training 硬排除 {n_hard} 条；"
+            f"训练集内多人样本 {excl.get('multi_speaker_in_training', 0)} 条"
+            + ("；配方显式请求了 multi_speaker（已忽略，无纳入开关）" if excl.get("multi_speaker_requested") else "")
+        )
         lines.append("")
 
     lines.append("## 输入表")

@@ -238,6 +238,31 @@ datasets/stage1/derived/classified_five_class_v3_${BATCH}_with_gold.parquet.merg
 
 未出现在 annotations、或仅为 `skipped` 的样本：**完全不变**。
 
+### 5.4 Web 标注台 v2 协议（061，merge ≥ 1.1.0）
+
+`audio-label-master` 导出的 annotations 带 `transcript_annotation_protocol=semantic_risk_web_v2`
+（兼容无该列但带 `annotation_type` / `reviewed_category` / `exclude_from_training` 的行）。
+merge 识别为 v2 后按下表回填，**保留 `null` 与 `""` 的区别**，不猜测、不伪造 VAD/SIG 证据：
+
+| 人工分类（按钮） | `annotation_type` | 回填 `category`/`reviewed_category` | `gold_text` | `gold_kind` | `noise_kind` | 训练 |
+|---|---|---|---|---|---|---|
+| 空语音 | `silence` | `environment_noise` | `""` | `non_speech` | `silence` | 可作空目标 |
+| 环境噪声 | `background_suspected` | `environment_noise` | `""` | `non_speech` | `background_suspected` | 可作空目标 |
+| 人也听不清 | `human_noise` | `environment_noise` | `""` | `non_speech` | `human_noise` | 可作空目标（**不是** `unintelligible`） |
+| 多人说话 | `multi_speaker` | `multi_speaker`（第六类，仅人工产生） | `null`（**禁止 coerce 为 `""`**） | `ambiguous_target` | `null` | **硬排除**，`exclude_from_training=True`、`training_exclusion_reason=multi_speaker`；旧 `label`/候选文一并清空防回退 |
+| 普通听写 / 历史 `empty` | `null` | 行内 `reviewed_category`/`category`（无则不动） | 原样 | 原样 | `null` | 清除本需求产生的旧分类与排除；其他独立排除原因保留 |
+
+- 原自动类别写入 `source_category`（仅溯源，**任何训练出口不读取**）。
+- 历史 `empty`（无 `annotation_type`）不得猜测为 `silence`，`noise_kind` 保持 `null`。
+- `label_source=human_transcript_web`、`protocol=transcript_annotation_protocol=semantic_risk_web_v2`。
+- `.merge_report.json` 新增 `protocol_v2_applied` / `multi_speaker` / `noise_by_kind` / `training_excluded`。
+- 旧协议 `semantic_risk_web_v1` / `semantic_risk_cli_v1` 仍按 §5.3 处理（`null→""`、不动 `category`）。
+
+多人说话样本的完整人工数据保留在 `*_with_gold.parquet` 中，但在
+`assemble_training_parquet` / dataset_v3 采样 / `release build` / 仓库 `is_explicitly_excluded`
+全部出口按 `audio_engine.core.human_category.training_exclusion_reasons` 硬排除——
+即便配方显式写了 `multi_speaker` 或 `allow_non_speech_train=True`，也只记录计数、不写入训练集。
+
 ---
 
 ## 6. Mac Mini / Remote 操作建议

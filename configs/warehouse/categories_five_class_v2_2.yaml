@@ -4,3 +4,6 @@ allowed_categories:
   - hardcase
   - voicemail
   - environment_noise
+  # 061：人工回填后的第六类（仅人工 reviewed_category / annotation_type 产生；
+  # V3 自动五分类算法不产出该类）。正式完成、入仓统计，但所有训练出口硬排除。
+  - multi_speaker

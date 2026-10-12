@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +40,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import pandas as pd
 
+from audio_engine.core import human_category as hc
 from audio_engine.core.annotation_v3.types import (
+    GOLD_KIND_AMBIGUOUS_TARGET,
     GOLD_KIND_NON_SPEECH,
     GOLD_KIND_SPEECH,
     STATE_ANNOTATED,
@@ -663,8 +666,123 @@ def cmd_label(args: argparse.Namespace) -> int:
 # merge
 # ──────────────────────────────────────────────
 
+def _is_nullish(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and pd.isna(value):
+        return True
+    return False
+
+
+def _protocol_of(row: dict[str, Any]) -> str:
+    raw = str(row.get("transcript_annotation_protocol") or "").strip()
+    if raw:
+        return raw
+    # Platform web exports default; CLI-local files keep cli protocol.
+    src = str(row.get("label_source") or "").strip()
+    if src == "human_transcript_web":
+        return "semantic_risk_web_v1"
+    return "semantic_risk_cli_v1"
+
+
+def _is_null(value: Any) -> bool:
+    """仅 None / NaN / pd.NA 视为 null；空字符串不是 null（v2 契约要求二者区分）。"""
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+# 多人说话时需一并清除的旧文本缓存，避免 gold_text=null 后回退到旧文本训练
+_MULTI_SPEAKER_CLEAR_TEXT_KEYS = (
+    "label",
+    "gold_text_raw",
+    "annotation_raw_text",
+    "training_text",
+)
+
+
+def _resolve_v2_classification(row: dict[str, Any]) -> dict[str, Any]:
+    """解析 v2 行的人工分类并校验字段组合；无特殊分类返回 kind=none。"""
+    annotation_type = hc.clean_str(row.get("annotation_type")) or None
+    decision = hc.clean_str(row.get("decision"))
+    row_reviewed = hc.clean_str(row.get("reviewed_category"))
+    row_category = hc.clean_str(row.get("category"))
+    row_noise_kind = hc.clean_str(row.get("noise_kind")) or None
+
+    if annotation_type is not None and annotation_type not in hc.ANNOTATION_TYPES:
+        raise ValueError(f"非法 annotation_type={annotation_type!r}")
+
+    is_multi = (
+        decision == hc.DECISION_MULTI_SPEAKER
+        or annotation_type == hc.ANNOTATION_TYPE_MULTI_SPEAKER
+        or row_reviewed == hc.CATEGORY_MULTI_SPEAKER
+        or row_category == hc.CATEGORY_MULTI_SPEAKER
+    )
+    if is_multi:
+        if annotation_type not in (None, hc.ANNOTATION_TYPE_MULTI_SPEAKER):
+            raise ValueError(
+                f"多人说话与 annotation_type={annotation_type!r} 冲突 (decision={decision!r})"
+            )
+        for name, val in (("reviewed_category", row_reviewed), ("category", row_category)):
+            if val and val != hc.CATEGORY_MULTI_SPEAKER:
+                raise ValueError(f"多人说话与 {name}={val!r} 冲突")
+        return {
+            "kind": "multi_speaker",
+            "annotation_type": hc.ANNOTATION_TYPE_MULTI_SPEAKER,
+            "category": hc.CATEGORY_MULTI_SPEAKER,
+            "noise_kind": None,
+        }
+
+    if annotation_type in hc.NOISE_ANNOTATION_TYPES:
+        if row_noise_kind not in (None, annotation_type):
+            raise ValueError(
+                f"noise_kind={row_noise_kind!r} 与 annotation_type={annotation_type!r} 不一致"
+            )
+        for name, val in (("reviewed_category", row_reviewed), ("category", row_category)):
+            if val and val != hc.CATEGORY_ENVIRONMENT_NOISE:
+                raise ValueError(f"{annotation_type} 与 {name}={val!r} 冲突")
+        return {
+            "kind": "noise",
+            "annotation_type": annotation_type,
+            "category": hc.CATEGORY_ENVIRONMENT_NOISE,
+            "noise_kind": annotation_type,
+        }
+
+    return {
+        "kind": "none",
+        "annotation_type": None,
+        "category": row_reviewed or row_category,
+        "noise_kind": None,
+    }
+
+
+def _row_is_v2(row: dict[str, Any]) -> bool:
+    protocol = hc.clean_str(row.get("protocol")) or hc.clean_str(
+        row.get("transcript_annotation_protocol")
+    )
+    if protocol.startswith(hc.PROTOCOL_WEB_V2) or protocol.endswith("_v2"):
+        return True
+    if hc.clean_str(row.get("decision")) == hc.DECISION_MULTI_SPEAKER:
+        return True
+    for key in ("annotation_type", "reviewed_category", "noise_kind", "training_exclusion_reason"):
+        if hc.clean_str(row.get(key)):
+            return True
+    # Explicit false still marks v2 (ordinary accept clearing exclusion).
+    if "exclude_from_training" in row and row.get("exclude_from_training") is not None:
+        return True
+    return False
+
+
 def _apply_annotation_to_sample(sample: Sample, row: dict[str, Any]) -> bool:
-    """回填 labels；成功返回 True。不改 category。"""
+    """回填 labels；成功返回 True。
+
+    - v1 / CLI 行：保持旧契约（null→""、不动 category）。
+    - v2 行（semantic_risk_web_v2）：保留 null 与 "" 的区别，写入人工有效分类；
+      原自动分类保存在 ``source_category``；不改写任何 VAD/SIG 证据。
+    """
     status = str(row.get("status") or "")
     if status not in {"annotated", "empty"}:
         return False
@@ -675,31 +793,128 @@ def _apply_annotation_to_sample(sample: Sample, row: dict[str, Any]) -> bool:
             f"sha256 不匹配 sample_id={sample.id}: ann={ohash_ann} sample={ohash_sample}"
         )
 
-    gold_kind = str(row.get("gold_kind") or "").strip() or GOLD_KIND_SPEECH
-    gold_text = row.get("gold_text")
-    if gold_text is None or (isinstance(gold_text, float) and pd.isna(gold_text)):
-        gold_text = ""
-    else:
-        gold_text = str(gold_text)
+    is_v2 = _row_is_v2(row)
+    labels = sample.labels
+    # label-master exports the protocol as ``transcript_annotation_protocol``; CLI rows use ``protocol``.
+    protocol = hc.clean_str(row.get("protocol")) or hc.clean_str(
+        row.get("transcript_annotation_protocol")
+    )
+    if is_v2 and not protocol:
+        protocol = hc.PROTOCOL_WEB_V2
+    gold_kind = hc.clean_str(row.get("gold_kind")) or GOLD_KIND_SPEECH
+    raw_gold = row.get("gold_text")
+    cls: dict[str, Any] = {"kind": "none", "annotation_type": None}
+    gold_text: str | None
 
-    sample.labels["gold_text"] = gold_text
-    sample.labels["gold_kind"] = gold_kind
-    sample.labels["annotation_state"] = STATE_ANNOTATED
-    sample.labels["annotator_id"] = str(row.get("annotator_id") or "")
-    sample.labels["annotated_at"] = str(row.get("annotated_at") or _now_iso())
-    sample.labels["label_source"] = "human_transcript_cli"
-    sample.labels["transcript_annotation_protocol"] = "semantic_risk_cli_v1"
+    if is_v2:
+        cls = _resolve_v2_classification(row)
+        kind = cls["kind"]
+        if kind == "multi_speaker":
+            gold_text = None  # 必须保留 null，禁止 coerce 为 ""
+            gold_kind = GOLD_KIND_AMBIGUOUS_TARGET
+        elif kind == "noise":
+            if not _is_null(raw_gold) and str(raw_gold) != "":
+                raise ValueError(
+                    f'{cls["annotation_type"]} 要求 gold_text=""，实际 {raw_gold!r} '
+                    f"sample_id={sample.id}"
+                )
+            gold_text = ""
+            gold_kind = GOLD_KIND_NON_SPEECH
+        else:
+            # 普通听写 / 历史 empty：原样保留 null 或 ""
+            gold_text = None if _is_null(raw_gold) else str(raw_gold)
+    else:
+        gold_text = "" if _is_null(raw_gold) else str(raw_gold)
+
+    prev_annotation_type = hc.clean_str(labels.get("annotation_type"))
+    prev_reason = hc.clean_str(labels.get("training_exclusion_reason"))
+    prev_reviewed = hc.clean_str(labels.get("reviewed_category"))
+
+    labels["gold_text"] = gold_text
+    labels["gold_kind"] = gold_kind
+    labels["annotation_state"] = STATE_ANNOTATED
+    labels["annotator_id"] = str(row.get("annotator_id") or "")
+    labels["annotated_at"] = str(row.get("annotated_at") or _now_iso())
+    labels["label_source"] = hc.clean_str(row.get("label_source")) or "human_transcript_cli"
+    labels["transcript_annotation_protocol"] = protocol or hc.PROTOCOL_CLI_V1
     # 听写完成即标记人工确认转写；正式双审金标仍走 annotation_v3 review import
-    sample.labels["is_human_verified"] = True
-    if gold_kind == GOLD_KIND_SPEECH and gold_text:
-        sample.labels["label"] = gold_text
+    labels["is_human_verified"] = True
+
+    if is_v2:
+        # 溯源：原自动分类（行内优先，其次已写入的，最后合并前的 category）
+        had_override = bool(prev_reviewed or prev_annotation_type)
+        source_category = (
+            hc.clean_str(row.get("source_category"))
+            or hc.clean_str(labels.get("source_category"))
+            or ("" if had_override else hc.clean_str(labels.get("category")))
+        )
+        if source_category:
+            labels["source_category"] = source_category
+        labels["protocol"] = protocol or hc.PROTOCOL_WEB_V2
+        # 旧训练类别缓存可能过期，由 assemble 重新写入
+        labels.pop("training_category", None)
+
+        kind = cls["kind"]
+        if kind in {"multi_speaker", "noise"}:
+            labels["annotation_type"] = cls["annotation_type"]
+            labels["noise_kind"] = cls["noise_kind"]
+            labels["reviewed_category"] = cls["category"]
+            labels["category"] = cls["category"]
+            if kind == "multi_speaker":
+                labels["exclude_from_training"] = True
+                labels["training_exclusion_reason"] = hc.EXCLUSION_REASON_MULTI_SPEAKER
+                for key in _MULTI_SPEAKER_CLEAR_TEXT_KEYS:
+                    if key in labels:
+                        labels[key] = None
+            else:
+                labels["exclude_from_training"] = hc.parse_bool(row.get("exclude_from_training"))
+                labels["training_exclusion_reason"] = (
+                    hc.clean_str(row.get("training_exclusion_reason")) or None
+                )
+                # 空文本目标：清掉旧听写 label，防止回退
+                labels["label"] = ""
+        else:
+            # 普通听写 / 历史 empty：清除本需求产生的旧分类与排除；独立排除原因保留
+            labels["annotation_type"] = None
+            labels["noise_kind"] = None
+            reviewed = hc.clean_str(row.get("reviewed_category"))
+            labels["reviewed_category"] = reviewed or None
+            effective = reviewed or hc.clean_str(row.get("category"))
+            if effective:
+                labels["category"] = effective
+            elif had_override and source_category:
+                labels["category"] = source_category
+            was_ours = (
+                prev_annotation_type == hc.ANNOTATION_TYPE_MULTI_SPEAKER
+                or prev_reason == hc.EXCLUSION_REASON_MULTI_SPEAKER
+            )
+            if hc.parse_bool(row.get("exclude_from_training")):
+                labels["exclude_from_training"] = True
+                labels["training_exclusion_reason"] = (
+                    hc.clean_str(row.get("training_exclusion_reason")) or None
+                )
+            elif hc.parse_bool(labels.get("exclude_from_training")) and not was_ours:
+                pass  # 其他独立排除原因仍有效
+            else:
+                labels["exclude_from_training"] = False
+                labels["training_exclusion_reason"] = None
+            if gold_kind == GOLD_KIND_SPEECH and gold_text:
+                labels["label"] = gold_text
+            else:
+                # 历史 empty / null：不得保留旧听写 label 作回退
+                labels["label"] = gold_text
+    elif gold_kind == GOLD_KIND_SPEECH and gold_text:
+        labels["label"] = gold_text
+
     sample.add_lineage(
         "annotate_semantic_risk_transcripts",
-        "1.0.0",
+        "1.1.0" if is_v2 else "1.0.0",
         {
             "status": status,
-            "annotator_id": sample.labels["annotator_id"],
+            "annotator_id": labels["annotator_id"],
             "decision": str(row.get("decision") or ""),
+            "protocol": labels["transcript_annotation_protocol"],
+            "annotation_type": cls.get("annotation_type"),
         },
     )
     return True
@@ -739,6 +954,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
     applied = 0
     missing = 0
     hash_fail = 0
+    applied_samples: list[Sample] = []
     for sample in manifest.samples:
         row = by_id.get(sample.id)
         if row is None:
@@ -746,6 +962,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
         try:
             if _apply_annotation_to_sample(sample, row):
                 applied += 1
+                applied_samples.append(sample)
         except ValueError as exc:
             hash_fail += 1
             print(f"[ERR] {exc}")
@@ -767,6 +984,19 @@ def cmd_merge(args: argparse.Namespace) -> int:
         "missing_in_classified": missing,
         "sha256_mismatches": hash_fail,
         "classified_total": len(manifest.samples),
+        "protocol_v2_applied": sum(
+            1 for smp in applied_samples if str(smp.labels.get("protocol") or "").startswith(hc.PROTOCOL_WEB_V2)
+        ),
+        "multi_speaker": sum(
+            1 for smp in applied_samples
+            if smp.labels.get("annotation_type") == hc.ANNOTATION_TYPE_MULTI_SPEAKER
+        ),
+        "noise_by_kind": dict(
+            Counter(str(smp.labels.get("noise_kind")) for smp in applied_samples if smp.labels.get("noise_kind"))
+        ),
+        "training_excluded": sum(
+            1 for smp in applied_samples if hc.training_exclusion_reasons(smp.labels)
+        ),
         "merged_at": _now_iso(),
     }
     out.parent.mkdir(parents=True, exist_ok=True)

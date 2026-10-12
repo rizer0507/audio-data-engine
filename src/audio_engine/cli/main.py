@@ -1335,11 +1335,22 @@ def release_build(
             f"[yellow]WARN[/yellow] skipping {len(unresolved)} unresolved review samples "
             "(--allow-unresolved-review)"
         )
-    eligible = [
+    accepted = [
         sample
         for sample in full_manifest
         if sample.labels.get("annotation_state") in {"human_accepted", "auto_accepted"}
     ]
+    # 061 hard exclusion: multi_speaker / exclude_from_training never enter train/dev/test,
+    # regardless of annotation_state or any leftover gold_text/label (checked before gold).
+    from audio_engine.core import human_category as hc
+
+    excluded_061 = [s for s in accepted if hc.training_exclusion_reasons(s.labels)]
+    eligible = [s for s in accepted if not hc.training_exclusion_reasons(s.labels)]
+    if excluded_061:
+        console.print(
+            f"[yellow]WARN[/yellow] 061 training exclusion: dropped {len(excluded_061)} "
+            f"multi_speaker/exclude_from_training samples: {[s.id for s in excluded_061][:10]}"
+        )
     invalid_gold = [
         sample.id for sample in eligible if not str(sample.labels.get("gold_text") or "").strip()
     ]
@@ -1373,8 +1384,15 @@ def release_build(
     run_dir = RUNS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_release_{release_id}"
     outputs: dict[str, str] = {}
     counts: dict[str, int] = {}
+    excluded_061_ids = {s.id for s in excluded_061}
     for split in ("train", "dev", "test"):
         subset = Manifest([sample for sample in split_samples if sample.labels["split"] == split])
+        # 061 identity assertion before writing any training artefact
+        leaked = {s.id for s in subset} & excluded_061_ids
+        if leaked or any(hc.training_exclusion_reasons(s.labels) for s in subset):
+            raise typer.BadParameter(
+                f"release {split} split contains 061-excluded samples: {sorted(leaked)[:10]}"
+            )
         path = release_dir / f"{split}.parquet"
         subset.save(path)
         subset.save(path.with_suffix(".jsonl"))
@@ -3007,11 +3025,26 @@ def export_dataset(
     output: Optional[Path] = typer.Option(None, "--output", "-o"),
     filter_expr: Optional[str] = typer.Option(None, "--filter"),
 ) -> None:
-    """Export dataset to training-ready formats."""
+    """Export dataset to training-ready formats.
+
+    061: multi_speaker / exclude_from_training samples are hard-excluded before write,
+    same rule as assemble / dataset_v3 / release build (``human_category``).
+    """
+    from audio_engine.core import human_category as hc
+
     manifest_path = _resolve_dataset(dataset)
     manifest = Manifest.load(manifest_path)
     if filter_expr:
         manifest = manifest.filter(filter_expr)
+
+    kept = [s for s in manifest.samples if not hc.training_exclusion_reasons(s.labels)]
+    dropped = len(manifest.samples) - len(kept)
+    if dropped:
+        console.print(
+            f"[yellow]WARN[/yellow] 061 training exclusion: dropped {dropped} "
+            "multi_speaker/exclude_from_training samples from export"
+        )
+    manifest = Manifest(kept)
 
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out = output or (EXPORTS_DIR / f"{dataset}.{format}")
@@ -3026,7 +3059,7 @@ def export_dataset(
     else:
         raise typer.BadParameter(f"Unsupported format: {format}")
 
-    console.print(f"[green]OK[/green] Exported to [cyan]{out}[/cyan]")
+    console.print(f"[green]OK[/green] Exported to [cyan]{out}[/cyan] (n={len(kept)})")
 
 
 stage1_app = typer.Typer(help="工序一编排（030）：runtime 配置与家族启动适配器")
