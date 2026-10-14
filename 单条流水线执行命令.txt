@@ -9,7 +9,7 @@
          028/v1 为对照；legacy = asr_anomaly + selection_v3.0。
 执行顺序：1 清洗 → 2 ASR（≥3 族双跑 + register）→ 3 prepare/attach → energy/声学证据 → 五分类。
          噪声全量 sidecar 仅研究；聚合+字准（2d/2e）与 classify_dataset(v1) 仅为诊断 / legacy。
-噪声速查：§2f-noise；正式五类入口：§2f-v3-029；v2.4 按需声学：§2f-v3-037；v2.3：§2f-v3-034。
+噪声速查：§2f-noise；正式五类入口：§2f-v3-029；v2.4 按需声学：§2f-v3-037；多标签：§2f-v3-040；v2.3：§2f-v3-034。
 服务器过夜批跑：手工 vLLM / pipeline 必须进 tmux（见 手册/dev/00 §2.0）；
   Tabby/VS Code 不能保活。stage1 单命令（0a/030）本身后台跑，SSH 断开可继续。
 
@@ -587,6 +587,43 @@ audio-data pipeline run pipelines/classify_dataset_five_class_v2_4_on_demand_aco
 
 
 -------------------------------------------------------
+2f-v3-040. 可组合规则与多标签分流（独立入口；不覆盖五类）
+-------------------------------------------------------
+# 040：独立规则多标签；默认已有证据模式；不重跑 ASR。纯文本无需 GPU。
+# 不覆盖旧 category / risk_tag / noise_kind；训练门禁不因 tags 绕过。
+# 产物：datasets/stage1/derived/tagged_multi_tag_v1_<batch>.parquet
+#       data/exports/summary_multi_tag_v1_<batch>.xlsx
+#       runs/tagging/<batch>/selection_multi_tag_v1/
+# YAML：pipelines/tag_dataset_multi_tag_v1.yaml → quality.multi_tag_v1
+# 手册：docs/07-操作手册/可组合规则与多标签分流.md
+#
+# 生产（PowerShell）：
+audio-data pipeline run pipelines/tag_dataset_multi_tag_v1.yaml `
+  --source-name $BATCH `
+  --config configs/tagging/zh_asr_multi_tag_v1.yaml
+
+# Linux / Git Bash：
+# audio-data pipeline run pipelines/tag_dataset_multi_tag_v1.yaml \
+#   --source-name "$BATCH" \
+#   --config configs/tagging/zh_asr_multi_tag_v1.yaml
+#
+# 校验 / 预演 / 解释 / 人工增删恢复 / 筛选导出：
+# audio-data tags validate -c configs/tagging/zh_asr_multi_tag_v1.yaml
+# audio-data tags preview --batch "$BATCH" -c configs/tagging/zh_asr_multi_tag_v1.yaml
+# audio-data tags explain --batch "$BATCH" --sample-id <id>
+# audio-data tags remove --batch "$BATCH" --sample-id <id> --tag-id tag_1 --sha256 <sha> --reason "..."
+# audio-data tags restore --batch "$BATCH" --sample-id <id> --tag-id tag_1 --sha256 <sha>
+# audio-data tags export --input datasets/stage1/derived/tagged_multi_tag_v1_$BATCH.parquet \
+#   --output data/exports/filter_$BATCH.parquet --include-all tag_1
+#
+# 续跑：算子 params resume_run_id=<runs/tagging/.../work/<run_id>>；勿用恢复误删人工日志。
+# 按需声学：evidence_mode=compute_acoustic（默认 existing；缺证据→unknown）。
+# 真实 VAD/DNSMOS 推理：服务器模型可用后再验；本机以模拟适配器验证调度。
+# 测试：pytest tests/test_tagging_engine.py -q
+# 需求：docs/04-改进需求/已完成/040-可组合规则与多标签分流.md
+
+
+-------------------------------------------------------
 2f-v3-033. 人工标注包 → batch 唯一数据仓库（033）
 -------------------------------------------------------
 # 分类之后：导出整批标注包 →【人工听音/回填】→ 冻结唯一仓库。
@@ -791,6 +828,7 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 [ ] （存量 0908）方案 B 配置 zh_asr_v3_0908_30000.yaml + run_identities/
 [ ] （029 正式五类 / stage1 内嵌）pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml + zh_asr_five_class_v2_2_auto_noise_*.yaml；产物 classified_five_class_v2_2_auto_noise_*；勿覆盖 v1/v2
 [ ] （037 后置入口默认 v2.4）pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml + zh_asr_five_class_v2_4_on_demand_acoustic_*.yaml；产物 classified_five_class_v2_4_on_demand_acoustic_*；勿覆盖 v2.3/v2.2/v2/v1
+[ ] （040 多标签）pipelines/tag_dataset_multi_tag_v1.yaml + configs/tagging/zh_asr_multi_tag_v1.yaml；产物 tagged_multi_tag_v1_*；见 §2f-v3-040
 [ ] （034 v2.3 legacy）pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml + zh_asr_five_class_v2_3_min_acoustic_*.yaml；产物 classified_five_class_v2_3_min_acoustic_*
 [ ] （033 人审入仓）pipelines/warehouse_export_annotation.yaml → 人工 review import → pipelines/warehouse_freeze.yaml；产物 warehouses/<batch>/；见 §2f-v3-033
 [ ] （027 历史对照）pipelines/classify_dataset_five_class_v1.yaml + zh_asr_five_class_v1_*.yaml；产物 classified_five_class_v1_*

@@ -1,0 +1,49 @@
+# 2026-10-12 真实规则：任一路原文关键词命中 + SV/GLM 稳定同文 + Qwen 稳定异文。
+# 单字允许进入，不设最小长度；不要求极性相反，不运行声学模型。
+policy_version: selection_multi_tag_v1
+selection_config: configs/selection/zh_asr_five_class_v3.yaml
+evidence_mode: existing
+work_dir_template: runs/tagging/{batch_id}/semantic_keywords_sg_qwen_1012
+lexicons:
+  semantic_risk_keywords:
+    path: configs/tagging/lexicons/semantic_risk_keywords_1012.yaml
+tags:
+  - tag_id: semantic_keywords_sg_agree_qwen_disagree
+    name: 语义风险词命中且SV/GLM同文Qwen异文
+    description: 任一成功路次原文命中现有语义风险词表；三家族双跑稳定有字，SV/GLM无害等价，Qwen与二者不等价；包含单字。
+rules:
+  - rule_id: rule_semantic_keywords_sg_qwen_v1
+    version: '1'
+    tag_id: semantic_keywords_sg_agree_qwen_disagree
+    condition:
+      all:
+        - capability: family_all_dual_success
+        - capability: family_state
+          families: [sensevoice, glm, qwen]
+          state: stable_text
+          quantifier: all
+        - capability: texts_equivalent
+          left: {source: family_representative, family: sensevoice}
+          right: {source: family_representative, family: glm}
+        - capability: texts_not_equivalent
+          left: {source: family_representative, family: qwen}
+          right: {source: family_representative, family: sensevoice}
+        - any:
+            - capability: lexicon_match
+              lexicon: semantic_risk_keywords
+              text: {source: route_raw, run_id: sensevoice_1}
+            - capability: lexicon_match
+              lexicon: semantic_risk_keywords
+              text: {source: route_raw, run_id: sensevoice_2}
+            - capability: lexicon_match
+              lexicon: semantic_risk_keywords
+              text: {source: route_raw, run_id: glm_1}
+            - capability: lexicon_match
+              lexicon: semantic_risk_keywords
+              text: {source: route_raw, run_id: glm_2}
+            - capability: lexicon_match
+              lexicon: semantic_risk_keywords
+              text: {source: route_raw, run_id: qwen_1}
+            - capability: lexicon_match
+              lexicon: semantic_risk_keywords
+              text: {source: route_raw, run_id: qwen_2}

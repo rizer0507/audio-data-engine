@@ -1,0 +1,134 @@
+# 可组合多标签分流 v1（040）
+# 引用现行五类 selection 配置以保持清洗/家族/极性/阈值语义一致；不另抄阈值。
+policy_version: selection_multi_tag_v1
+selection_config: configs/selection/zh_asr_five_class_v3.yaml
+evidence_mode: existing
+work_dir_template: runs/tagging/{batch_id}/{policy_version}
+
+acoustic:
+  voicemail_patterns_path: configs/selection/voicemail_patterns_v1.yaml
+  silero_vad_config: configs/quality/silero_vad_v1.yaml
+  audio_energy_config: configs/quality/audio_energy_v1.yaml
+  dnsmos_config: configs/quality/dnsmos_p835.yaml
+
+fragments:
+  path: configs/tagging/fragments_v1.yaml
+
+lexicons:
+  tag_1:
+    path: configs/tagging/lexicons/tag_1_patterns_v1.yaml
+  voicemail:
+    path: configs/selection/voicemail_patterns_v1.yaml
+
+tags:
+  - tag_id: tag_1
+    name: SenseVoice/GLM单字且与Qwen分歧
+    description: |
+      全族双跑成功；三族稳定有字；SenseVoice/GLM 无害等价且共同代表文本命中 tag_1 词表并恰为一汉字；
+      Qwen 与 SenseVoice 按无害等价不一致。
+    enabled: true
+
+  - tag_id: critical_short
+    name: 关键短应答
+    description: SenseVoice 稳定代表文本属于关键短应答目录（可与 tag_1 同时命中）
+    enabled: true
+
+  - tag_id: voicemail_raw
+    name: 语音信箱原文命中
+    description: 任一路成功原始文本命中语音信箱词表（不阻断其他规则）
+    enabled: true
+
+  - tag_id: polarity_conflict
+    name: 极性冲突
+    description: 现行极性冲突语义（模板）
+    enabled: true
+
+  - tag_id: qwen_stable_empty_diag
+    name: Qwen稳定空诊断
+    description: 明文要求 Qwen=stable_empty；不经 not(一致) 间接推断
+    enabled: true
+
+  - tag_id: human_noise_sig_low
+    name: 人声且SIG低档
+    description: VAD present 且 DNSMOS SIG 低档（依赖声学；默认 existing 模式缺证据为 unknown）
+    enabled: true
+
+  - tag_id: silence_strict_zero
+    name: 严格全零静默
+    description: 严格全通道采样为零（与低能量不混淆）
+    enabled: true
+
+rules:
+  - rule_id: rule_tag_1_v1
+    version: "1"
+    tag_id: tag_1
+    enabled: true
+    description: 文档 §4.2 tag_1 完整条件
+    text_binding:
+      sg_text: {source: family_representative, family: sensevoice}
+    condition:
+      all:
+        - fragment: all_families_dual_success
+        - fragment: three_families_stable_text
+        - fragment: sensevoice_glm_equivalent
+        - capability: lexicon_match
+          lexicon: tag_1
+          text: {binding: sg_text}
+        - capability: single_han_char
+          text: {binding: sg_text}
+        - not:
+            capability: texts_equivalent
+            left: {source: family_representative, family: qwen}
+            right: {binding: sg_text}
+
+  - rule_id: rule_critical_short_v1
+    version: "1"
+    tag_id: critical_short
+    enabled: true
+    description: 与 tag_1 可重叠的纯文本规则：SenseVoice 关键短应答
+    condition:
+      all:
+        - capability: family_state
+          family: sensevoice
+          state: stable_text
+        - capability: is_critical_short_response
+          text: {source: family_representative, family: sensevoice}
+
+  - rule_id: rule_voicemail_raw_v1
+    version: "1"
+    tag_id: voicemail_raw
+    enabled: true
+    condition:
+      capability: voicemail_raw_hit
+
+  - rule_id: rule_polarity_conflict_v1
+    version: "1"
+    tag_id: polarity_conflict
+    enabled: true
+    condition:
+      capability: polarity_conflict
+
+  - rule_id: rule_qwen_stable_empty_v1
+    version: "1"
+    tag_id: qwen_stable_empty_diag
+    enabled: true
+    condition:
+      capability: family_state
+      family: qwen
+      state: stable_empty
+
+  - rule_id: rule_human_noise_sig_low_v1
+    version: "1"
+    tag_id: human_noise_sig_low
+    enabled: true
+    condition:
+      all:
+        - capability: vad_speech_present
+        - capability: dnsmos_sig_low
+
+  - rule_id: rule_silence_strict_zero_v1
+    version: "1"
+    tag_id: silence_strict_zero
+    enabled: true
+    condition:
+      capability: strict_all_channels_zero

@@ -104,6 +104,9 @@ def manifest_dir_for_stem(stem: str) -> Path:
         text.startswith("multi_asr_")
         or text.startswith("classified_")
         or text.startswith("prepared_v3_")
+        or text.startswith("prepared_asr_v3_")
+        or text.startswith("prepared_asr_")
+        or text.startswith("tagged_multi_tag_")
         or text.startswith("quality_sidecar_")
     ):
         return STAGE1_DERIVED_DIR
@@ -627,6 +630,53 @@ def apply_source_name_to_single_pipeline(
         if sidecar.exists():
             overrides["quality_sidecar_manifest"] = _posix(sidecar)
         return overrides
+
+    if (
+        "tag_dataset_multi_tag" in key
+        or "multi_tag_v1" in key
+        or key in {"tag_multi_tag_v1", "tagged_multi_tag_v1"}
+    ):
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        # Prefer prepared_asr_v3 under stage1/derived; fall back to classified snapshots.
+        candidates = [
+            staged_manifest_path(f"prepared_asr_v3_{name}"),
+            staged_manifest_path(f"classified_five_class_v3_{name}"),
+            staged_manifest_path(
+                f"classified_five_class_v2_4_on_demand_acoustic_{name}"
+            ),
+            staged_manifest_path(f"classified_five_class_v2_2_auto_noise_{name}"),
+        ]
+        resolved = None
+        last_err: Exception | None = None
+        for cand in candidates:
+            try:
+                resolved = resolve_existing_manifest(str(cand))
+                break
+            except FileNotFoundError as exc:
+                last_err = exc
+                continue
+        if resolved is None:
+            raise FileNotFoundError(
+                f"no multi-tag input Manifest for batch {name!r}; "
+                "expected prepared_asr_v3_<batch>.parquet (or classified_* with transcripts)"
+            ) from last_err
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(
+                staged_manifest_path(f"tagged_multi_tag_v1_{name}")
+            ),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+            "tagging_batch": name,
+        }
 
     if key == "attach_asr_v3":
         resolved = resolve_existing_manifest(manifest_stem("prepared_v3", name))

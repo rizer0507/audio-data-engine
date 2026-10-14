@@ -1,0 +1,36 @@
+# 可组合多标签分流 v1（040）
+# 默认已有证据模式；不重跑 ASR。纯文本规则无需 GPU。
+# 生产入口：
+#   audio-data pipeline run pipelines/tag_dataset_multi_tag_v1.yaml \
+#     --source-name "$BATCH" \
+#     --config configs/tagging/zh_asr_multi_tag_v1.yaml
+#
+# --source-name 会改写 input/output，并向算子注入 batch_id / summary_xlsx。
+# 可选算子参数：evidence_mode / resume_run_id / work_root / preview / rule_ids / sample_ids
+#
+# 输入优先：prepared_asr_v3_<batch>；否则回退到带 transcripts 的 classified_*。
+# 输出：datasets/stage1/derived/tagged_multi_tag_v1_<batch>.parquet
+#       data/exports/summary_multi_tag_v1_<batch>.xlsx
+#       runs/tagging/<batch>/selection_multi_tag_v1/（状态/缓存/发布快照）
+
+name: tag_dataset_multi_tag_v1
+input:
+  manifest: datasets/stage1/derived/prepared_asr_v3_source_A.parquet
+output:
+  manifest: datasets/stage1/derived/tagged_multi_tag_v1_source_A.parquet
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+  checkpoint_every: 500
+pipeline:
+  - name: multi_tag
+    operator: quality.multi_tag_v1
+    params:
+      config_path: configs/tagging/zh_asr_multi_tag_v1.yaml
+      tagging_config: configs/tagging/zh_asr_multi_tag_v1.yaml
+      batch_id: source_A
+      evidence_mode: existing
+      publish: true
+      summary_xlsx: data/exports/summary_multi_tag_v1_source_A.xlsx
+      output_manifest: datasets/stage1/derived/tagged_multi_tag_v1_source_A.parquet

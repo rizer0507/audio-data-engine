@@ -6,7 +6,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 import yaml
@@ -872,6 +872,17 @@ def pipeline_run(
                     }
         if overrides.get("warehouse_batch") or overrides.get("classified_manifest"):
             _apply_warehouse_source_overrides(cfg, overrides)
+        if overrides.get("tagging_batch"):
+            batch = str(overrides["tagging_batch"])
+            for step in cfg.steps:
+                if str(step.operator) != "quality.multi_tag_v1":
+                    continue
+                step.params = {
+                    **(step.params or {}),
+                    "batch_id": batch,
+                    "summary_xlsx": f"data/exports/summary_multi_tag_v1_{batch}.xlsx",
+                    "output_manifest": overrides["output_manifest"],
+                }
         if overrides.get("asr_run"):
             _apply_asr_run_transcript_key(cfg, str(overrides["asr_run"]))
             cfg.name = pipeline_run_name(
@@ -3864,6 +3875,342 @@ def stage1_serve_identity(
                 "api_base": identity.api_base,
                 "model_ids": list(identity.model_ids),
                 "expected": expected,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+tags_app = typer.Typer(help="Composable multi-tag management (040)")
+app.add_typer(tags_app, name="tags")
+
+
+def _tagging_service(config: Path):
+    from audio_engine.core.tagging.service import TaggingService
+
+    return TaggingService.from_path(config)
+
+
+@tags_app.command("validate")
+def tags_validate(
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+        help="Tagging config YAML",
+    ),
+) -> None:
+    """Validate tags/rules/fragments/lexicons."""
+    service = _tagging_service(config)
+    console.print_json(json.dumps(service.validate(), ensure_ascii=False))
+
+
+@tags_app.command("preview")
+def tags_preview(
+    batch: str = typer.Option(..., "--batch", help="Batch / source name"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    input_manifest: Optional[Path] = typer.Option(
+        None, "--input", help="Input Manifest; default prepared_asr_v3_<batch>"
+    ),
+    evidence_mode: Optional[str] = typer.Option(
+        None, "--evidence-mode", help="existing | compute_acoustic"
+    ),
+    work_root: Optional[Path] = typer.Option(None, "--work-root"),
+) -> None:
+    """Dry-run tagging without publishing formal snapshots."""
+    from audio_engine.core.manifest import Manifest
+    from audio_engine.core.source_naming import manifest_stem, resolve_existing_manifest
+    from audio_engine.core.tagging.service import TaggingRunRequest
+
+    service = _tagging_service(config)
+    if input_manifest is None:
+        input_manifest = Path(resolve_existing_manifest(manifest_stem("prepared_asr_v3", batch)))
+    samples = list(Manifest.load(input_manifest))
+    result = service.run(
+        TaggingRunRequest(
+            batch_id=batch,
+            config_path=config,
+            samples=samples,
+            evidence_mode=evidence_mode,
+            work_root=work_root,
+            preview=True,
+            publish=False,
+        )
+    )
+    matched = sum(
+        1
+        for r in result.results
+        for rr in r.rule_results
+        if rr.ternary.value == "matched"
+    )
+    console.print_json(
+        json.dumps(
+            {
+                "preview": True,
+                "batch_id": batch,
+                "sample_count": len(samples),
+                "matched_rule_judgements": matched,
+                "stats": result.stats,
+                "messages": result.messages,
+                "note": "preview does not write formal tag state",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+@tags_app.command("explain")
+def tags_explain(
+    sample_id: str = typer.Option(..., "--sample-id"),
+    batch: str = typer.Option(..., "--batch"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    input_manifest: Optional[Path] = typer.Option(None, "--input"),
+    rule_id: Optional[str] = typer.Option(None, "--rule-id"),
+) -> None:
+    """Explain rule judgements for one sample."""
+    from audio_engine.core.manifest import Manifest
+    from audio_engine.core.source_naming import manifest_stem, resolve_existing_manifest
+
+    service = _tagging_service(config)
+    if input_manifest is None:
+        input_manifest = Path(resolve_existing_manifest(manifest_stem("prepared_asr_v3", batch)))
+    samples = {s.id: s for s in Manifest.load(input_manifest)}
+    sample = samples.get(sample_id)
+    if sample is None:
+        raise typer.BadParameter(f"sample not found: {sample_id}")
+    console.print_json(json.dumps(service.explain(sample, rule_id=rule_id), ensure_ascii=False))
+
+
+@tags_app.command("add")
+def tags_add(
+    batch: str = typer.Option(..., "--batch"),
+    sample_id: str = typer.Option(..., "--sample-id"),
+    tag_id: str = typer.Option(..., "--tag-id"),
+    sha256: str = typer.Option("", "--sha256", help="Audio identity; recommended"),
+    actor: str = typer.Option("cli", "--actor"),
+    reason: str = typer.Option("", "--reason"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    work_root: Optional[Path] = typer.Option(None, "--work-root"),
+) -> None:
+    service = _tagging_service(config)
+    console.print_json(
+        json.dumps(
+            service.add_tag(
+                batch_id=batch,
+                sample_id=sample_id,
+                tag_id=tag_id,
+                audio_sha256=sha256,
+                actor=actor,
+                reason=reason,
+                work_root=work_root,
+            ),
+            ensure_ascii=False,
+        )
+    )
+
+
+@tags_app.command("remove")
+def tags_remove(
+    batch: str = typer.Option(..., "--batch"),
+    sample_id: str = typer.Option(..., "--sample-id"),
+    tag_id: str = typer.Option(..., "--tag-id"),
+    sha256: str = typer.Option("", "--sha256"),
+    actor: str = typer.Option("cli", "--actor"),
+    reason: str = typer.Option("", "--reason"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    work_root: Optional[Path] = typer.Option(None, "--work-root"),
+) -> None:
+    """Remove manual add and create persistent block."""
+    service = _tagging_service(config)
+    console.print_json(
+        json.dumps(
+            service.remove_tag(
+                batch_id=batch,
+                sample_id=sample_id,
+                tag_id=tag_id,
+                audio_sha256=sha256,
+                actor=actor,
+                reason=reason,
+                work_root=work_root,
+            ),
+            ensure_ascii=False,
+        )
+    )
+
+
+@tags_app.command("restore")
+def tags_restore(
+    batch: str = typer.Option(..., "--batch"),
+    sample_id: str = typer.Option(..., "--sample-id"),
+    tag_id: str = typer.Option(..., "--tag-id"),
+    sha256: str = typer.Option("", "--sha256"),
+    actor: str = typer.Option("cli", "--actor"),
+    reason: str = typer.Option("", "--reason"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    work_root: Optional[Path] = typer.Option(None, "--work-root"),
+) -> None:
+    """Clear manual block so auto sources can show again."""
+    service = _tagging_service(config)
+    console.print_json(
+        json.dumps(
+            service.restore_tag(
+                batch_id=batch,
+                sample_id=sample_id,
+                tag_id=tag_id,
+                audio_sha256=sha256,
+                actor=actor,
+                reason=reason,
+                work_root=work_root,
+            ),
+            ensure_ascii=False,
+        )
+    )
+
+
+@tags_app.command("retract-manual")
+def tags_retract_manual(
+    batch: str = typer.Option(..., "--batch"),
+    sample_id: str = typer.Option(..., "--sample-id"),
+    tag_id: str = typer.Option(..., "--tag-id"),
+    sha256: str = typer.Option("", "--sha256"),
+    actor: str = typer.Option("cli", "--actor"),
+    reason: str = typer.Option("", "--reason"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    work_root: Optional[Path] = typer.Option(None, "--work-root"),
+) -> None:
+    """Retract manual add only (no block)."""
+    service = _tagging_service(config)
+    console.print_json(
+        json.dumps(
+            service.retract_manual(
+                batch_id=batch,
+                sample_id=sample_id,
+                tag_id=tag_id,
+                audio_sha256=sha256,
+                actor=actor,
+                reason=reason,
+                work_root=work_root,
+            ),
+            ensure_ascii=False,
+        )
+    )
+
+
+@tags_app.command("export")
+def tags_export(
+    input_manifest: Path = typer.Option(..., "--input", help="Tagged Manifest"),
+    output: Path = typer.Option(..., "--output", "-o"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    include_all: Optional[list[str]] = typer.Option(
+        None, "--include-all", help="Must contain all of these tags"
+    ),
+    include_any: Optional[list[str]] = typer.Option(
+        None, "--include-any", help="Must contain any of these tags"
+    ),
+    exclude_tag: Optional[list[str]] = typer.Option(
+        None, "--exclude", help="Exclude samples with any of these tags"
+    ),
+    require_unknown: bool = typer.Option(False, "--require-unknown"),
+    require_manual_block: bool = typer.Option(False, "--require-manual-block"),
+) -> None:
+    from audio_engine.core.manifest import Manifest
+
+    service = _tagging_service(config)
+    samples = list(Manifest.load(input_manifest))
+    console.print_json(
+        json.dumps(
+            service.export_filtered(
+                samples,
+                output=output,
+                include_all=include_all,
+                include_any=include_any,
+                exclude_tags=exclude_tag,
+                require_unknown=require_unknown,
+                require_manual_block=require_manual_block,
+            ),
+            ensure_ascii=False,
+        )
+    )
+
+
+@tags_app.command("run")
+def tags_run(
+    batch: str = typer.Option(..., "--batch"),
+    config: Path = typer.Option(
+        Path("configs/tagging/zh_asr_multi_tag_v1.yaml"),
+        "--config",
+        "-c",
+    ),
+    input_manifest: Optional[Path] = typer.Option(None, "--input"),
+    evidence_mode: Optional[str] = typer.Option(None, "--evidence-mode"),
+    resume_run_id: Optional[str] = typer.Option(None, "--resume-run-id"),
+    work_root: Optional[Path] = typer.Option(None, "--work-root"),
+    rule_id: Optional[list[str]] = typer.Option(None, "--rule-id"),
+    sample_id: Optional[list[str]] = typer.Option(None, "--sample-id"),
+) -> None:
+    """Service-layer tagging run (same logic as pipeline). Prefer pipeline for production."""
+    from audio_engine.core.manifest import Manifest
+    from audio_engine.core.source_naming import manifest_stem, resolve_existing_manifest
+    from audio_engine.core.tagging.service import TaggingRunRequest
+
+    service = _tagging_service(config)
+    if input_manifest is None:
+        input_manifest = Path(resolve_existing_manifest(manifest_stem("prepared_asr_v3", batch)))
+    samples = list(Manifest.load(input_manifest))
+    result = service.run(
+        TaggingRunRequest(
+            batch_id=batch,
+            config_path=config,
+            samples=samples,
+            evidence_mode=evidence_mode,
+            work_root=work_root,
+            resume_run_id=resume_run_id,
+            rule_ids=rule_id,
+            sample_ids=sample_id,
+            preview=False,
+            publish=True,
+            summary_xlsx=Path(f"data/exports/summary_multi_tag_v1_{batch}.xlsx"),
+            output_manifest=Path(f"datasets/stage1/derived/tagged_multi_tag_v1_{batch}.parquet"),
+        )
+    )
+    console.print_json(
+        json.dumps(
+            {
+                "batch_id": result.batch_id,
+                "run_id": result.run_id,
+                "snapshot_id": result.snapshot_id,
+                "sample_count": len(result.samples),
+                "stats": result.stats,
+                "published": result.published,
+                "work_dir": result.work_dir,
             },
             ensure_ascii=False,
         )

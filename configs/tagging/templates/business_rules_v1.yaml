@@ -1,0 +1,64 @@
+# 现行业务规则模板（040 §8）——可复制进主配置 rules: 段；保持各规则明文约束，取消顺序互斥。
+# 本文件不自动加载；供维护者引用。
+
+templates:
+  - rule_id: tmpl_voicemail_raw
+    tag_id: voicemail_raw
+    condition:
+      capability: voicemail_raw_hit
+
+  - rule_id: tmpl_polarity_conflict
+    tag_id: polarity_conflict
+    condition:
+      capability: polarity_conflict
+
+  - rule_id: tmpl_critical_short_ambiguity
+    tag_id: critical_short_ambiguity
+    description: 关键短应答歧义；业务上可另加 not(polarity_conflict)
+    condition:
+      all:
+        - capability: critical_short_ambiguity
+        - not:
+            capability: polarity_conflict
+
+  - rule_id: tmpl_qwen_hallucination_shape
+    tag_id: qwen_hallucination_suspected
+    description: |
+      近似旧队列 A 形态：全族双跑成功 + 他族稳定空 + Qwen 有原生非空（此处用 Qwen stable_text 近似；
+      完整「他族稳定空」请用 family_state 量化组合）。
+    condition:
+      all:
+        - capability: family_all_dual_success
+        - capability: family_state
+          family: qwen
+          state: stable_text
+        - capability: family_state
+          families: [sensevoice, glm]
+          state: stable_empty
+          quantifier: all
+
+  - rule_id: tmpl_silence_strict_zero
+    tag_id: silence_strict_zero
+    condition:
+      capability: strict_all_channels_zero
+
+  - rule_id: tmpl_background_sig_low
+    tag_id: background_noise_sig_low
+    condition:
+      all:
+        - capability: vad_speech_present
+        - capability: dnsmos_sig_low
+
+  - rule_id: tmpl_gold_like_stable_agree
+    tag_id: gold_candidate_like
+    description: 至少两族稳定有字且 SenseVoice/GLM 无害等价（示意；非旧 hardcase 剩余集）
+    condition:
+      all:
+        - capability: family_state
+          families: [sensevoice, glm, qwen]
+          state: stable_text
+          quantifier: at_least
+          n: 2
+        - capability: texts_equivalent
+          left: {source: family_representative, family: sensevoice}
+          right: {source: family_representative, family: glm}

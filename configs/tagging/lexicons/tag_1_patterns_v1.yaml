@@ -1,0 +1,13 @@
+# 演示词表：tag_1 示例（不改动生产语音信箱/语义词表）
+lexicon_id: tag_1
+version: "1"
+flags: ""
+entries:
+  - entry_id: tag_1_hao
+    type: regex
+    match_mode: fullmatch
+    pattern: "^好$"
+  - entry_id: tag_1_en
+    type: regex
+    match_mode: fullmatch
+    pattern: "^嗯$"
