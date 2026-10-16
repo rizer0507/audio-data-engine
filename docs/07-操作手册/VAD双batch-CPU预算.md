@@ -1,5 +1,8 @@
 # VAD 双 batch 的共享 CPU 预算
 
+> VAD 与 DNSMOS 同跑时，请改用 [共享 cgroup 预算](DNSMOS线程修复与共享CPU预算.md)。
+> 本文的亲和性方法仅用于 VAD；ONNX 默认会自行设置线程亲和性，严格共享上限以 cgroup 为准。
+
 适用：Linux、128 个逻辑 CPU，同时运行两个 `vad_segment_batch`。
 两个 batch 各 8 个分片、每片 2 个父源 worker，共保留 32 路音频并发。
 模型 `ncpu` 默认改为 1；新启动时限制 OpenMP、MKL、OpenBLAS、NumExpr 线程为 1，

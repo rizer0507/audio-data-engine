@@ -15,6 +15,7 @@ Rules enforced here:
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -199,20 +200,25 @@ class _DnsmosBackend:
         import soundfile as sf
 
         from audio_engine.core.quality.dnsmos_p835 import (
-            DnsmosP835Session, DnsmosRuntimeOptions, scores_to_quality_dict,
+            DnsmosP835Session,
+            DnsmosRuntimeOptions,
+            derive_noise_risk,
+            scores_to_quality_dict,
         )
-        from audio_engine.core.quality.dnsmos_p835 import derive_noise_risk
 
         cfg = _read_yaml_mapping(config_path, label="dnsmos")
         model_path = str(cfg.get("model_path") or "")
         if not model_path or not Path(model_path).is_file():
             raise _BackendUnavailable(f"dnsmos_model_not_found:{model_path or '<unset>'}")
-        key = str(config_path)
+        runtime_options = DnsmosRuntimeOptions.from_config(cfg.get("runtime"))
+        key = json.dumps({"config": str(config_path), "model": model_path,
+                          "providers": cfg.get("providers"), "runtime": runtime_options.__dict__},
+                         sort_keys=True)
         session = self._sessions.get(key)
         if session is None:
             session = DnsmosP835Session(
                 Path(model_path), providers=list(cfg.get("providers") or []) or None,
-                runtime_options=DnsmosRuntimeOptions.from_config(cfg.get("runtime")),
+                runtime_options=runtime_options,
             )
             self._sessions[key] = session
         data, sr = sf.read(str(audio_path), always_2d=False)

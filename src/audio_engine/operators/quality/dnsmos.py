@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import hashlib
 import json
 import threading
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, ClassVar
 
 import soundfile as sf
@@ -14,12 +14,12 @@ import yaml
 
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.quality.dnsmos_p835 import (
+    DNSMOS_PREPROCESS_VERSION,
     DnsmosP835Session,
     DnsmosRuntimeOptions,
     DnsmosScores,
     derive_noise_band_explicit,
     scores_to_quality_dict,
-    DNSMOS_PREPROCESS_VERSION,
 )
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
@@ -234,8 +234,8 @@ class DnsmosOperator(BaseOperator):
             )
         else:
             try:
-                from audio_engine.core.quality.dnsmos_p835 import file_digest
                 from audio_engine.core.artifacts import atomic_write_json
+                from audio_engine.core.quality.dnsmos_p835 import file_digest
                 score_key = hashlib.sha256((file_digest(audio_path) + session.model_digest + DNSMOS_PREPROCESS_VERSION).encode()).hexdigest()
                 score_path = config.cache_dir / "dnsmos_raw_scores" / f"{score_key}.json"
                 if score_path.is_file():

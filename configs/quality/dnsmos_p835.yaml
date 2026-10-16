@@ -13,9 +13,11 @@ providers:
 
 # 评分并发由流水线 worker 提供；每个独立 ONNX 会话不再各开全机线程池。
 runtime:
-  intra_op_num_threads: 1
+  intra_op_num_threads: 2
   inter_op_num_threads: 1
   allow_spinning: false
+  # 同一片段的窗口合批；逐窗校准后求平均，窗口范围与评分公式不变。
+  window_batch_size: 4
 
 # 阈值须在独立人工校准池上验证；未校准不得改生产默认 calibrated=true。
 calibrated: false

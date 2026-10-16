@@ -72,6 +72,7 @@ def benchmark(model: Path, inputs: list[tuple[np.ndarray, int]], workers: int,
         scores = list(pool.map(score, inputs))
         elapsed, cpu = time.perf_counter() - wall_start, time.process_time() - cpu_start
     return {"count": len(inputs), "workers": workers, "intra_threads": intra_threads,
+            "window_batch_size": sessions[0].window_batch_size if intra_threads else 1,
             "spinning": spinning, "elapsed_s": elapsed, "clips_per_s": len(inputs) / elapsed,
             "cpu_seconds": cpu, "cpu_core_equivalents": cpu / elapsed, "scores": scores}
 
@@ -82,7 +83,7 @@ def main() -> int:
     parser.add_argument("--audio-dir", type=Path)
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--intra-threads", type=int, default=1)
+    parser.add_argument("--intra-threads", type=int, default=2)
     parser.add_argument("--output", type=Path, default=Path("var/dnsmos_thread_benchmark.json"))
     args = parser.parse_args()
     if min(args.limit, args.workers, args.intra_threads) < 1:

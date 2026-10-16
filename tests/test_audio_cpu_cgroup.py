@@ -95,3 +95,36 @@ def test_attach_moves_all_descendants_into_the_same_group(tmp_path, monkeypatch)
     monkeypatch.setattr(Path, "write_text", write)
     assert budget.attach(tmp_path, [100, 200]) == 3
     assert calls == ["100", "200", "300"] * 2
+
+
+def test_root_execution_drops_to_sudo_user_before_pipeline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setenv("SUDO_UID", "1001")
+    monkeypatch.setenv("SUDO_USER", "engine")
+    monkeypatch.setattr(budget.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(budget.os, "getpid", lambda: 12345)
+    monkeypatch.setitem(sys.modules, "pwd", SimpleNamespace(getpwuid=lambda uid: SimpleNamespace(
+        pw_name="engine", pw_gid=1002, pw_dir="/home/engine",
+    )))
+    for name in ("initgroups", "setgid", "setuid"):
+        monkeypatch.setattr(budget.os, name,
+                            lambda *args, name=name: calls.append((name, args)), raising=False)
+
+    def execute(command, argv, env):
+        assert (tmp_path / "cgroup.procs").read_text() == "12345"
+        assert calls == [("initgroups", ("engine", 1002)), ("setgid", (1002,)), ("setuid", (1001,))]
+        assert "SUDO_UID" not in env
+        assert env["USER"] == "engine"
+
+    monkeypatch.setattr(budget.os, "execvpe", execute)
+    budget.run(tmp_path, ["/venv/bin/audio-data", "pipeline", "run", "test.yaml"])
+
+
+def test_direct_root_launch_is_rejected_before_migration(tmp_path, monkeypatch):
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.setattr(budget.os, "geteuid", lambda: 0, raising=False)
+    with pytest.raises(ValueError, match="root-only launches"):
+        budget.run(tmp_path, ["audio-data", "pipeline", "run", "test.yaml"])
+    assert not (tmp_path / "cgroup.procs").exists()

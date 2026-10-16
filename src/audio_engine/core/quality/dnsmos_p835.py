@@ -19,7 +19,6 @@ from loguru import logger
 from audio_engine.core.evidence.types import (
     DNSMOS_STATUS_FAILED,
     DNSMOS_STATUS_SUCCESS,
-    DNSMOS_STATUS_UNSUPPORTED,
     NOISE_BAND_CLEAN,
     NOISE_BAND_MODERATE,
     NOISE_BAND_NOISY,
@@ -78,25 +77,28 @@ def model_file_digest(path: Path) -> str:
 class DnsmosRuntimeOptions:
     """Explicit session thread budget; source-level concurrency stays in the pipeline."""
 
-    intra_op_num_threads: int = 1
+    intra_op_num_threads: int = 2
     inter_op_num_threads: int = 1
     allow_spinning: bool = False
+    window_batch_size: int = 4
 
     def __post_init__(self) -> None:
-        for name in ("intra_op_num_threads", "inter_op_num_threads"):
+        for name in ("intra_op_num_threads", "inter_op_num_threads", "window_batch_size"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"DNSMOS runtime.{name} must be a positive integer")
         if not isinstance(self.allow_spinning, bool):
-            raise ValueError("DNSMOS runtime.allow_spinning must be a boolean")
+            raise ValueError("DNSMOS runtime.allow_spinning must be a boolean")  # noqa: TRY004
 
     @classmethod
     def from_config(cls, config: dict[str, Any] | None) -> DnsmosRuntimeOptions:
         if config is None:
             return cls()
         if not isinstance(config, dict):
-            raise ValueError("DNSMOS runtime must be a mapping")
-        unknown = set(config) - {"intra_op_num_threads", "inter_op_num_threads", "allow_spinning"}
+            raise ValueError("DNSMOS runtime must be a mapping")  # noqa: TRY004
+        unknown = set(config) - {
+            "intra_op_num_threads", "inter_op_num_threads", "allow_spinning", "window_batch_size",
+        }
         if unknown:
             raise ValueError(f"Unknown DNSMOS runtime options: {sorted(unknown)}")
         return cls(**config)
@@ -241,12 +243,18 @@ class DnsmosP835Session:
             providers=providers or ["CPUExecutionProvider"],
         )
         self.model_digest = model_file_digest(self.model_path)
-        self.input_name = self._session.get_inputs()[0].name
+        model_input = self._session.get_inputs()[0]
+        self.input_name = model_input.name
+        shape = getattr(model_input, "shape", [1])
+        self.window_batch_size = (
+            self.runtime_options.window_batch_size if not isinstance(shape[0], int) else 1
+        )
         logger.info(
-            "DNSMOS session ready: intra_threads={} inter_threads={} spinning={}",
+            "DNSMOS session ready: intra_threads={} inter_threads={} spinning={} window_batch={}",
             self.runtime_options.intra_op_num_threads,
             self.runtime_options.inter_op_num_threads,
             self.runtime_options.allow_spinning,
+            self.window_batch_size,
         )
 
     def score_array(
@@ -264,23 +272,26 @@ class DnsmosP835Session:
             sigs: list[float] = []
             baks: list[float] = []
             ovrls: list[float] = []
-            for chunk in chunks:
-                if len(chunk) < desired:
-                    padded = np.zeros(desired, dtype=np.float32)
-                    padded[: len(chunk)] = chunk
-                    chunk = padded
-                inp = chunk.astype(np.float32)[np.newaxis, :]
+            batch_size = getattr(self, "window_batch_size", 1)
+            for left in range(0, len(chunks), batch_size):
+                batch = chunks[left:left + batch_size]
+                inp = np.zeros((len(batch), desired), dtype=np.float32)
+                for index, chunk in enumerate(batch):
+                    inp[index, :len(chunk)] = chunk
                 out = self._session.run(None, {self.input_name: inp})
-                # Primary model typically returns [SIG, BAK, OVRL] or shaped (1,3)
-                arr = np.asarray(out[0]).reshape(-1)
-                if arr.size < 3:
+                # Preserve calibration per window, then average across all windows.
+                arr = np.asarray(out[0]).reshape(len(batch), -1)
+                if arr.shape[1] < 3:
                     raise RuntimeError(f"unexpected DNSMOS output shape: {arr.shape}")
-                if not np.all(np.isfinite(arr[:3])):
+                if not np.all(np.isfinite(arr[:, :3])):
                     raise RuntimeError("non-finite DNSMOS output")
                 # Microsoft DNSMOS non-personalized P.835 calibration per window.
-                sigs.append(float(np.polyval([-0.08397278, 1.22083953, 0.0052439], arr[0])))
-                baks.append(float(np.polyval([-0.13166888, 1.60915514, -0.39604546], arr[1])))
-                ovrls.append(float(np.polyval([-0.06766283, 1.11546468, 0.04602535], arr[2])))
+                sigs.extend(float(np.polyval([-0.08397278, 1.22083953, 0.0052439], row[0]))
+                            for row in arr)
+                baks.extend(float(np.polyval([-0.13166888, 1.60915514, -0.39604546], row[1]))
+                            for row in arr)
+                ovrls.extend(float(np.polyval([-0.06766283, 1.11546468, 0.04602535], row[2]))
+                             for row in arr)
             return DnsmosScores(
                 sig=float(np.mean(sigs)),
                 bak=float(np.mean(baks)),
