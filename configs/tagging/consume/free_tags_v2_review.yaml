@@ -1,0 +1,30 @@
+# free_tags_v2 审核消费策略（044）
+# 任意 tag ≠ 人工金标或训练准入；仅决定审核候选池与优先级。
+policy_version: free_tags_v2_review_v1
+routing_mode: tagging
+
+candidate:
+  include_any:
+    - semantic_risk_text_disagreement
+    - polarity_conflict
+    - critical_short
+    - voicemail_raw
+  unknown_policy: keep_with_flag
+  not_evaluated_policy: exclude
+
+priority:
+  - tag_id: semantic_risk_text_disagreement
+    weight: 100
+  - tag_id: polarity_conflict
+    weight: 80
+  - tag_id: critical_short
+    weight: 60
+
+dual_review:
+  trigger_any:
+    - semantic_risk_text_disagreement
+  budget_conflict: prefer_higher_priority
+
+notes: |
+  semantic_risk_text_disagreement 仅作为高优先级审核候选依据，
+  不自动等于 human_semantic 或训练准入。

@@ -1,0 +1,24 @@
+# 可复用条件片段（040）
+fragments:
+  - fragment_id: all_families_dual_success
+    version: "1"
+    description: 当前配置的全部家族双跑成功
+    condition:
+      capability: family_all_dual_success
+
+  - fragment_id: three_families_stable_text
+    version: "1"
+    description: SenseVoice / GLM / Qwen 均稳定有字
+    condition:
+      capability: family_state
+      families: [sensevoice, glm, qwen]
+      state: stable_text
+      quantifier: all
+
+  - fragment_id: sensevoice_glm_equivalent
+    version: "1"
+    description: SenseVoice 与 GLM 代表文本无害等价
+    condition:
+      capability: texts_equivalent
+      left: {source: family_representative, family: sensevoice}
+      right: {source: family_representative, family: glm}

@@ -18,6 +18,7 @@ class RunWorkspace:
     root: Path
     run_id: str
     snapshot_id: str
+    result_archive: Any = field(default=None, repr=False)
 
     @property
     def work_dir(self) -> Path:
@@ -101,7 +102,15 @@ def load_progress(ws: RunWorkspace) -> dict[str, Any] | None:
     path = ws.work_dir / "progress.json"
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("completed_store") == "sample_results.sqlite3":
+        from audio_engine.core.tagging.archive import ResultArchive
+        archive = ResultArchive(ws.work_dir, readonly=True)
+        try:
+            payload["completed_sample_ids"] = list(archive.completed_ids())
+        finally:
+            archive.close()
+    return payload
 
 
 def save_evidence_cache(ws: RunWorkspace, key: str, payload: dict[str, Any]) -> None:
@@ -116,6 +125,45 @@ def load_evidence_cache(ws: RunWorkspace, key: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sample_result_path(ws: RunWorkspace, sample_id: str) -> Path:
+    safe = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in str(sample_id))
+    return ws.work_dir / "sample_results" / f"{safe}.json"
+
+
+def save_sample_result(ws: RunWorkspace, sample_id: str, payload: dict[str, Any]) -> Path:
+    if ws.result_archive is not None:
+        return ws.result_archive.add(sample_id, payload)
+    path = sample_result_path(ws, sample_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def load_sample_result(ws: RunWorkspace, sample_id: str) -> dict[str, Any] | None:
+    from audio_engine.core.tagging.archive import ResultArchive
+    archive = ws.result_archive
+    owned = archive is None and (ws.work_dir / "sample_results.sqlite3").exists()
+    if owned:
+        archive = ResultArchive(ws.work_dir, readonly=True)
+    if archive is not None:
+        try:
+            payload = archive.load(sample_id)
+            if payload is not None:
+                return payload
+        finally:
+            if owned:
+                archive.close()
+    path = sample_result_path(ws, sample_id)
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if ws.result_archive is not None and isinstance(data, dict):
+        ws.result_archive.import_legacy(sample_id, path)
+    return data if isinstance(data, dict) else None
 
 
 @dataclass

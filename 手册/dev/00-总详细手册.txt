@@ -190,11 +190,12 @@ export MKL_NUM_THREADS=1
 # #   --limit-mm-per-prompt '{"audio":1}'
 
 # 本次批次名。只使用字母、数字、下划线和短横线。
-export BATCH=mt3000
+export BATCH=20260813-n-1
 
 # 原始 wav/pcm 目录（按批次替换）：
-export SOURCE_DIR=/data2/data-cp/lizi/mt3000
+export SOURCE_DIR=/data2/data-cp/datasets/asr_datasets/fenshen/20260813/1
 # 其他现场路径例：
+# export SOURCE_DIR=/data2/data-cp/lizi/mt3000
 # export SOURCE_DIR=/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1
 # export SOURCE_DIR=/data2/data-cp/lizi/audio-data-engine/test_wav_sft
 # export SOURCE_DIR=/data2/data-cp/xijujun/Projet/AI面谈客户录音切片16000采样/
@@ -261,8 +262,8 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 
 # 现场硬编码示例（文档.txt）：
 # audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
-#   --source-name 20260813-1 \
-#   --source-dir "/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1"
+#   --source-name 20260813-n-1 \
+#   --source-dir "/data2/data-cp/datasets/asr_datasets/fenshen/20260813/1"
 
 # 中断后续跑（使用控制台打印的 run root）：
 # audio-data pipeline run pipelines/data_cleaning_source_A.yaml \

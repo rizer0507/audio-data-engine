@@ -135,6 +135,7 @@ class TagStateStore:
 
     def __init__(self, path: Path):
         self.path = Path(path)
+        self._indexed_store = None
         self._lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
@@ -152,6 +153,8 @@ class TagStateStore:
 
     def get(self, sample_id: str) -> SampleTagState:
         with self._lock:
+            if self.path.with_suffix(".sqlite3").exists():
+                return self.enable_indexed().get(sample_id)
             data = self._read()
             raw = data.get(sample_id)
             if not isinstance(raw, dict):
@@ -160,6 +163,13 @@ class TagStateStore:
 
     def put(self, state: SampleTagState, *, expected_version: int | None = None) -> SampleTagState:
         with self._lock:
+            if self.path.with_suffix(".sqlite3").exists():
+                indexed = self.enable_indexed()
+                if expected_version is not None and indexed.get(state.sample_id).version != expected_version:
+                    raise ConcurrentModificationError(f"sample {state.sample_id} version conflict")
+                indexed.put_many([state], check_versions=expected_version is not None)
+                indexed.export_snapshot()
+                return state
             data = self._read()
             current = data.get(state.sample_id)
             if expected_version is not None and isinstance(current, dict):
@@ -175,12 +185,54 @@ class TagStateStore:
 
     def all_states(self) -> dict[str, SampleTagState]:
         with self._lock:
+            if self.path.with_suffix(".sqlite3").exists():
+                return self.enable_indexed().all_states()
             data = self._read()
             return {
                 sid: SampleTagState.from_dict(raw)
                 for sid, raw in data.items()
                 if isinstance(raw, dict)
             }
+
+    def put_many(self, states: list[SampleTagState]) -> None:
+        """Commit a checkpoint in one atomic rewrite instead of one per sample."""
+        if not states:
+            return
+        with self._lock:
+            if self.path.with_suffix(".sqlite3").exists():
+                self.enable_indexed().put_many(states)
+                return
+            data = self._read()
+            for state in states:
+                current_version = int((data.get(state.sample_id) or {}).get("version") or 0)
+                if current_version != state.version:
+                    raise ConcurrentModificationError(
+                        f"sample {state.sample_id} version conflict: "
+                        f"expected {state.version}, got {current_version}"
+                    )
+            for state in states:
+                state.version += 1
+                data[state.sample_id] = state.as_dict()
+            self._write(data)
+
+    def enable_indexed(self):
+        from audio_engine.core.tagging.indexed_state import IndexedTagStateStore
+        if self._indexed_store is None:
+            self._indexed_store = IndexedTagStateStore(self.path)
+        return self._indexed_store
+
+    def get_many(self, sample_ids) -> dict[str, SampleTagState]:
+        with self._lock:
+            if self.path.with_suffix(".sqlite3").exists():
+                return self.enable_indexed().get_many(sample_ids)
+            data = self._read()
+            return {sid: SampleTagState.from_dict(data[sid]) for sid in sample_ids
+                    if isinstance(data.get(sid), dict)}
+
+    def close(self):
+        if self._indexed_store is not None:
+            self._indexed_store.close()
+            self._indexed_store = None
 
 
 class ConcurrentModificationError(RuntimeError):

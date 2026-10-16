@@ -91,7 +91,7 @@ def test_qwen_batch_transcribes_and_reuses_cache(tmp_path: Path, monkeypatch):
         calls.append(path)
         return {"text": f"text:{Path(path).stem}", "language": "Chinese"}
 
-    monkeypatch.setattr(qwen_module, "call_vllm_transcription", fake_transcribe)
+    monkeypatch.setattr(qwen_module, "call_vllm_chat_asr", fake_transcribe)
     operator = OperatorRegistry.get("asr.qwen_batch")
     config = _config(tmp_path)
 
@@ -116,7 +116,7 @@ def test_qwen_batch_isolates_corrupt_audio(tmp_path: Path, monkeypatch):
             raise ValueError(f"broken audio: {path}")
         return {"text": f"text:{Path(path).stem}", "language": "Chinese"}
 
-    monkeypatch.setattr(qwen_module, "call_vllm_transcription", fake_transcribe)
+    monkeypatch.setattr(qwen_module, "call_vllm_chat_asr", fake_transcribe)
     operator = OperatorRegistry.get("asr.qwen_batch")
 
     results = operator.process_batch(_samples(3), _config(tmp_path, batch_size=3))

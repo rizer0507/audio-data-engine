@@ -5,16 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from audio_engine.core.selection_v3.five_class_v2 import (
-    _harmless_equivalent,
-    _is_critical_short_response,
-    _semantic_risk_v2,
+from audio_engine.core.evidence.family_states import harmless_equivalent
+from audio_engine.core.evidence.semantic_risk import (
+    is_critical_short_response,
+    semantic_risk_v2,
 )
-from audio_engine.core.selection_v3.semantic_risk_strict import han_char_count
-from audio_engine.core.selection_v3.types import (
+from audio_engine.core.evidence.semantic_strict import han_char_count
+from audio_engine.core.evidence.types import (
     FAMILY_STATE_STABLE_TEXT,
     RISK_TAG_CRITICAL_POLARITY_RESPONSE,
     RISK_TAG_POLARITY_CONFLICT,
+    ROUTE_ELIGIBLE,
+    ROUTE_FAILED,
+    ROUTE_MISSING,
+    RUN_STATUS_SUCCESS_EMPTY,
+    RUN_STATUS_SUCCESS_TEXT,
     SUBTYPE_SEMANTIC_REVERSAL,
     SUBTYPE_SHORT_POLARITY_AMBIGUITY,
 )
@@ -295,6 +300,201 @@ def _eval_capability(node: dict[str, Any], ctx: EvalContext) -> ConditionResult:
         )
         return ConditionResult(ternary=_bool_ternary(val), evidence=evidence)
 
+    if cap == "family_has_successful_raw_text":
+        family = node.get("family")
+        if not isinstance(family, str) or not family.strip():
+            return ConditionResult(
+                ternary=Ternary.UNKNOWN,
+                evidence=[
+                    EvidenceResult(
+                        capability=cap, status=EvidenceStatus.FAILED, error="family_required"
+                    )
+                ],
+            )
+        if family not in ctx.config.evidence.model_families:
+            return ConditionResult(
+                ternary=Ternary.UNKNOWN,
+                evidence=[
+                    EvidenceResult(
+                        capability=cap,
+                        status=EvidenceStatus.MISSING,
+                        error=f"unknown_family:{family}",
+                    )
+                ],
+                missing_deps=[f"family:{family}"],
+            )
+        successful_run_ids: list[str] = []
+        matched_run_ids: list[str] = []
+        routes: list[dict[str, Any]] = []
+        for route in ctx.asr.routes:
+            if route.family != family:
+                continue
+            # Raw output occurrence is independent of normalization/exclusion;
+            # failed or missing runs never count even if residual text remains.
+            successful = (
+                route.status in {RUN_STATUS_SUCCESS_TEXT, RUN_STATUS_SUCCESS_EMPTY}
+                and route.route_disposition not in {ROUTE_FAILED, ROUTE_MISSING}
+            )
+            nonempty = bool(str(route.raw_text or "").strip())
+            if successful:
+                successful_run_ids.append(route.run_id)
+                if nonempty:
+                    matched_run_ids.append(route.run_id)
+            routes.append(
+                {
+                    "run_id": route.run_id,
+                    "family": route.family,
+                    "status": route.status,
+                    "route_disposition": route.route_disposition,
+                    "raw_text": route.raw_text,
+                    "used": successful,
+                    "has_raw_text": nonempty,
+                    "ignored_reason": None if successful else "unsuccessful_route",
+                }
+            )
+        details = {
+            "family": family,
+            "successful_run_ids": successful_run_ids,
+            "matched_run_ids": matched_run_ids,
+            "routes": routes,
+        }
+        if not successful_run_ids:
+            return ConditionResult(
+                ternary=Ternary.UNKNOWN,
+                evidence=[
+                    EvidenceResult(
+                        capability=cap,
+                        status=EvidenceStatus.MISSING,
+                        error=f"no_successful_routes:{family}",
+                        details=details,
+                    )
+                ],
+                missing_deps=[f"family:{family}"],
+            )
+        val = bool(matched_run_ids)
+        return ConditionResult(
+            ternary=_bool_ternary(val),
+            evidence=[
+                EvidenceResult(
+                    capability=cap, value=val, status=EvidenceStatus.SUCCESS, details=details
+                )
+            ],
+        )
+
+    if cap == "cross_family_text_disagreement":
+        families = node.get("families")
+        if (
+            not isinstance(families, list)
+            or len(families) < 2
+            or any(not isinstance(family, str) or not family.strip() for family in families)
+            or len(set(families)) != len(families)
+        ):
+            return ConditionResult(
+                ternary=Ternary.UNKNOWN,
+                evidence=[
+                    EvidenceResult(
+                        capability=cap,
+                        status=EvidenceStatus.FAILED,
+                        error="distinct_families_required",
+                    )
+                ],
+            )
+        include_empty = node.get("include_empty", True)
+        if not isinstance(include_empty, bool):
+            return ConditionResult(
+                ternary=Ternary.UNKNOWN,
+                evidence=[
+                    EvidenceResult(
+                        capability=cap,
+                        status=EvidenceStatus.FAILED,
+                        error="include_empty_must_be_bool",
+                    )
+                ],
+            )
+        unknown_families = [
+            family for family in families if family not in ctx.config.evidence.model_families
+        ]
+        if unknown_families:
+            return ConditionResult(
+                ternary=Ternary.UNKNOWN,
+                evidence=[
+                    EvidenceResult(
+                        capability=cap,
+                        status=EvidenceStatus.MISSING,
+                        error=f"unknown_family:{family}",
+                    )
+                    for family in unknown_families
+                ],
+                missing_deps=[f"family:{family}" for family in unknown_families],
+            )
+        by_family: dict[str, list[dict[str, Any]]] = {family: [] for family in families}
+        ignored: list[dict[str, Any]] = []
+        for route in ctx.asr.routes:
+            if route.family not in by_family:
+                continue
+            route_evidence = {
+                "run_id": route.run_id,
+                "family": route.family,
+                "text": route.comparison_text,
+                "status": route.status,
+                "route_disposition": route.route_disposition,
+            }
+            if route.status not in {RUN_STATUS_SUCCESS_TEXT, RUN_STATUS_SUCCESS_EMPTY}:
+                ignored.append({**route_evidence, "reason": "unsuccessful_route"})
+            elif route.route_disposition != ROUTE_ELIGIBLE:
+                ignored.append({**route_evidence, "reason": "ineligible_route"})
+            elif not include_empty and not route.comparison_text:
+                ignored.append({**route_evidence, "reason": "empty_text_excluded"})
+            else:
+                by_family[route.family].append(route_evidence)
+        missing_families = [family for family in families if not by_family[family]]
+        details = {
+            "families": list(families),
+            "include_empty": include_empty,
+            "by_family": by_family,
+            "ignored": ignored,
+            "missing_families": missing_families,
+        }
+        # Require usable evidence from every requested family before comparing.
+        # A failed, missing, or excluded route must never become an empty vote.
+        if missing_families:
+            return ConditionResult(
+                ternary=Ternary.UNKNOWN,
+                evidence=[
+                    EvidenceResult(
+                        capability=cap,
+                        status=EvidenceStatus.MISSING,
+                        error="missing_successful_family_text",
+                        details=details,
+                    )
+                ],
+                missing_deps=[f"family:{family}" for family in missing_families],
+            )
+        comparisons: list[dict[str, Any]] = []
+        for i, family in enumerate(families):
+            for other_family in families[i + 1:]:
+                for left in by_family[family]:
+                    for right in by_family[other_family]:
+                        comparisons.append(
+                            {
+                                "left": left,
+                                "right": right,
+                                "equivalent": harmless_equivalent(left["text"], right["text"]),
+                            }
+                        )
+        val = any(not pair["equivalent"] for pair in comparisons)
+        return ConditionResult(
+            ternary=_bool_ternary(val),
+            evidence=[
+                EvidenceResult(
+                    capability=cap,
+                    value={"disagreement": val, "comparisons": comparisons},
+                    status=EvidenceStatus.SUCCESS,
+                    details=details,
+                )
+            ],
+        )
+
     if cap in {"family_state", "family_states_quantified"}:
         families = node.get("families")
         if families is None and node.get("family") is not None:
@@ -350,7 +550,7 @@ def _eval_capability(node: dict[str, Any], ctx: EvalContext) -> ConditionResult:
         evidence.extend([left_ev, right_ev])
         if left_text is None or right_text is None:
             return ConditionResult(ternary=Ternary.UNKNOWN, evidence=evidence, missing_deps=["text"])
-        eq = _harmless_equivalent(left_text, right_text)
+        eq = harmless_equivalent(left_text, right_text)
         val = eq if cap == "texts_equivalent" else (not eq)
         evidence.append(
             EvidenceResult(
@@ -446,12 +646,12 @@ def _eval_capability(node: dict[str, Any], ctx: EvalContext) -> ConditionResult:
         evidence.append(text_ev)
         if text is None:
             return ConditionResult(ternary=Ternary.UNKNOWN, evidence=evidence, missing_deps=["text"])
-        ok = _is_critical_short_response(text, ctx.config.selection)
+        ok = is_critical_short_response(text, ctx.config.evidence)
         evidence.append(EvidenceResult(capability=cap, value=ok, status=EvidenceStatus.SUCCESS))
         return ConditionResult(ternary=_bool_ternary(ok), evidence=evidence)
 
     if cap in {"polarity_conflict", "critical_short_ambiguity"}:
-        risk = _semantic_risk_v2(ctx.asr.bundles, ctx.config.selection)
+        risk = semantic_risk_v2(ctx.asr.bundles, ctx.config.evidence)
         mapped = _map_risk_tag(getattr(risk, "subtype", None) if risk else None)
         want = (
             RISK_TAG_POLARITY_CONFLICT
@@ -526,7 +726,7 @@ def _eval_capability(node: dict[str, Any], ctx: EvalContext) -> ConditionResult:
                 EvidenceResult(capability=cap, status=status, error=f"dnsmos_{status.value}")
             )
             return ConditionResult(ternary=Ternary.UNKNOWN, evidence=evidence, missing_deps=["dnsmos"])
-        is_low, reason = sig_is_low(ctx.acoustic, ctx.config.selection)
+        is_low, reason = sig_is_low(ctx.acoustic, ctx.config.evidence)
         if is_low is None:
             evidence.append(
                 EvidenceResult(capability=cap, status=EvidenceStatus.FAILED, error=reason)

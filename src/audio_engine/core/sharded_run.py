@@ -319,6 +319,7 @@ def _build_shard_command(
     force: bool,
     mock: bool,
     transcript_key: str | None = None,
+    speed_factor: float | None = None,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -347,6 +348,8 @@ def _build_shard_command(
         command.append("--mock")
     if transcript_key:
         command += ["--transcript-key", transcript_key]
+    if speed_factor is not None:
+        command += ["--speed-factor", str(speed_factor)]
     return command
 
 
@@ -365,6 +368,7 @@ def spawn_shard_processes(
     progress_config: dict | None = None,
     progress_interval_s: float = 10.0,
     transcript_key: str | None = None,
+    speed_factor: float | None = None,
 ) -> dict[str, int]:
     """Run one child ``pipeline run --no-sharding`` per shard parquet.
 
@@ -386,6 +390,8 @@ def spawn_shard_processes(
         emit(f"  Dropping ingest steps: {', '.join(ingest_step_names)}")
     if transcript_key:
         emit(f"  Transcript key: {transcript_key}")
+    if speed_factor is not None:
+        emit(f"  Speed factor: {speed_factor}")
     emit(f"  Progress log: {run_root / 'PROGRESS.log'}")
 
     queue = list(shards)
@@ -449,6 +455,7 @@ def spawn_shard_processes(
                 force=force,
                 mock=mock,
                 transcript_key=transcript_key,
+                speed_factor=speed_factor,
             )
             log_file = (run_root / f"{shard.stem}.log").open("w", encoding="utf-8")
             env = None
@@ -494,8 +501,63 @@ def merge_shard_outputs(
         raise FileNotFoundError(f"Missing shard outputs: {missing}")
     if expected_shards is not None and len(paths) != expected_shards:
         raise ValueError(f"Expected {expected_shards} shard outputs, found {len(paths)}")
-    manifests = [Manifest.load(p) for p in paths]
+    empty = [str(p) for p in paths if p.exists() and p.stat().st_size == 0]
+    if empty:
+        raise ValueError(
+            "Shard output parquet is 0 bytes (corrupt / interrupted write): "
+            f"{empty}. Delete these files and re-run with --resume on the run root."
+        )
+    manifests = []
+    for path in paths:
+        try:
+            manifests.append(Manifest.load(path))
+        except ValueError as exc:
+            raise ValueError(f"Failed to load shard output {path}: {exc}") from exc
     return Manifest.merge(manifests)
+
+
+def _dump_resolved_pipeline_yaml(cfg: PipelineConfig, dest: Path) -> Path:
+    """Write an in-memory PipelineConfig so shard workers inherit bound params."""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    execution = {
+        "executor": cfg.execution.executor,
+        "workers": cfg.execution.workers,
+        "max_in_flight": cfg.execution.max_in_flight,
+        "fail_fast": cfg.execution.fail_fast,
+        "checkpoint_every": cfg.execution.checkpoint_every,
+    }
+    payload: dict = {
+        "name": cfg.name,
+        "input": {"manifest": cfg.input_manifest},
+        "output": {"manifest": cfg.output_manifest},
+        "output_dir": str(cfg.output_dir),
+        "cache_dir": str(cfg.cache_dir),
+        "runs_dir": str(cfg.runs_dir),
+        "catalog_dir": str(cfg.catalog_dir),
+        "force": cfg.force,
+        "mock": cfg.mock,
+        "execution": execution,
+        "pipeline": [
+            {
+                "name": step.name,
+                "operator": step.operator,
+                "params": dict(step.params or {}),
+                "input_audio_key": step.input_audio_key,
+                **(
+                    {"output_audio_key": step.output_audio_key}
+                    if step.output_audio_key
+                    else {}
+                ),
+            }
+            for step in cfg.steps
+        ],
+    }
+    if cfg.source_dir:
+        payload["input"]["source_dir"] = cfg.source_dir
+    # Do not embed sharding — shard workers always run with --no-sharding.
+    dest.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return dest
 
 
 def run_sharded_pipeline(
@@ -507,6 +569,7 @@ def run_sharded_pipeline(
     sharding_override: ShardingConfig | None = None,
     log: Callable[[str], None] | None = None,
     transcript_key: str | None = None,
+    speed_factor: float | None = None,
 ) -> ShardedRunResult:
     """Execute prepare (optional) → split → parallel children → merge."""
     emit = log or (lambda msg: logger.info(msg))
@@ -522,6 +585,20 @@ def run_sharded_pipeline(
         )
     if not cfg.output_manifest:
         raise ValueError("Sharded run requires output.manifest")
+
+    tempo_steps = [s for s in cfg.steps if str(s.operator) == "augmentation.tempo"]
+    for step in tempo_steps:
+        # Parent owns formal publish after merge; shards only write results_parts.
+        step.params = {**(step.params or {}), "defer_publish": True}
+        if speed_factor is None and step.params.get("speed_factor") is not None:
+            speed_factor = float(step.params["speed_factor"])
+
+    for step in cfg.steps:
+        if step.operator == "audio.fsmn_vad_segment":
+            from audio_engine.operators.audio.fsmn_vad_segment import FsmnVadSegmentOperator
+
+            params, vad_mock = FsmnVadSegmentOperator.preflight(step.params, mock=cfg.mock)
+            emit(f"FSMN VAD preflight: runtime={params.get('model_runtime_dir')} mock={vad_mock}")
 
     for step in cfg.steps:
         if step.operator != "asr.qwen_batch":
@@ -543,13 +620,53 @@ def run_sharded_pipeline(
                 "QWEN_ASR_API_BASE/api_base is empty in the parent process"
             )
 
+    for step in cfg.steps:
+        if step.operator != "semantic.judge":
+            continue
+        from audio_engine.core.operator import OperatorConfig
+        from audio_engine.core.semantic.concurrency import budget_from_pipeline_config
+        from audio_engine.core.semantic.config import freeze_bundle
+        from audio_engine.operators.semantic.judge import SemanticJudgeOperator
+
+        task_config = step.params.get("task_config") or step.params.get("task_config_path")
+        if not task_config:
+            raise ValueError("semantic.judge requires params.task_config")
+        bundle = freeze_bundle(task_config)
+        budget = budget_from_pipeline_config(
+            cfg,
+            max_concurrency_total=bundle.service.max_concurrency_total,
+            step_params=step.params,
+        )
+        emit(
+            "semantic.judge concurrency budget: "
+            f"parallel_shards={budget['parallel_shards']} "
+            f"workers={budget['workers_per_shard']} "
+            f"peak={budget['effective_peak_requests']} "
+            f"max_total={budget['max_concurrency_total']} "
+            f"task_id={bundle.task.task_id}"
+        )
+        # Also run operator hook for consistent error wording.
+        op = SemanticJudgeOperator()
+        op.preflight_concurrency(
+            OperatorConfig(params=dict(step.params), mock=cfg.mock),
+            workers=budget["workers_per_shard"],
+            parallel_shards=budget["parallel_shards"],
+        )
+
     root = resolve_run_root(cfg, run_root)
     emit(f"Sharded run root: {root}")
+
+    # Persist bound step params (e.g. tempo speed_factor / product_root) for children.
+    resolved_yaml = _dump_resolved_pipeline_yaml(cfg, root / "pipeline.resolved.yaml")
+    shard_config_path = resolved_yaml if tempo_steps else path
+    if tempo_steps:
+        emit(f"Resolved pipeline for shards: {resolved_yaml}")
 
     if shard_dir is not None:
         shards = sorted(Path(shard_dir).glob("shard-*.parquet"))
         if not shards:
             raise FileNotFoundError(f"No shard-*.parquet found in {shard_dir}")
+        prepared_path = root / "prepared_input.parquet"
     else:
         full = prepare_full_manifest(cfg, root)
         prepared_path = root / "prepared_input.parquet"
@@ -565,7 +682,7 @@ def run_sharded_pipeline(
         checkpoint_every=cfg.execution.checkpoint_every,
     )
     exit_codes = spawn_shard_processes(
-        config_path=path,
+        config_path=shard_config_path,
         shards=shards,
         run_root=root,
         sharding=sharding,
@@ -577,6 +694,7 @@ def run_sharded_pipeline(
         log=emit,
         progress_config=progress_config,
         transcript_key=transcript_key,
+        speed_factor=speed_factor,
     )
 
     failed = [name for name, code in exit_codes.items() if code != 0]
@@ -594,8 +712,33 @@ def run_sharded_pipeline(
 
     out = Path(cfg.output_manifest)
     out.parent.mkdir(parents=True, exist_ok=True)
-    merged.save(out)
-    merged.save(out.with_suffix(".jsonl"))
+
+    if tempo_steps:
+        from audio_engine.core.augmentation.cli_bind import finalize_sharded_tempo
+        from audio_engine.core.augmentation.publish import AugmentBatchIncomplete
+
+        product_root = Path(str(tempo_steps[0].params.get("product_root") or out.parent))
+        try:
+            summary = finalize_sharded_tempo(
+                product_root=product_root,
+                prepared_input=prepared_path,
+                merged_samples=list(merged.samples),
+            )
+            emit(
+                f"Tempo finalize: status={summary.get('status')} "
+                f"success={summary.get('success')} failed={summary.get('failed')}"
+            )
+            # Prefer formal manifest written by finalize (input order).
+            if out.is_file():
+                merged = Manifest.load(out)
+            report = {**report, "tempo_summary": summary}
+        except AugmentBatchIncomplete as exc:
+            emit(f"[red]{exc}[/red]" if False else str(exc))
+            raise ShardedRunError(str(exc), failed=["tempo_finalize"], run_root=root) from exc
+    else:
+        merged.save(out)
+        merged.save(out.with_suffix(".jsonl"))
+
     artifact = register_manifest_output(
         out,
         catalog_dir=cfg.catalog_dir,

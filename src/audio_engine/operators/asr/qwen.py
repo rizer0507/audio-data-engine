@@ -14,7 +14,7 @@ from audio_engine.core.operator import BatchOperator, OperatorConfig, OperatorRe
 from audio_engine.core.registry import register_operator
 from audio_engine.core.sample import Sample
 from audio_engine.operators.asr.base import BaseASROperator
-from audio_engine.operators.asr.vllm import call_vllm_transcription
+from audio_engine.operators.asr.vllm import call_vllm_chat_asr
 
 _MODEL_CACHE: dict[str, Any] = {}
 _MODEL_LOCK = threading.Lock()
@@ -99,6 +99,9 @@ def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorC
         "api_base",
         "language",
         "prompt",
+        "context",
+        "chat_template_kwargs",
+        "force_language",
     ):
         if key in settings:
             params[f"resolved_{key}"] = settings[key]
@@ -199,7 +202,7 @@ class QwenASROperator(BaseASROperator):
             text = self._mock_transcript(sample, config)
             language = settings.get("language")
         elif api_base:
-            result = call_vllm_transcription(
+            result = call_vllm_chat_asr(
                 sample.audio_path(config.params.get("input_audio_key", "raw")), settings
             )
             text = result["text"]
@@ -268,7 +271,7 @@ class QwenBatchASROperator(BatchOperator):
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         settings = _resolve_batch_settings(config)
         path = sample.audio_path(config.params.get("input_audio_key", "raw"))
-        result = call_vllm_transcription(path, settings)
+        result = call_vllm_chat_asr(path, settings)
         return self._updates(result, config, settings)
 
     def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
@@ -350,7 +353,7 @@ class QwenBatchASROperator(BatchOperator):
 
         def transcribe(item: tuple[int, Sample, str]) -> tuple[int, dict[str, Any]]:
             index, sample, _ = item
-            return index, call_vllm_transcription(sample.audio_path(input_key), settings)
+            return index, call_vllm_chat_asr(sample.audio_path(input_key), settings)
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {pool.submit(transcribe, item): item for item in chunk}

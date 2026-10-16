@@ -39,6 +39,22 @@ def test_manifest_roundtrip(sample_wav: Path, tmp_path: Path):
     loaded = Manifest.load(out)
     assert len(loaded) == 1
     assert loaded.samples[0].id == manifest.samples[0].id
+    assert out.stat().st_size > 0
+    assert not list(tmp_path.glob("*.tmp*"))
+
+
+def test_manifest_load_rejects_zero_byte_parquet(tmp_path: Path):
+    path = tmp_path / "broken.parquet"
+    path.write_bytes(b"")
+    with pytest.raises(ValueError, match="0 bytes"):
+        Manifest.load(path)
+
+
+def test_manifest_empty_save_is_readable(tmp_path: Path):
+    path = tmp_path / "empty.parquet"
+    Manifest([]).save(path)
+    assert path.stat().st_size > 0
+    assert len(Manifest.load(path)) == 0
 
 
 def test_resample_operator(sample_wav: Path):

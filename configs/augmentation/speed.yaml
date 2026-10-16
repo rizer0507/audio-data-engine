@@ -1,0 +1,16 @@
+# 047｜保音高加速增强默认参数
+# CLI --speed-factor 显式值优先于本文件 / 流水线 YAML；缺省 CLI 不覆盖 YAML。
+
+speed_factor: 1.2
+input_audio_key: resampled_16k
+output_audio_key: aug_speed
+backend: ffmpeg_atempo
+preserve_pitch: true
+output_format: wav
+output_subtype: PCM_16
+channel_policy: preserve
+backend_threads: 1
+timeout_seconds: 120
+max_attempts: 2  # 含首次，仅临时 I/O / 超时可恢复错误
+workers: 4
+max_in_flight: 16

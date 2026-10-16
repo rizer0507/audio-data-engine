@@ -9,7 +9,7 @@ import pandas as pd
 import soundfile as sf
 from loguru import logger
 
-from audio_engine.core.artifacts import sample_digest
+from audio_engine.core.artifacts import atomic_path, sample_digest
 from audio_engine.core.sample import Sample
 
 AUDIO_EXTENSIONS = {".wav", ".flac", ".ogg", ".mp3", ".m4a"}
@@ -81,7 +81,15 @@ class Manifest:
 
     @classmethod
     def _load_parquet(cls, path: Path) -> Manifest:
-        df = pd.read_parquet(path)
+        if path.stat().st_size == 0:
+            raise ValueError(
+                f"parquet file is empty (0 bytes): {path}. "
+                "Usually a crashed non-atomic write; delete it and re-run the shard/pipeline."
+            )
+        try:
+            df = pd.read_parquet(path)
+        except Exception as exc:
+            raise ValueError(f"could not read parquet {path}: {exc}") from exc
         json_cols = ["audio", "transcripts", "quality", "labels", "lineage", "status", "errors"]
         samples: list[Sample] = []
         for _, row in df.iterrows():
@@ -103,9 +111,12 @@ class Manifest:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if path.suffix == ".jsonl":
-            self._save_jsonl(path)
+            with atomic_path(path) as tmp:
+                self._save_jsonl(tmp)
         elif path.suffix == ".parquet":
-            self._save_parquet(path)
+            # Atomic replace avoids a 0-byte window that parent progress/merge can hit.
+            with atomic_path(path) as tmp:
+                self._save_parquet(tmp)
         else:
             raise ValueError(f"Unsupported manifest format: {path.suffix}")
         return path

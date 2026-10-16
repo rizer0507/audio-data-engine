@@ -1,0 +1,44 @@
+# 自由标签体系 v2（044）— 独立 evidence_config，无 selection_config。
+# load_tagging_config 已支持 evidence_config；旧 selection_config 需先 migrate-config。
+policy_version: free_tags_v2
+evidence_config: configs/tagging/evidence/zh_asr_families_v2.yaml
+evidence_mode: existing
+work_dir_template: runs/tagging/{batch_id}/{policy_version}
+
+acoustic:
+  voicemail_patterns_path: configs/tagging/lexicons/voicemail_patterns_v1.yaml
+  silero_vad_config: configs/quality/silero_vad_v1.yaml
+  audio_energy_config: configs/quality/audio_energy_v1.yaml
+  dnsmos_config: configs/quality/dnsmos_p835.yaml
+
+library:
+  path: configs/tagging/library
+
+fragments:
+  path: configs/tagging/fragments_v1.yaml
+
+lexicons:
+  tag_1: configs/tagging/lexicons/tag_1_patterns_v1.yaml
+  voicemail: configs/tagging/lexicons/voicemail_patterns_v1.yaml
+  semantic_risk_keywords: configs/tagging/lexicons/semantic_risk_keywords_1012.yaml
+  semantic_risk_qwen_exclusions: configs/tagging/lexicons/semantic_risk_qwen_exclusions.yaml
+
+select_tags:
+  - tag_id: tag_1
+    version: "1"
+  - tag_id: critical_short
+    version: "1"
+  - tag_id: voicemail_raw
+    version: "1"
+  - tag_id: polarity_conflict
+    version: "1"
+  - tag_id: qwen_stable_empty_diag
+    version: "1"
+  - tag_id: human_noise_sig_low
+    version: "1"
+  - tag_id: silence_strict_zero
+    version: "1"
+  - tag_id: qwen_unclear_speech_candidate
+    version: "2"
+  - tag_id: semantic_risk_text_disagreement
+    version: "5"

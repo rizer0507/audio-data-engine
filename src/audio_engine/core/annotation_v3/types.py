@@ -104,6 +104,8 @@ LABEL_SOURCE_TRUSTED_EXTERNAL = "trusted_external"
 LABEL_TIER_GOLD = "gold"
 
 # Immutable identity / provenance columns (reject edits on import).
+# 041: segment packs also freeze parent lineage + clip bounds so old whole-file
+# packs cannot be silently applied to sibling segments.
 IMMUTABLE_EXPORT_COLUMNS = frozenset(
     {
         "sample_id",
@@ -119,5 +121,14 @@ IMMUTABLE_EXPORT_COLUMNS = frozenset(
         "requires_dual_review",
         "leakage_group_id",
         "reservation_role",
+        "source_audio_id",
+        "parent_pcm_sha256",
+        "segment_id",
+        "vad_start_ms",
+        "vad_end_ms",
+        "clip_start_sample",
+        "clip_end_sample",
+        "vad_processing_version",
+        "is_vad_segment",
     }
 )

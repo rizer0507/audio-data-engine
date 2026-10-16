@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,7 +39,7 @@ def build_voicemail_pattern(config: TaggingConfig) -> Any:
     if isinstance(config.acoustic, dict):
         vm_path = config.acoustic.get("voicemail_patterns_path")
     if not vm_path:
-        vm_path = getattr(config.selection, "voicemail_patterns_path", None) or None
+        vm_path = getattr(config.evidence, "voicemail_patterns_path", None) or None
     if not vm_path:
         return None
     try:
@@ -77,8 +78,41 @@ class SampleTaggingResult:
         }
 
 
+def result_from_dict(payload: dict[str, Any]) -> SampleTaggingResult:
+    """Restore full audit evidence from either result blocks or legacy JSON snapshots."""
+    from audio_engine.core.tagging.types import ConditionResult, EvidenceResult, EvidenceStatus
+    rules = []
+    for item in payload.get("rule_results") or []:
+        condition = item.get("condition") or {}
+        evidence = []
+        for raw in condition.get("evidence") or []:
+            entry = dict(raw)
+            entry["status"] = EvidenceStatus(entry.get("status") or "missing")
+            evidence.append(EvidenceResult(**entry))
+        rules.append(RuleResult(
+            rule_id=item["rule_id"], rule_version=item["rule_version"], tag_id=item["tag_id"],
+            ternary=Ternary(item.get("ternary") or "unknown"),
+            condition=ConditionResult(Ternary(condition.get("ternary") or item.get("ternary") or "unknown"),
+                                      evidence=evidence, explanation=condition.get("explanation") or {},
+                                      missing_deps=condition.get("missing_deps") or []),
+            acoustic_plan=list(item.get("acoustic_plan") or []),
+        ))
+    plan = payload.get("acoustic_plan")
+    return SampleTaggingResult(
+        sample_id=payload["sample_id"], rule_results=rules,
+        effective_tags=list(payload.get("effective_tags") or []),
+        eval_status=payload.get("eval_status") or "tagged",
+        asr_fingerprint=payload.get("asr_fingerprint") or "",
+        acoustic_plan=SampleAcousticPlan(sample_id=payload["sample_id"], required=set(plan.get("required") or []),
+                                         rule_deps=plan.get("rule_deps") or {}, reasons=plan.get("reasons") or [])
+        if isinstance(plan, dict) else None,
+        sources=list(payload.get("sources") or []), untagged_reason=payload.get("untagged_reason"),
+    )
+
+
 @dataclass
 class EngineStats:
+    timings: dict[str, float] = field(default_factory=dict)
     planned_calls: dict[str, int] = field(default_factory=lambda: {"vad": 0, "energy": 0, "dnsmos": 0})
     actual_calls: dict[str, int] = field(default_factory=lambda: {"vad": 0, "energy": 0, "dnsmos": 0})
     reused: dict[str, int] = field(default_factory=lambda: {"vad": 0, "energy": 0, "dnsmos": 0})
@@ -109,7 +143,7 @@ class MultiTagEngine:
     def build_asr(self, sample: Sample) -> AsrTextEvidence:
         return build_asr_text_evidence(
             sample,
-            self.config.selection,
+            self.config.evidence,
             voicemail_pattern=self.voicemail_pattern,
         )
 
@@ -123,7 +157,9 @@ class MultiTagEngine:
         dry_run: bool = False,
         compute_acoustics: bool | None = None,
     ) -> SampleTaggingResult:
+        started = time.perf_counter()
         asr = self.build_asr(sample)
+        self.stats.timings["asr_text"] = time.perf_counter() - started
         acoustic = acoustic_from_quality(sample.quality)
         rules = self.config.enabled_rules()
         if rule_ids is not None:
@@ -138,6 +174,8 @@ class MultiTagEngine:
         plan = plan_sample_acoustics(
             sample.id, asr, acoustic, self.config, rules=rules
         )
+        initial_success = {dep for dep in ("vad", "energy", "dnsmos")
+                           if getattr(acoustic, f"{dep}_compute_status")().value == "success"}
         for dep in plan.required:
             if dep in self.stats.planned_calls:
                 self.stats.planned_calls[dep] += 1
@@ -148,13 +186,10 @@ class MultiTagEngine:
             # Count reuse for already-success deps.
             for dep in list(needed):
                 if dep == "vad" and acoustic.vad_compute_status().value == "success":
-                    self.stats.reused["vad"] += 1
                     needed.discard("vad")
                 elif dep == "energy" and acoustic.energy_compute_status().value == "success":
-                    self.stats.reused["energy"] += 1
                     needed.discard("energy")
                 elif dep == "dnsmos" and acoustic.dnsmos_compute_status().value == "success":
-                    self.stats.reused["dnsmos"] += 1
                     needed.discard("dnsmos")
             if needed:
                 view = self.acoustic_adapter.compute(
@@ -173,6 +208,7 @@ class MultiTagEngine:
                     if dep == "dnsmos" and acoustic.dnsmos_compute_status().value == "failed":
                         self.stats.failed["dnsmos"] += 1
 
+        rule_started = time.perf_counter()
         rule_results: list[RuleResult] = []
         matched: list[tuple[str, str, str]] = []
         ternaries: dict[str, Ternary] = {}
@@ -221,6 +257,9 @@ class MultiTagEngine:
             if cond.ternary == Ternary.MATCHED:
                 matched.append((rule.rule_id, rule.version, rule.tag_id))
 
+        used_deps = {dep for rr in rule_results for dep in rr.acoustic_plan}
+        for dep in used_deps & initial_success:
+            self.stats.reused[dep] += 1
         state = prior_state or SampleTagState(
             sample_id=sample.id, audio_sha256=str(sample.sha256 or "")
         )
@@ -257,6 +296,7 @@ class MultiTagEngine:
             else:
                 untagged_reason = "all_rules_not_matched"
 
+        self.stats.timings["rules"] = time.perf_counter() - rule_started
         return SampleTaggingResult(
             sample_id=sample.id,
             rule_results=rule_results,

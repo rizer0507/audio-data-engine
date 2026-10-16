@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from audio_engine.core.selection_v3.config import SelectionV3Config
-from audio_engine.core.selection_v3.five_class_v2_4_on_demand_acoustic import (
-    _sig_is_low,
-    _strict_zero_flag,
-    _vad_state,
+from audio_engine.core.evidence.acoustic_facts import (
+    sig_is_low as _sig_is_low_fact,
+    strict_zero_flag,
+    vad_state,
 )
-from audio_engine.core.selection_v3.types import ACOUSTIC_STATUS_NOT_REQUIRED
+from audio_engine.core.evidence.types import ACOUSTIC_STATUS_NOT_REQUIRED
+from audio_engine.core.tagging.evidence_config import TagEvidenceConfig
 from audio_engine.core.tagging.types import EvidenceStatus
 
 
@@ -40,7 +40,6 @@ class AcousticEvidenceView:
             return EvidenceStatus.MISSING
         if s == "success":
             return EvidenceStatus.SUCCESS
-        # Present state fields without explicit status still usable.
         if self.vad_speech_state:
             return EvidenceStatus.SUCCESS
         return EvidenceStatus.NOT_COMPUTED
@@ -95,7 +94,7 @@ def acoustic_from_quality(quality: dict[str, Any] | None) -> AcousticEvidenceVie
         ovrl_f = None
     return AcousticEvidenceView(
         vad_status=q.get("vad_status"),
-        vad_speech_state=_vad_state(q) if q else None,
+        vad_speech_state=vad_state(q) if q else None,
         energy_status=q.get("energy_status") or q.get("energy_compute_status"),
         strict_all_channels_zero=(
             bool(q["strict_all_channels_zero"])
@@ -113,13 +112,13 @@ def acoustic_from_quality(quality: dict[str, Any] | None) -> AcousticEvidenceVie
 
 def sig_is_low(
     view: AcousticEvidenceView,
-    selection: SelectionV3Config,
+    evidence: TagEvidenceConfig,
 ) -> tuple[bool | None, str]:
     quality = {
         "dnsmos_status": view.dnsmos_status,
         "dnsmos_sig": view.dnsmos_sig,
     }
-    return _sig_is_low(quality, selection)
+    return _sig_is_low_fact(quality, getattr(evidence, "dnsmos_weak_sig", None))
 
 
 def strict_zero(
@@ -130,4 +129,4 @@ def strict_zero(
         "strict_all_channels_zero": view.strict_all_channels_zero,
         "energy_state": view.energy_state,
     }
-    return _strict_zero_flag(quality)
+    return strict_zero_flag(quality)

@@ -3,6 +3,11 @@
 #   audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name mt3000
 #   → cleaned_mt3000 → qwen_asr_mt3000.parquet
 #
+# 落盘即清洗（048）：识别后同进程跑 quality.normalize_transcripts
+#   （zh_asr_v1 去标点/空白 + blank_exact_qwen_v1 整句清空；raw_text 保留原串）。
+#   --asr-run 别名会同步把 normalize 的 models 指到该 alias。
+# 字准/补洗仍可用 pipelines/asr_metric_pipeline.yaml（对已清洗数据幂等）。
+#
 # 兼容：不传 --source-name 时使用下方写死路径。
 # 前置：input 须含 resampled_16k
 # 本地推理环境变量：QWEN_ASR_MODEL_PATH
@@ -40,3 +45,11 @@ pipeline:
     params:
       input_audio_key: resampled_16k
       config_path: configs/asr/qwen_asr.yaml
+
+  - name: normalize_transcripts
+    operator: quality.normalize_transcripts
+    params:
+      models: [qwen]
+      keep_raw: true
+      normalization_path: configs/normalization/zh_asr_v1.yaml
+      blank_exact_hotwords_path: configs/normalization/blank_exact_qwen_v1.yaml

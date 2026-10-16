@@ -28,8 +28,12 @@ LEGACY_MANIFESTS_DIR = DATASETS_ROOT / "manifests"
 DEFAULT_MANIFESTS_DIR = LEGACY_MANIFESTS_DIR
 
 STAGE1_CLEANED_DIR = DATASETS_ROOT / "stage1" / "cleaned"
+STAGE1_INGESTED_DIR = DATASETS_ROOT / "stage1" / "ingested"
+STAGE1_SEGMENTS_DIR = DATASETS_ROOT / "stage1" / "segments"
 STAGE1_ASR_DIR = DATASETS_ROOT / "stage1" / "asr"
+STAGE1_QUALITY_DIR = DATASETS_ROOT / "stage1" / "quality"
 STAGE1_DERIVED_DIR = DATASETS_ROOT / "stage1" / "derived"
+STAGE1_AUGMENTED_DIR = DATASETS_ROOT / "stage1" / "augmented"
 STAGE3_EVAL_SETS_DIR = DATASETS_ROOT / "stage3" / "eval_sets"
 STAGE3_ASR_DIR = DATASETS_ROOT / "stage3" / "asr"
 STAGE3_DERIVED_DIR = DATASETS_ROOT / "stage3" / "derived"
@@ -100,13 +104,23 @@ def manifest_dir_for_stem(stem: str) -> Path:
 
     if text.startswith("cleaned_"):
         return STAGE1_CLEANED_DIR
+    if text.startswith("ingested_"):
+        return STAGE1_INGESTED_DIR
+    if text.startswith("segments_"):
+        return STAGE1_SEGMENTS_DIR
+    if text.startswith("dnsmos_"):
+        return STAGE1_QUALITY_DIR
+    if text.startswith("tempo_") or "__tempo_" in text:
+        return STAGE1_AUGMENTED_DIR
     if (
         text.startswith("multi_asr_")
         or text.startswith("classified_")
         or text.startswith("prepared_v3_")
         or text.startswith("prepared_asr_v3_")
         or text.startswith("prepared_asr_")
+        or text.startswith("prepared_evidence_")
         or text.startswith("tagged_multi_tag_")
+        or text.startswith("tagged_free_tags_")
         or text.startswith("quality_sidecar_")
     ):
         return STAGE1_DERIVED_DIR
@@ -443,6 +457,131 @@ def apply_source_name_to_single_pipeline(
     base_alias = (
         validate_asr_run(aggregate_base) if aggregate_base is not None else None
     )
+    key = pipeline_name.lower()
+
+    # 045 production nodes (explicit stems; do not fall back to cleaned_/sidecar).
+    if key in {"audio_ingest", "ingest_batch", "audio_ingest_batch"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        if source_dir is None:
+            raise ValueError("audio_ingest with --source-name also requires --source-dir")
+        path = Path(source_dir)
+        if not path.is_dir():
+            raise FileNotFoundError(f"--source-dir is not a directory: {source_dir}")
+        return {
+            "source_dir": str(path.resolve()),
+            "input_manifest": "",
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("ingested", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
+    if key in {"vad_segment_batch", "vad_segment", "fsmn_vad_batch"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        resolved = resolve_existing_manifest(manifest_stem("ingested", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("segments", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
+    if key in {"dnsmos_score_batch", "dnsmos_batch", "dnsmos_score"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        # Prefer segments_*; never auto-discover quality_sidecar_*.
+        try:
+            resolved = resolve_existing_manifest(manifest_stem("segments", name))
+        except FileNotFoundError:
+            # Legacy cleaned_* segments (041 combined pipeline) remain readable.
+            resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("dnsmos", name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
+    if key in {"augment_batch_speed", "augment_tempo", "tempo_augment_batch"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        try:
+            resolved = resolve_existing_manifest(manifest_stem("segments", name))
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"default input Manifest not found for batch {name!r}: "
+                f"datasets/stage1/segments/segments_{name}.parquet. "
+                "Pass --input-manifest for this batch's other snapshot "
+                "(e.g. warehouses/<batch>/manifest.parquet)."
+            ) from exc
+        # Output path is finalized by CLI after speed_factor / FFmpeg recipe digest.
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(
+                STAGE1_AUGMENTED_DIR / name / "tempo_pending" / "manifest.parquet"
+            ),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+            "augment_batch": name,
+        }
+
+    if key in {"evidence_join", "evidence_join_batch", "prepare_evidence"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        resolved = resolve_existing_manifest(manifest_stem("segments", name))
+        if join_manifests is not None:
+            joins = [
+                {
+                    "model": str(item["model"]).strip(),
+                    "path": str(resolve_existing_manifest(str(item["path"]))),
+                }
+                for item in join_manifests
+            ]
+        else:
+            joins = []
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("prepared_evidence", name)),
+            "aggregate_manifests": joins or None,
+            "asr_run": None,
+            "aggregate_base": None,
+            "dnsmos_manifest": _posix(manifest_path("dnsmos", name)),
+        }
+
     has_ingest = any(
         getattr(step, "operator", "").startswith("ingest.") for step in steps
     )
@@ -469,8 +608,6 @@ def apply_source_name_to_single_pipeline(
             "asr_run": None,
             "aggregate_base": None,
         }
-
-    key = pipeline_name.lower()
 
     if "multi_asr" in key or ("aggregate" in key and "asr" in key):
         if run_alias is not None:
@@ -559,6 +696,7 @@ def apply_source_name_to_single_pipeline(
         }
 
     if "audio_quality" in key or "quality_sidecar" in key:
+        # Legacy research entry only — new production uses dnsmos_score_batch.
         if run_alias is not None:
             raise ValueError("--asr-run is only valid for ASR inference pipelines")
         if base_alias is not None:
@@ -632,6 +770,55 @@ def apply_source_name_to_single_pipeline(
         return overrides
 
     if (
+        "tag_dataset_free_tags" in key
+        or "free_tags_v2" in key
+        or key in {"tag_free_tags_v2", "tagged_free_tags_v2"}
+    ):
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        # 045: prefer prepared_evidence_*; allow prepared_asr_v3_* for legacy.
+        # Never auto-fallback to classified_* or quality_sidecar_*.
+        candidates = [
+            staged_manifest_path(f"prepared_evidence_{name}"),
+            staged_manifest_path(f"prepared_asr_v3_{name}"),
+        ]
+        resolved = None
+        last_err: Exception | None = None
+        for cand in candidates:
+            try:
+                resolved = resolve_existing_manifest(str(cand))
+                break
+            except FileNotFoundError as exc:
+                last_err = exc
+        if resolved is None:
+            raise FileNotFoundError(
+                f"no free_tags_v2 input Manifest for batch {name!r}; "
+                f"expected prepared_evidence_<batch>.parquet "
+                f"(or legacy prepared_asr_v3_<batch>.parquet). "
+                "Classified_* / quality_sidecar_* auto-discovery is disabled; "
+                "pass an explicit --input-manifest if needed."
+            ) from last_err
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(
+                staged_manifest_path(f"tagged_free_tags_v2_{name}")
+            ),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+            "tagging_batch": name,
+            "summary_xlsx": _posix(
+                Path("data/exports") / f"summary_free_tags_v2_{name}.xlsx"
+            ),
+        }
+
+    if (
         "tag_dataset_multi_tag" in key
         or "multi_tag_v1" in key
         or key in {"tag_multi_tag_v1", "tagged_multi_tag_v1"}
@@ -642,7 +829,7 @@ def apply_source_name_to_single_pipeline(
             raise ValueError(
                 "--aggregate-base is only valid for multi_asr_aggregate pipelines"
             )
-        # Prefer prepared_asr_v3 under stage1/derived; fall back to classified snapshots.
+        # Legacy multi_tag_v1: prefer prepared; classified fallback kept for old entry only.
         candidates = [
             staged_manifest_path(f"prepared_asr_v3_{name}"),
             staged_manifest_path(f"classified_five_class_v3_{name}"),
@@ -771,7 +958,11 @@ def apply_source_name_to_single_pipeline(
             raise ValueError(
                 "--aggregate-base is only valid for multi_asr_aggregate pipelines"
             )
-        resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
+        # 045: prefer VAD segments_*; legacy cleaned_* (combined ingest+VAD) still OK.
+        try:
+            resolved = resolve_existing_manifest(manifest_stem("segments", name))
+        except FileNotFoundError:
+            resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
         out_kind = model_asr_kind(run_alias) if run_alias is not None else asr_kind
         return {
             "source_dir": None,

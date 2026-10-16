@@ -1,4 +1,5 @@
-# 工序② 之后：先按 zh_asr_v1 口径改写文本（去标点 + qwen 精确短语清空），再算 agreement CER。
+# （legacy / 诊断）字准 / agreement CER。生产 ASR batch 已在落盘时清洗（048）；
+# 本流水线仍可对历史脏数据补洗，或对已清洗数据再跑一遍（normalize 幂等）后算 CER。
 #
 #   audio-data pipeline run pipelines/asr_metric_pipeline.yaml \
 #     --source-name mt3000 --agreement-base qwen1

@@ -1,4 +1,4 @@
-"""ASR / text evidence (capability group A) — reuses selection_v3 semantics."""
+"""ASR / text evidence (capability group A) — neutral evidence layer (044)."""
 
 from __future__ import annotations
 
@@ -7,20 +7,20 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from audio_engine.core.sample import Sample
-from audio_engine.core.selection_v3.config import SelectionV3Config
-from audio_engine.core.selection_v3.family_evidence import RouteView, collect_route_views
-from audio_engine.core.selection_v3.five_class_v2 import FamilyStateBundle, build_family_states
-from audio_engine.core.selection_v3.five_class_v2_4_on_demand_acoustic import (
-    _family_dual_run_success,
-    _voicemail_hit_raw,
+from audio_engine.core.evidence.acoustic_facts import (
+    family_dual_run_success,
+    voicemail_hit_raw,
 )
-from audio_engine.core.selection_v3.types import (
+from audio_engine.core.evidence.family_routes import RouteView, collect_route_views
+from audio_engine.core.evidence.family_states import FamilyStateBundle, build_family_states
+from audio_engine.core.evidence.types import (
     FAMILY_STATE_STABLE_EMPTY,
     FAMILY_STATE_STABLE_TEXT,
     FAMILY_STATE_UNAVAILABLE,
     FAMILY_STATE_UNSTABLE,
 )
+from audio_engine.core.sample import Sample
+from audio_engine.core.tagging.evidence_config import TagEvidenceConfig
 
 
 @dataclass
@@ -57,13 +57,14 @@ class AsrTextEvidence:
         }
 
 
-def _config_digest(config: SelectionV3Config) -> str:
+def _config_digest(config: TagEvidenceConfig) -> str:
     payload = {
         "families": config.ordered_families(),
         "expected_runs_per_family": config.expected_runs_per_family,
         "classify_text_policy": getattr(config, "classify_text_policy", None),
         "critical_short_responses": list(config.critical_short_responses or []),
-        "rule_version": getattr(config, "rule_version", None),
+        "policy_version": getattr(config, "policy_version", None),
+        "content_digest": getattr(config, "content_digest", None),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()
@@ -93,7 +94,7 @@ def _input_fingerprint(sample: Sample, routes: list[RouteView]) -> str:
 
 def build_asr_text_evidence(
     sample: Sample,
-    config: SelectionV3Config,
+    config: TagEvidenceConfig,
     *,
     voicemail_pattern: Any | None = None,
 ) -> AsrTextEvidence:
@@ -101,20 +102,19 @@ def build_asr_text_evidence(
     bundles = build_family_states(routes, config)
     expected = int(config.expected_runs_per_family or 2)
     families = list(config.ordered_families())
-    dual = {f: _family_dual_run_success(routes, f, expected) for f in families}
+    dual = {f: family_dual_run_success(routes, f, expected) for f in families}
     states = {b.family: b.state for b in bundles}
     reps = {
         b.family: (b.representative_text if b.state == FAMILY_STATE_STABLE_TEXT else None)
         for b in bundles
     }
-    # Keep stable_empty / unstable / unavailable explicit for diagnostics.
     for b in bundles:
         if b.state == FAMILY_STATE_STABLE_EMPTY:
             reps[b.family] = ""
         elif b.state in {FAMILY_STATE_UNSTABLE, FAMILY_STATE_UNAVAILABLE}:
             reps.setdefault(b.family, None)
 
-    vm = _voicemail_hit_raw(routes, voicemail_pattern)
+    vm = voicemail_hit_raw(routes, voicemail_pattern)
     digest = _config_digest(config)
     fp = _input_fingerprint(sample, routes)
     return AsrTextEvidence(

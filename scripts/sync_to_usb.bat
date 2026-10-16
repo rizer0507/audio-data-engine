@@ -4,6 +4,7 @@ setlocal EnableDelayedExpansion
 
 REM Sync code/config/handbook to USB stick. Additive only: copy/overwrite, never delete.
 REM Does NOT sync: docs data datasets runs .venv .env resources *.parquet
+REM Does NOT sync: EfficientAT-main Qwen3-ASR-main GLM-4-Voice silero-vad-master
 REM Usage: run from project root, or double-click this script.
 REM Dest fixed to F:\audio-data-engine
 
@@ -48,13 +49,13 @@ echo ============================================
 echo.
 echo Whitelist dirs:
 echo   src  pipelines  configs  tests  scripts  tasks  handbook-dir
-echo   EfficientAT-main  silero-vad-master
 echo Whitelist root files:
 echo   pyproject.toml  README.md  .gitignore  .env.example
 echo   and local *.txt handbooks at repo root
 echo.
 echo Never synced:
 echo   docs  data  datasets  runs  .venv  .env  resources  *.parquet
+echo   EfficientAT-main  Qwen3-ASR-main  GLM-4-Voice  silero-vad-master
 echo.
 echo Starting...
 echo.
@@ -73,8 +74,6 @@ call :sync_dir "tests"
 call :sync_dir "scripts"
 call :sync_dir "tasks"
 call :sync_dir "手册"
-call :sync_dir "EfficientAT-main"
-call :sync_dir "silero-vad-master"
 
 REM ---------- 2) whitelist root files ----------
 call :sync_file "pyproject.toml"

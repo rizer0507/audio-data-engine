@@ -201,6 +201,9 @@ def assert_batch_complete(
         "ok": 0,
     }
 
+    # 041: original_audio_sha256 is the *working* audio identity (segment content
+    # for VAD segments). Sibling segments share parent_pcm_sha256 but must not
+    # share original_audio_sha256; duplicate detection stays on the working hash.
     seen_sha: dict[str, str] = {}
     for sample in reviewed:
         sha = original_audio_sha(sample)

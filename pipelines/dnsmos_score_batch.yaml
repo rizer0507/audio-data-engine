@@ -1,0 +1,46 @@
+# 045：独立 DNSMOS 评分流水线（与 ASR 同级，非质量侧车）
+#
+#   audio-data pipeline run pipelines/dnsmos_score_batch.yaml \
+#     --source-name "$BATCH"
+#   → datasets/stage1/quality/dnsmos_<BATCH>.parquet
+#
+# 也可显式指定片段 Manifest：
+#   audio-data pipeline run pipelines/dnsmos_score_batch.yaml \
+#     --source-name "$BATCH" \
+#     --input-manifest datasets/stage1/segments/segments_$BATCH.parquet
+#
+# 配置：configs/quality/dnsmos_p835.yaml（model_path 须可读；calibrated 保持 false）
+# 正式对象：全部保留片段；不经 ASR / 旧分类 / tag 候选门控。
+
+name: dnsmos_score_batch
+
+input:
+  manifest: datasets/stage1/segments/segments_source_A.parquet
+
+output:
+  manifest: datasets/stage1/quality/dnsmos_source_A.parquet
+
+execution:
+  executor: thread
+  workers: 4
+  max_in_flight: 16
+  fail_fast: false
+  checkpoint_every: 500
+
+sharding:
+  shards: 8
+  strategy: duration-balanced
+  parallel_shards: 4
+  workers: 4
+  executor: thread
+
+pipeline:
+  - name: dnsmos
+    operator: quality.dnsmos
+    params:
+      config_path: configs/quality/dnsmos_p835.yaml
+      input_audio_key: resampled_16k
+      # 每工作线程独立会话；禁止未验证的类级单例跨线程共享可变状态
+      session_mode: thread_local
+      # 保留 4 分片 × 4 worker；ONNX 内部线程预算见上述 config_path 的 runtime。
+      # 多 batch/VAD 合计硬上限：通过 scripts/audio_cpu_budget.py 共用 cgroup。

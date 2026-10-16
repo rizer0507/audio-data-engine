@@ -20,11 +20,26 @@ def empty_counts() -> dict[str, int]:
     return dict.fromkeys(COUNT_KEYS, 0)
 
 
+_QUALITY_FINGERPRINT_KEYS = (
+    "vad_status",
+    "vad_speech_state",
+    "energy_status",
+    "energy_compute_status",
+    "energy_state",
+    "strict_all_channels_zero",
+    "dnsmos_status",
+    "dnsmos_sig",
+    "dnsmos_bak",
+    "dnsmos_ovrl",
+)
+
+
 def digest_samples(samples: list[Sample]) -> str:
     """Fingerprint a step's input so a checkpoint is never replayed onto other data.
 
     Includes transcript texts so an upstream ASR refresh (e.g. stage1 Qwen) invalidates
-    downstream checkpoints that only shared the same audio sha256.
+    downstream checkpoints that only shared the same audio sha256. Also covers acoustic
+    quality fields and route success status so sidecar refreshes invalidate tagging.
     """
     hasher = hashlib.sha256()
     for sample in samples:
@@ -33,11 +48,26 @@ def digest_samples(samples: list[Sample]) -> str:
         hasher.update(sample_digest(sample).encode("utf-8"))
         hasher.update(b"\0")
         transcript_view = {
-            key: (value.get("text") if isinstance(value, dict) else value)
+            key: {
+                "text": (value.get("text") if isinstance(value, dict) else value),
+                "status": (value.get("status") if isinstance(value, dict) else None),
+                "raw_text": (
+                    (value.get("extra") or {}).get("raw_text")
+                    if isinstance(value, dict) and isinstance(value.get("extra"), dict)
+                    else None
+                ),
+            }
             for key, value in sorted(sample.transcripts.items())
         }
         hasher.update(
             json.dumps(transcript_view, ensure_ascii=False, sort_keys=True, default=str).encode(
+                "utf-8"
+            )
+        )
+        quality = sample.quality if isinstance(sample.quality, dict) else {}
+        quality_view = {k: quality.get(k) for k in _QUALITY_FINGERPRINT_KEYS}
+        hasher.update(
+            json.dumps(quality_view, ensure_ascii=False, sort_keys=True, default=str).encode(
                 "utf-8"
             )
         )

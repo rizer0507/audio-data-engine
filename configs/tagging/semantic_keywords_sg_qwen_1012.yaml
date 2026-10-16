@@ -1,7 +1,9 @@
 # 2026-10-12 真实规则：任一路原文关键词命中 + SV/GLM 稳定同文 + Qwen 稳定异文。
-# 单字允许进入，不设最小长度；不要求极性相反，不运行声学模型。
+# 2026-10-14：准入词表包含多字倾向及指定准入表达；短字分歧由定义库
+# semantic_risk_text_disagreement 分支 B 处理（Qwen 1~3 汉字且三族两两不等价）。
+# 本文件仅保留关键词分支；不要求极性相反，不运行声学模型。
 policy_version: selection_multi_tag_v1
-selection_config: configs/selection/zh_asr_five_class_v3.yaml
+evidence_config: configs/tagging/evidence/zh_asr_families_v2.yaml
 evidence_mode: existing
 work_dir_template: runs/tagging/{batch_id}/semantic_keywords_sg_qwen_1012
 lexicons:
@@ -10,7 +12,7 @@ lexicons:
 tags:
   - tag_id: semantic_keywords_sg_agree_qwen_disagree
     name: 语义风险词命中且SV/GLM同文Qwen异文
-    description: 任一成功路次原文命中现有语义风险词表；三家族双跑稳定有字，SV/GLM无害等价，Qwen与二者不等价；包含单字。
+    description: 任一成功路次原文命中多字强倾向语义词表；三家族双跑稳定有字，SV/GLM无害等价，Qwen与二者不等价。
 rules:
   - rule_id: rule_semantic_keywords_sg_qwen_v1
     version: '1'

@@ -1,0 +1,73 @@
+# 045：音频入库（父源登记 + 16k mono ch0 规范化）
+# 与 VAD 切分拆开；产物为父源 Manifest，不是片段。
+#
+#   audio-data pipeline run pipelines/audio_ingest.yaml \
+#     --source-name "$BATCH" --source-dir /path/to/raw
+#   → datasets/stage1/ingested/ingested_<BATCH>.parquet
+
+name: audio_ingest
+
+input:
+  source: source_A
+
+output:
+  manifest: datasets/stage1/ingested/ingested_source_A.parquet
+
+execution:
+  executor: thread
+  workers: 32
+  max_in_flight: 128
+  fail_fast: false
+  checkpoint_every: 5000
+
+sharding:
+  shards: 8
+  strategy: hash
+  parallel_shards: 16
+  workers: 16
+  executor: thread
+
+pipeline:
+  - name: ingest
+    operator: ingest.scan
+
+  - name: pcm_convert
+    operator: audio.pcm_to_wav
+    execution:
+      workers: 32
+    params:
+      sample_rate: 16000
+      source_sample_rate: 16000
+      channels: 1
+      input_audio_key: raw
+      output_audio_key: pcm_wav
+
+  - name: resample
+    operator: audio.resample
+    execution:
+      workers: 32
+    params:
+      sample_rate: 16000
+      input_audio_key: pcm_wav
+      output_audio_key: resampled_16k
+
+  - name: normalize_report
+    operator: audio.normalize_report
+
+  - name: probe
+    operator: quality.probe
+    execution:
+      workers: 48
+    params:
+      input_audio_key: resampled_16k
+
+  - name: audio_pass
+    operator: quality.filter
+    params:
+      expr: "label_broken != True and duration > 0"
+      label_key: audio_pass
+
+  - name: select_pass
+    operator: quality.select
+    params:
+      expr: "label_audio_pass == True"

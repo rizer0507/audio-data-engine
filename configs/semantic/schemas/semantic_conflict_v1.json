@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "semantic_conflict_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "conflict",
+    "insufficient_evidence",
+    "summary",
+    "differing_aspects"
+  ],
+  "properties": {
+    "conflict": {
+      "type": "boolean",
+      "description": "是否存在实质语义冲突（非标点/同义改写）"
+    },
+    "insufficient_evidence": {
+      "type": "boolean",
+      "description": "可用成功识别证据是否不足以做出可靠判断"
+    },
+    "summary": {
+      "type": "string",
+      "description": "简要说明判断依据"
+    },
+    "differing_aspects": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "negation",
+          "intent",
+          "quantity",
+          "time",
+          "entity",
+          "action",
+          "other",
+          "none"
+        ]
+      },
+      "description": "冲突涉及的方面；无冲突时可含 none"
+    }
+  }
+}

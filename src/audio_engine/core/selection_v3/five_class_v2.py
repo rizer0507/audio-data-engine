@@ -15,6 +15,16 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Any
 
+from audio_engine.core.evidence.family_states import (  # noqa: F401  (044 re-exports)
+    FamilyStateBundle,
+    build_family_states,
+    harmless_equivalent as _harmless_equivalent,
+)
+from audio_engine.core.evidence.semantic_risk import (  # noqa: F401  (044 re-exports)
+    is_critical_short_response as _is_critical_short_response,
+    normalize_response as _normalize_response,
+    semantic_risk_v2 as _semantic_risk_v2,
+)
 from audio_engine.core.sample import Sample
 from audio_engine.core.selection_v3.audio_energy import (
     AudioEnergyEvidence,
@@ -92,17 +102,6 @@ from audio_engine.core.selection_v3.types import (
 _SUBSTANTIVE_DIST = 0.30
 
 
-@dataclass
-class FamilyStateBundle:
-    family: str
-    state: str
-    routes: list[RouteView] = field(default_factory=list)
-    eligible: list[RouteView] = field(default_factory=list)
-    representative: RouteView | None = None
-    representative_text: str | None = None
-    opposing_text: str | None = None
-
-
 def _audio_refs(sample: Sample) -> dict[str, str]:
     refs: dict[str, str] = {}
     for key, path in (sample.audio or {}).items():
@@ -127,132 +126,6 @@ def _route_audit(routes: list[RouteView]) -> dict[str, Any]:
         }
         for r in routes
     }
-
-
-def _harmless_equivalent(left: str, right: str) -> bool:
-    if left == right:
-        return True
-    a, _ = to_simplified(left)
-    b, _ = to_simplified(right)
-    if a == b:
-        return True
-    ka = apply_tolerance_key(a)
-    kb = apply_tolerance_key(b)
-    if ka == kb:
-        if ("吗" in a) != ("吗" in b) or ("嗎" in a) != ("嗎" in b):
-            return False
-        if ("吧" in a) != ("吧" in b):
-            return False
-        return True
-    return False
-
-
-def _normalize_response(text: str) -> str:
-    simplified, _ = to_simplified(text or "")
-    return apply_tolerance_key(simplified).strip()
-
-
-def _is_critical_short_response(text: str, config: SelectionV3Config) -> bool:
-    body = _normalize_response(text)
-    if not body:
-        return False
-    catalog = [
-        _normalize_response(x)
-        for x in (config.critical_short_responses or [])
-        if str(x).strip()
-    ]
-    if body in set(catalog):
-        return True
-    # Conservative: short polarity templates also block human_noise.
-    if han_char_count(body) <= 4:
-        pol = polarity_of_text(body, compile_lexicon(config))
-        if pol in {"positive", "negative"}:
-            return True
-    return False
-
-
-def build_family_states(
-    routes: list[RouteView], config: SelectionV3Config
-) -> list[FamilyStateBundle]:
-    """Build exactly one of stable_text|stable_empty|unstable|unavailable per family."""
-    bundles: list[FamilyStateBundle] = []
-    expected = int(config.expected_runs_per_family or 2)
-    for family in config.ordered_families():
-        members = [r for r in routes if r.family == family]
-        excluded = [r for r in members if r.route_disposition == ROUTE_EXCLUDED]
-        failed = [
-            r
-            for r in members
-            if r.route_disposition in {ROUTE_FAILED, ROUTE_MISSING}
-            or r.status in {RUN_STATUS_FAILED, RUN_STATUS_MISSING}
-        ]
-        # Eligible success only — exclusions/failures never become empty votes.
-        eligible = [
-            r
-            for r in members
-            if r.route_disposition == ROUTE_ELIGIBLE
-            and r.status in {RUN_STATUS_SUCCESS_TEXT, RUN_STATUS_SUCCESS_EMPTY}
-        ]
-        text_routes = [
-            r for r in eligible if r.status == RUN_STATUS_SUCCESS_TEXT and r.classify_text
-        ]
-        empty_routes = [
-            r
-            for r in eligible
-            if r.status == RUN_STATUS_SUCCESS_EMPTY or not r.classify_text
-        ]
-        bundle = FamilyStateBundle(family=family, state=FAMILY_STATE_UNAVAILABLE, routes=members)
-        bundle.eligible = eligible
-
-        if len(text_routes) >= expected:
-            texts = [r.classify_text for r in text_routes]
-            pairwise_ok = all(
-                _harmless_equivalent(texts[i], texts[j])
-                for i in range(len(texts))
-                for j in range(i + 1, len(texts))
-            )
-            if pairwise_ok:
-                from audio_engine.core.selection_v3.semantic_risk import (
-                    route_pair_has_semantic_conflict,
-                )
-
-                patterns = compile_lexicon(config)
-                conflict = any(
-                    route_pair_has_semantic_conflict(a.classify_text, b.classify_text, patterns)
-                    for a, b in combinations(text_routes, 2)
-                )
-                if conflict:
-                    bundle.state = FAMILY_STATE_UNSTABLE
-                    bundle.opposing_text = texts[0]
-                else:
-                    bundle.state = FAMILY_STATE_STABLE_TEXT
-                    bundle.representative = sorted(text_routes, key=lambda r: r.run_id)[0]
-                    bundle.representative_text = bundle.representative.classify_text
-            else:
-                bundle.state = FAMILY_STATE_UNSTABLE
-                bundle.opposing_text = texts[0]
-                bundle.representative = text_routes[0]
-        elif text_routes and empty_routes:
-            bundle.state = FAMILY_STATE_UNSTABLE
-            bundle.opposing_text = text_routes[0].classify_text
-            bundle.representative = text_routes[0]
-        elif len(text_routes) == 1 and expected >= 2:
-            # One success text + other failed/missing/excluded → unstable.
-            bundle.state = FAMILY_STATE_UNSTABLE
-            bundle.opposing_text = text_routes[0].classify_text
-            bundle.representative = text_routes[0]
-        elif not text_routes and len(empty_routes) >= expected:
-            bundle.state = FAMILY_STATE_STABLE_EMPTY
-        elif not text_routes and empty_routes and (failed or excluded):
-            # One successful empty + incomplete peer → unstable (never fake stable_empty).
-            bundle.state = FAMILY_STATE_UNSTABLE
-        elif not eligible:
-            bundle.state = FAMILY_STATE_UNAVAILABLE
-        else:
-            bundle.state = FAMILY_STATE_UNAVAILABLE
-
-        bundles.append(bundle)
-    return bundles
 
 
 def _family_counts(bundles: list[FamilyStateBundle]) -> dict[str, Any]:
@@ -303,76 +176,6 @@ def _voicemail_hit(
                     "snippet": text[:120],
                     "match": matched.group(0) if matched else "",
                 }
-    return None
-
-
-def _semantic_risk_v2(
-    bundles: list[FamilyStateBundle],
-    config: SelectionV3Config,
-) -> Any:
-    """Only multi stable_text family conflicts. Empty-vs-text is not semantic_risk."""
-    patterns = compile_lexicon(config)
-    views: list[FamilyPolarityView] = []
-    for bundle in bundles:
-        if bundle.state == FAMILY_STATE_STABLE_TEXT and bundle.representative_text:
-            text = bundle.representative_text
-            views.append(
-                FamilyPolarityView(
-                    family=bundle.family,
-                    text=text,
-                    polarity=polarity_of_text(text, patterns),
-                    stable=True,
-                    is_empty=False,
-                    run_ids=[r.run_id for r in bundle.eligible],
-                )
-            )
-    # Do not feed stable_empty into analyze_strict_risks — that would open
-    # hallucinated_assertion, which 028 routes to environment_noise/hardcase.
-    analysis = analyze_strict_risks(
-        views,
-        patterns=patterns,
-        acoustic={},
-        max_han_chars=int(getattr(config, "short_polarity_max_han_chars", 4) or 4),
-        human_verified_no_target=False,
-        human_unintelligible_polarity=False,
-    )
-    if analysis.hit and analysis.hit.formal:
-        if analysis.hit.subtype == SUBTYPE_HALLUCINATED_ASSERTION:
-            return None
-        return analysis.hit
-    # Explicit multi-family polarity conflict fallback.
-    pos = [v for v in views if v.polarity == "positive"]
-    neg = [v for v in views if v.polarity == "negative"]
-    if pos and neg:
-        # Require same-proposition-ish overlap via shared objects or short responses.
-        from audio_engine.core.selection_v3.semantic_risk_strict import _objects
-
-        for a in pos:
-            for b in neg:
-                oa, ob = _objects(a.text), _objects(b.text)
-                if (oa and ob and not oa.isdisjoint(ob)) or (
-                    han_char_count(a.text) <= 4 and han_char_count(b.text) <= 4
-                ):
-                    from audio_engine.core.selection_v3.semantic_risk_strict import StrictRiskHit
-                    from audio_engine.core.selection_v3.types import SUBTYPE_SEMANTIC_REVERSAL
-
-                    return StrictRiskHit(
-                        subtype=SUBTYPE_SEMANTIC_REVERSAL,
-                        evidence={
-                            "family_a": a.family,
-                            "family_b": b.family,
-                            "text_a": a.text,
-                            "text_b": b.text,
-                        },
-                        conflict_spans=[
-                            {
-                                "family_a": a.family,
-                                "family_b": b.family,
-                                "text_a": a.text,
-                                "text_b": b.text,
-                            }
-                        ],
-                    )
     return None
 
 

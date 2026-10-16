@@ -1,0 +1,11 @@
+请仅根据下列指定家族的识别文本判断说话人意图。
+不要使用未列出的家族。证据不足时将 intent 设为 unknown，并将 insufficient_evidence 设为 true。
+只输出符合 Schema 的 JSON。
+
+输出 Schema：{{ output_schema | tojson }}
+样本标识：{{ sample.id | tojson }}
+任务参数：{{ task.parameters | tojson }}
+指定家族识别：
+{% set focus = task.parameters.get('focus_family', 'qwen') %}
+家族：{{ focus | tojson }}
+{{ families[focus].runs | tojson }}

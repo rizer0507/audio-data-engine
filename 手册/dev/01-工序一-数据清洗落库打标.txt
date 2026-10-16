@@ -1,194 +1,70 @@
-﻿工序一：数据清洗落库打标（dev · 一键执行）
+﻿工序一：入库 → VAD → ASR∥DNSMOS → 打标（045，分步执行）
 ================================================================================
-# 对齐：docs/01-项目架构/工序总览.md · 工序一
-# 详解：手册/dev/00-总详细手册.txt
-# 一条命令多步骤：手册/dev/05-一条命令多步骤.txt（030 全链路 / 031 后置分类）
-# 分拣默认：selection_five_class_v3（037 按需声学）；v2.4/v2.3/v2.2/v2/v1 对照；legacy 回退 asr_anomaly + selection_v3.0
-# 家族数 N≥3×双跑（015），三族无需补 Kimi
-# 规则 SSOT：docs/02-规范规则/数据挑选规则_v3.md
-# 噪声：ASR 预分流 + 按需 Silero/energy/DNSMOS(SIG)；全量 sidecar 仅研究/复用。详解见下方 §3b
-# 依赖：classify 文本相似度需 rapidfuzz（019；pip install -e . 已含）
-# 前置：tmux 内已起好所需 ASR 服务（见 00 §2.0）；勿用裸 VS Code/Tabby 终端过夜
-#       vLLM 与本批 pipeline 分开会话；Ctrl+b d 脱离后断线不停
-#       按需评分前确认 DNSMOS ONNX + 音频路径可读
-#       若走 stage1 单命令（05 §1），则不必为本批另开手工 vLLM tmux
-# 改批次只改 BATCH / SOURCE_DIR / V3_*_CFG 与 runs 登记
+# 详解：docs/07-操作手册/045-入库VAD多路ASR独立DNSMOS自由标签.md
+# 台账：单条流水线执行命令.txt §0c
+# 须在 tmux 内跑；ASR/vLLM 服务先起好；DNSMOS 模型路径见 configs/quality/dnsmos_p835.yaml
 
-# 建议：tmux new -s asr_batch   （或 attach 已有会话）后再跑下面
+# 进入工程
 cd /data2/data-cp/lizi/audio-data-engine
+# 激活环境
 source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
+# 限制原生线程，避免和进程并发打架
 export OMP_NUM_THREADS=1
+# 同上
 export MKL_NUM_THREADS=1
 
-export BATCH=mt3000
-export SOURCE_DIR=/data2/data-cp/lizi/mt3000
+# 批次名（只改这里和 SOURCE_DIR）
+export BATCH=20260813-n-1
+# 原始音频目录
+export SOURCE_DIR=/data2/data-cp/datasets/asr_datasets/fenshen/20260813/1
+# FSMN VAD：服务器原始权重（只读资产）
+export FSMN_VAD_SOURCE_MODEL_DIR=/data2/data-cp/xijujun/models/fsmn-vad
+# 本地运行目录（须已用 prepare 覆盖 fenshen config；必须含 config.yaml、configuration.json、model.pt、am.mvn）
+# 首次准备（每机一次即可）：
+# python scripts/prepare_fsmn_vad_runtime.py \
+#   --source-model-dir "$FSMN_VAD_SOURCE_MODEL_DIR" \
+#   --fenshen-config configs/vad/fenshen_vad_config.yaml \
+#   --runtime-dir "$PWD/var/models/fsmn-vad-fenshen-v1"
+export FSMN_VAD_RUNTIME_DIR="$PWD/var/models/fsmn-vad-fenshen-v1"
+# Qwen vLLM 地址（按部署改，勿照抄）
 export QWEN_ASR_API_BASE=http://127.0.0.1:5555
+# Qwen API Key（无则 dummy）
 export QWEN_ASR_API_KEY=dummy
-export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
-# 三族配置；四族改用 configs/datasets|selection/zh_asr_v3.yaml
-export V3_DATASET_CFG=configs/datasets/zh_asr_v3_three_family.yaml
-export V3_SELECTION_CFG=configs/selection/zh_asr_v3_three_family.yaml
+# GLM vLLM 地址（按部署改）
+export GLM_ASR_API_BASE=http://127.0.0.1:5570
 
-# 1) 清洗落库
-audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
-  --source-name "$BATCH" \
-  --source-dir "$SOURCE_DIR"
+# ---------- 1) 入库（单独产生 ingested_$BATCH.parquet）----------
+# 父源登记 + 16k mono 规范化 → datasets/stage1/ingested/ingested_$BATCH.parquet
+audio-data pipeline run pipelines/audio_ingest.yaml --source-name "$BATCH" --source-dir "$SOURCE_DIR"
 
-# 2) 同源多 ASR（契约别名每族 _1/_2；≥3 族）
-curl -fsS http://127.0.0.1:5555/v1/models | python -m json.tool
-audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run qwen_1
-# 第二路换端口或同权重独立 execution_id 后再跑：
-# export QWEN_ASR_API_BASE=http://127.0.0.1:5556
-audio-data pipeline run pipelines/qwen_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run qwen_2
+# ---------- 2) VAD 切分（读 ingested_ → 写 segments_）----------
+# 输入 ingested_$BATCH.parquet → 输出 datasets/stage1/segments/segments_$BATCH.parquet
+audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
 
-audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run sensevoice_1
-audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
-  --source-name "$BATCH" --asr-run sensevoice_2
+# ---------- 3) ASR 与 DNSMOS（可并行；都读 segments_）----------
+# ASR 落盘已含转写清洗（048：去控制标签/zh_asr_v1 去标点；Qwen 另挂 blank_exact）
+# transcripts.*.text 已是可比正文；原串在 extra.raw_text。不必再为 join/tag 先跑 asr_metric_pipeline。
+# Qwen 一路 → datasets/stage1/asr/qwen1_asr_$BATCH.parquet
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH" --asr-run qwen1
+# GLM 一路 → datasets/stage1/asr/glm1_asr_$BATCH.parquet
+audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm1
+# 独立 DNSMOS → datasets/stage1/quality/dnsmos_$BATCH.parquet
+audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"
 
-# GLM 双跑（三族必备之一）
-# export GLM_ASR_API_BASE=http://127.0.0.1:5570
-# export GLM_ASR_MODEL=glm-asr
-# audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm_1
-# audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm_2
+# ---------- 4) 证据合并 ----------
+# 对齐片段 + ASR + DNSMOS → datasets/stage1/derived/prepared_evidence_$BATCH.parquet
+audio-data pipeline run pipelines/evidence_join.yaml --source-name "$BATCH" --join-manifest qwen1 --join-manifest glm1
 
-# 可选第四族 Kimi（非进 v3 门票）
-# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH" --asr-run kimi_1
-# audio-data pipeline run pipelines/kimi_asr_batch.yaml --source-name "$BATCH" --asr-run kimi_2
+# ---------- 5) 自由 tag ----------
+# 消费已提交证据 → datasets/stage1/derived/tagged_free_tags_v2_$BATCH.parquet
+audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml --source-name "$BATCH" --config configs/tagging/zh_asr_free_tags_v2.yaml
 
-# 2b) 每路 register-asr-run 后写入 $V3_DATASET_CFG 的 runs:（见 012-A）
+# ---------- 进度 / 续跑（各步独立 runs）----------
+# 看某次子流水线进度（把路径换成该步 runs 目录）
+audio-data pipeline progress "runs/<run-dir>" --follow
+# 某步续跑：对该 YAML 再跑一次，加 --resume "runs/<run-dir>"
 
-# 3) prepare → attach → 分拣（内嵌能量和 DNSMOS 候选评分）
-#    正式五类：classify_dataset_five_class_v2_2_auto_noise
-#    legacy：classify_dataset_v3_asr_anomaly_noise（selection_v3.0）
-#    正常中文 → noise_diagnosis_status=not_required，不跑 DNSMOS。
-#    全量 audio_quality_sidecar 只作研究/历史复现，不是新默认；分拣失败勿自动改跑全量。
-audio-data pipeline run pipelines/prepare_dataset_v3.yaml \
-  --source-name "$BATCH" \
-  --config "$V3_DATASET_CFG" \
-  --force
-
-audio-data pipeline run pipelines/attach_asr_v3.yaml \
-  --source-name "$BATCH" \
-  --config "$V3_DATASET_CFG" \
-  --force
-
-# 3a) 历史对照：五类分拣 v1（YAML 内两步：diagnose_asr_anomaly → classify）
-#     配置示例：configs/selection/zh_asr_five_class_v1.yaml 或批次专用 *_0914_*.yaml
-# audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml \
-#   --source-name "$BATCH" \
-#   --config configs/selection/zh_asr_five_class_v1.yaml
-#
-# 3a-028) v2 对照（无 DNSMOS 联合语义；不覆盖 v1 产物）
-# audio-data pipeline run pipelines/classify_dataset_five_class_v2_auto_noise.yaml \
-#   --source-name "$BATCH" \
-#   --config configs/selection/zh_asr_five_class_v2_auto_noise.yaml \
-#   --force
-# 产物：classified_five_class_v2_auto_noise_${BATCH}.parquet
-
-# 3a-029) v2.2 DNSMOS 联合五类（正式；不覆盖 v1/v2；不重跑 GPU ASR）
-audio-data pipeline run pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml \
-  --source-name "$BATCH" \
-  --config configs/selection/zh_asr_five_class_v2_2_auto_noise.yaml \
-  --force
-# 产物：classified_five_class_v2_2_auto_noise_${BATCH}.parquet
-# 导出：audio-data review export-summary datasets/stage1/derived/classified_five_class_v2_2_auto_noise_${BATCH}.parquet \
-#   --output data/exports/summary_five_class_v2_2_auto_noise_${BATCH}.xlsx --max-rows 20000
-
-# 3a-031) 六路 ASR 已齐时的统一后置入口（不启 ASR / 不占 GPU；推荐）
-#   别名：--family > dataset YAML > stage1 固定 qwen_1/2、glm_1/2、sensevoice_1/2
-#   台账：手册/dev/05-一条命令多步骤.txt §2
-#   手册：docs/07-操作手册/已有六路ASR一键分类导出.md
-python scripts/classify_asr_to_xlsx.py --batch "$BATCH" --energy-workers 32
-# 等价：audio-data stage1 classify --batch "$BATCH" --energy-workers 32
-# 默认同时写出 summary_*.xlsx + classified_five_class_v2_2_auto_noise_*.parquet
-
-# 3a') legacy 回退：ASR 异常触发噪声 + selection_v3.0
-audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml \
-  --source-name "$BATCH" \
-  --config "$V3_SELECTION_CFG"
-
-# ---------------------------------------------------------------------------
-# 3b) 噪声打分（DNSMOS）— 工序说明与可选命令
-# ---------------------------------------------------------------------------
-# 落点：工序一③，ASR attach 之后；清洗①不跑 DNSMOS，也不引入 VAD。
-# 主路径：分拣 YAML 内嵌 quality.asr_anomaly_noise（按需），读 configs/quality/dnsmos_p835.yaml。
-# 旁路：pipelines/audio_quality_sidecar.yaml（全量，研究/复现 only）。
-#
-# 依赖（按需评分前检查）：
-#   1) ONNX：configs/quality/dnsmos_p835.yaml → model_path（例 third_party/dnsmos/sig_bak_ovr.onnx）
-#   2) pip：onnxruntime 或 pip install '.[dnsmos]'；内网可另装 distillmos（见 00 附录）
-#   3) 音频：sample.audio.resampled_16k 在本机可读（路径在 /data2 时须在可读机跑）
-#   4) calibrated: false 保持不变；v2.2 由 dnsmos_decision_v2_2 的版本化阈值决策，不靠此开关定类
-#
-# v2.2 主路径：先计算 audio_energy，再仅对全空有声/临界、两空一有字等候选复用或计算 DNSMOS：
-#   · noisy 可增强 background/human_noise 或解决 borderline
-#   · clean+strong 与全空有声矛盾 → hardcase
-#   · unavailable → 审计回退 v2 强规则，不伪造 noisy
-# 历史入口何时调用 DNSMOS：
-#   · selection_v3.0 / asr_anomaly：全族无有效转写，或任意成功路非中文话语
-#   · selection_five_class_v1：外语/热词/提示词回声已前置排除，不因外语触发评分；
-#     触发侧重全族无有效转写，以及空/有字+肯否、短应答冲突等（作旁证/送标，非定噪声类）
-#   · 未触发 → not_required（分数保持 null，不能填干净分，不能挡金标）
-#   · 触发失败 → failed/unsupported；不造 pending_evidence 池，五类下直接人工任务
-#
-# 状态字段：noise_diagnosis_status = not_required | pending | success | failed | unsupported
-# 分数字段：dnsmos_sig / dnsmos_bak / dnsmos_ovrl；未校准 → noise_band=unknown
-# v2.2 规则：家族四态 + 能量 + DNSMOS 联合决定；DNSMOS 单项不能独立证明人声或背景噪声。
-# v1 的“未校准不得自动入 environment_noise”只适用于 v1 历史入口。
-#
-# 研究全量评分（不是新默认，不得在分拣失败时自动改跑）：
-# audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
-#   --source-name "$BATCH" --config configs/quality/dnsmos_p835.yaml --force
-# 产物：datasets/stage1/derived/quality_sidecar_${BATCH}.parquet
-#
-# 旧全量质量门禁回退（须显式 legacy_full_quality_gate）：
-# audio-data pipeline run pipelines/classify_dataset_v3.yaml \
-#   --source-name "$BATCH" --config "$V3_SELECTION_CFG" --force
-
-# 022 新规则是显式影子，不替换上一行。回退就是上一行（selection_v3.0）。
-# 产物名含 semantic_tolerant_20260911，不要覆盖历史 classified。hold/retry 不是可用金标。
-# audio-data pipeline run pipelines/classify_dataset_v3_semantic_tolerant.yaml \
-#   --source-name "$BATCH" \
-#   --config configs/selection/zh_asr_v3_0908_30000_semantic_tolerant.yaml
-# 024 业务语义影子（不覆盖 022 产物）。自动类不是金标；人审≤3000 未达标。
-# audio-data pipeline run pipelines/classify_dataset_v3_business_semantic_v4.yaml \
-#   --source-name "$BATCH" \
-#   --config configs/selection/zh_asr_v3_0908_30000_business_semantic_v4.yaml
-# 025 中文-only 文本前置层影子（不覆盖 classified_v3_* / 022 / 024）。空路不是无语音金标。
-# audio-data pipeline run pipelines/classify_dataset_v3_zh_only.yaml \
-#   --source-name "$BATCH" \
-#   --config configs/selection/zh_asr_v3_0908_30000_zh_only.yaml
-
-audio-data review export-summary "datasets/stage1/derived/classified_v3_${BATCH}.parquet" \
-  --output "data/exports/summary_v3_${BATCH}.xlsx" \
-  --max-rows 20000
-
-# 4) 033 batch 唯一仓库（分类后整批人审 → 冻结；两段命令，中间人工）
-# 详见 docs/07-操作手册/batch唯一数据仓库-人工标注入仓.md 与 单条流水线执行命令.txt §2f-v3-033
-# audio-data pipeline run pipelines/warehouse_export_annotation.yaml \
-#   --source-name "$BATCH" --config configs/warehouse/export_r1.yaml
-# # …人工听音 + review import --protocol v3 --batch "$BATCH" → reviewed_warehouse_$BATCH.parquet…
-# # audio-data pipeline run pipelines/warehouse_freeze.yaml \
-# #   --source-name "$BATCH" --config configs/warehouse/freeze_default.yaml
-
-# 5) 可选：旧 review --protocol v3 / build_dataset_v3（012-C/D；训练集 Release ≠ 033 仓库）
-
-# ---------------------------------------------------------------------------
-# 0908-30000 存量试点（方案 B；三族六路，无需 Kimi）
-# ---------------------------------------------------------------------------
-# export BATCH=0908-30000
-# export V3_DATASET_CFG=configs/datasets/zh_asr_v3_0908_30000.yaml
-# export V3_SELECTION_CFG=configs/selection/zh_asr_v3_0908_30000.yaml
-# python scripts/rebuild_cleaned_from_asr.py \
-#   --asr "datasets/stage1/asr/qwen3-asr-1_asr_${BATCH}.parquet" \
-#   --output "datasets/stage1/cleaned/cleaned_${BATCH}.parquet"
-# # 填 configs/datasets/run_identities/0908-30000/ → register-asr-run ×6 → 写 runs:
-# # 然后执行上面 §3（本机 /data2 可读，适合跑 sidecar）
-
-# ---------------------------------------------------------------------------
-# legacy 复现 only（勿作新批次正式分拣）：
-# audio-data pipeline run pipelines/multi_asr_aggregate.yaml --source-name "$BATCH" ...
-# audio-data pipeline run pipelines/classify_dataset.yaml ...
+# ---------- 说明 ----------
+# ASR 路次可在各 ASR 命令的 --asr-run 与 evidence_join 的 --join-manifest 里改
+# 旧一步到位总入口仍可用：pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml（本册不推荐）
+# 旧 audio_quality_sidecar / 五类 classify 已退出本册默认

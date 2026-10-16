@@ -3,6 +3,9 @@
 #   audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name mt3000
 #   → cleaned_mt3000 → sensevoice_asr_mt3000.parquet
 #
+# 落盘即清洗（048）：识别后同进程 normalize（去全部 <|…|> + zh_asr_v1）；
+#   raw_text 可保留带控制标签原串。首版无独立 blank_exact_sensevoice 表。
+#
 # 兼容：不传 --source-name 时使用下方写死路径。
 # 前置：input 须含 resampled_16k
 # 环境变量：SENSEVOICE_MODEL_PATH
@@ -38,6 +41,13 @@ pipeline:
     params:
       input_audio_key: resampled_16k
       config_path: configs/asr/sensevoice.yaml
+
+  - name: normalize_transcripts
+    operator: quality.normalize_transcripts
+    params:
+      models: [sensevoice]
+      keep_raw: true
+      normalization_path: configs/normalization/zh_asr_v1.yaml
 
   - name: release_after_sensevoice
     operator: runtime.release_asr_models

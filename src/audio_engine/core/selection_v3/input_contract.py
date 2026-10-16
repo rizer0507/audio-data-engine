@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from audio_engine.core.evidence.asr_status import (
+    classify_run_status as _evidence_classify_run_status,
+    explicit_failed,
+    transcript_entry,
+)
 from audio_engine.core.sample import Sample
 from audio_engine.core.selection_v3.config import SelectionV3Config
 from audio_engine.core.selection_v3.types import (
@@ -19,11 +24,23 @@ from audio_engine.core.selection_v3.types import (
 
 
 def original_audio_sha256(sample: Sample) -> str:
-    """Original (unpadded) audio content hash when available."""
+    """Working (unpadded) audio content hash for the current Sample.
+
+    For VAD segments (041), this is the *segment* PCM identity written to
+    ``labels.original_audio_sha256`` / ``segment_pcm_sha256``. Parent PCM hashes
+    live in ``source_pcm_sha256`` / ``parent_pcm_sha256`` and must not be used
+    here — otherwise sibling segments share cache keys and warehouse identity.
+    """
+    # Prefer explicit segment working hash when present.
+    for container in (sample.labels, sample.quality):
+        seg = container.get("segment_pcm_sha256")
+        if seg is not None and str(seg).strip() and container.get("is_vad_segment"):
+            return str(seg).strip()
     for container in (sample.labels, sample.quality):
         for key in ("original_audio_sha256", "source_audio_sha256", "raw_audio_sha256"):
             value = container.get(key)
             if value is not None and str(value).strip():
+                # Never fall back to parent_pcm_sha256 via these keys.
                 return str(value).strip()
     # Lineage / provenance nested dicts
     provenance = sample.labels.get("provenance")
@@ -41,34 +58,11 @@ def join_key(sample: Sample) -> tuple[str, str]:
 
 
 def _transcript_entry(sample: Sample, key: str) -> dict[str, Any] | None:
-    entry = sample.transcripts.get(key)
-    if entry is None:
-        return None
-    if isinstance(entry, dict):
-        return entry
-    return {"text": str(entry)}
+    return transcript_entry(sample, key)
 
 
 def _explicit_failed(entry: dict[str, Any], sample: Sample, key: str) -> bool:
-    status = str(entry.get("status") or "").strip().lower()
-    if status in {"failed", "error", "fail"}:
-        return True
-    extra = entry.get("extra") if isinstance(entry.get("extra"), dict) else {}
-    inf = str(extra.get("inference_status") or extra.get("status") or "").strip().lower()
-    if inf in {"failed", "error", "fail"}:
-        return True
-    # Operator-level failure recorded against this transcript key / asr family
-    for err_key, err_val in (sample.errors or {}).items():
-        if not err_val:
-            continue
-        lowered = str(err_key).lower()
-        if key.lower() in lowered or "asr" in lowered:
-            # Only treat as this run's failure when status also marks failed
-            if sample.status.get(err_key) == "failed":
-                return True
-    if entry.get("failed") is True:
-        return True
-    return False
+    return explicit_failed(entry, sample, key)
 
 
 def classify_run_status(
@@ -76,34 +70,11 @@ def classify_run_status(
     transcript_key: str,
     config: SelectionV3Config | None = None,
 ) -> str:
-    """Map one ASR route to success_text | success_empty | failed | missing."""
-    entry = _transcript_entry(sample, transcript_key)
-    if entry is None:
-        return RUN_STATUS_MISSING
-    if _explicit_failed(entry, sample, transcript_key):
-        return RUN_STATUS_FAILED
-    if str(entry.get("status") or "").lower() in {"missing", "pending", "running"}:
-        return RUN_STATUS_MISSING
-    text = entry.get("text")
-    if text is None:
-        return RUN_STATUS_MISSING
-    from audio_engine.core.selection_v3.text import raw_transcript_text
+    """Map one ASR route to success_text | success_empty | failed | missing.
 
-    raw = raw_transcript_text(entry)
-    if config is not None and config.uses_chinese_only_text():
-        from audio_engine.core.selection_v3.classify_text import prepare_classify_text
-
-        family = config.family_of_key(transcript_key)
-        prepared = prepare_classify_text(
-            raw,
-            echo=config.echo_table_for(family),
-            keep_digits=config.classify_text_keep_digits,
-            policy=config.classify_text_policy,
-        )
-        return prepared.status
-    if raw.strip() == "":
-        return RUN_STATUS_SUCCESS_EMPTY
-    return RUN_STATUS_SUCCESS_TEXT
+    044: neutral implementation lives in ``audio_engine.core.evidence.asr_status``.
+    """
+    return _evidence_classify_run_status(sample, transcript_key, config)
 
 
 def is_physically_invalid(sample: Sample) -> bool:

@@ -5,12 +5,15 @@ model_version: "Qwen3-ASR-1.7B"
 model_path: /data2/data-cp/zcl/models/Qwen3-ASR-1___7B
 api_url: null
 # 设置后改用 vLLM OpenAI 兼容接口；也可通过 QWEN_ASR_API_BASE 覆盖。
-# 支持 http://host:port、http://host:port/v1 或完整 transcriptions URL。
+# Qwen 走 /v1/chat/completions（messages + chat_template_kwargs.force_language）。
+# 支持 http://host:port、http://host:port/v1 或完整 chat/completions URL。
 api_base: null
 api_key: dummy
 concurrency: 4
 timeout: 120
 language: zh
+chat_template_kwargs:
+  force_language: Chinese
 device_map: cuda:0
 dtype: bfloat16
 batch_size: 32

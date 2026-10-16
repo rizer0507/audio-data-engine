@@ -9,8 +9,8 @@
   source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
   export OMP_NUM_THREADS=1
   export MKL_NUM_THREADS=1
-  export BATCH=<批次名>          # 与 --source-name / --batch 同一字符串
-  export SOURCE_DIR=<原始音频根>
+  export BATCH=20260813-n-1      # 与 --source-name / --batch 同一字符串
+  export SOURCE_DIR=/data2/data-cp/datasets/asr_datasets/fenshen/20260813/1
   export AUTHORIZED_GPUS=<授权卡号,逗号分隔>   # 禁止照抄历史卡号
 
 ================================================================================

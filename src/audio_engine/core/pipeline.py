@@ -52,6 +52,8 @@ def _process_one_task(
         return result.sample, "skipped"
     if result.cache_hit:
         return result.sample, "cache_hits"
+    if result.sample.status.get(operator_name) == "failed":
+        return result.sample, "failed"
     return result.sample, "processed"
 
 
@@ -371,12 +373,26 @@ class PipelineRunner:
         if execution.checkpoint_every <= 0:
             return None
 
+        deps = None
+        if hasattr(operator, "dependency_fingerprint"):
+            try:
+                deps = operator.dependency_fingerprint(op_config)
+            except Exception as exc:  # noqa: BLE001 — fingerprint failure must not silently reuse
+                deps = {"dependency_fingerprint_error": str(exc)}
+        input_extra = None
+        if hasattr(operator, "input_fingerprint"):
+            try:
+                input_extra = operator.input_fingerprint(samples, op_config)
+            except Exception as exc:  # noqa: BLE001
+                input_extra = {"input_fingerprint_error": str(exc)}
         fingerprint = {
             "pipeline": self._config_digest(),
             "operator": step.operator,
             "version": operator.version,
             "params": digest_payload(op_config.params),
+            "dependencies": digest_payload(deps) if deps is not None else None,
             "input": digest_samples(samples),
+            "input_extra": digest_payload(input_extra) if input_extra is not None else None,
             "checkpoint_every": execution.checkpoint_every,
         }
         directory = self.run_dir / "checkpoints" / f"{order:02d}_{step.name}"
@@ -478,6 +494,7 @@ class PipelineRunner:
             mock=self.config.mock,
             run_dir=self.run_dir,
             step_name=step.name,
+            resume=bool(self.config.resume or self.config.run_dir),
         )
         if step.input_audio_key:
             op_config.params.setdefault("input_audio_key", step.input_audio_key)
@@ -485,19 +502,66 @@ class PipelineRunner:
             op_config.params.setdefault("output_audio_key", step.output_audio_key)
 
         execution = self.config.step_execution(step)
+        if step.operator == "quality.multi_tag_v1":
+            # Tagging owns its pool; explicit CLI concurrency overrides still apply.
+            for key in ("workers", "executor", "max_in_flight", "checkpoint_every"):
+                if key in self.config.execution_override:
+                    value = self.config.execution_override[key]
+                    if key == "checkpoint_every" and value == 0:
+                        # Zero disables the outer pipeline checkpoint, not tag resume state.
+                        continue
+                    op_config.params[key] = None if key == "max_in_flight" and value == 0 else value
+        if step.operator == "semantic.judge":
+            from audio_engine.core.semantic.preflight import preflight_samples
+
+            preflight_samples(samples)
+            # Propagate effective workers into the operator for its HTTP gate.
+            op_config.params.setdefault("workers", execution.workers)
+            parallel = 1
+            if self.config.sharding is not None:
+                parallel = int(self.config.sharding.effective_parallel)
+            # Sharded parent only validates; shard children run with --no-sharding
+            # so parallel_shards must be passed via params when needed.
+            parallel = int(op_config.params.get("parallel_shards") or parallel)
+            if hasattr(operator, "preflight_concurrency"):
+                budget = operator.preflight_concurrency(
+                    op_config,
+                    workers=execution.workers,
+                    parallel_shards=parallel,
+                )
+                logger.info(
+                    "semantic.judge concurrency budget: {}",
+                    budget,
+                )
         checkpoint = self._open_checkpoint(order, step, operator, op_config, samples, execution)
 
         if checkpoint is not None and checkpoint.complete:
             restored = checkpoint.read_samples()
-            self.metrics.record_counts(step.name, checkpoint.restored_counts())
-            self.metrics.total = len(restored)
+            retryable = [
+                i
+                for i, sample in enumerate(restored)
+                if hasattr(operator, "should_retry_on_resume")
+                and operator.should_retry_on_resume(sample, op_config)
+            ]
+            if not retryable:
+                self.metrics.record_counts(step.name, checkpoint.restored_counts())
+                self.metrics.total = len(restored)
+                logger.info(
+                    "Step '{}' ({}): restored {} samples from checkpoint, not re-run",
+                    step.name,
+                    step.operator,
+                    len(restored),
+                )
+                return restored
+            # Incomplete successes remain; failed / stale rows are re-queued below.
             logger.info(
-                "Step '{}' ({}): restored {} samples from checkpoint, not re-run",
+                "Step '{}' ({}): checkpoint complete but {} sample(s) need retry on resume",
                 step.name,
                 step.operator,
-                len(restored),
+                len(retryable),
             )
-            return restored
+            # Treat as partial resume: clear complete so append/finish rewrite.
+            checkpoint.complete = False
 
         if isinstance(operator, ManifestOperator):
             return self._run_manifest_step(step, operator, op_config, samples, checkpoint)
@@ -512,7 +576,7 @@ class PipelineRunner:
         checkpoint: StepCheckpoint | None,
     ) -> list[Sample]:
         """Whole-collection operators run in one shot, so they checkpoint as a single part."""
-        logger.info("Step '{}' ({}): manifest operator, sequential", step.name, step.operator)
+        logger.info("Step '{}' ({}): manifest operator, internal scheduling", step.name, step.operator)
         if self.config.source_dir:
             op_config.params.setdefault("source_dir", self.config.source_dir)
 
@@ -551,17 +615,81 @@ class PipelineRunner:
         checkpoint: StepCheckpoint | None,
     ) -> list[Sample]:
         done: list[Sample] = []
+        pending: list[Sample]
         if checkpoint is not None and checkpoint.restored:
-            done = checkpoint.read_samples()
-            self.metrics.record_counts(step.name, checkpoint.restored_counts())
-            logger.info(
-                "Step '{}' ({}): resuming after {} checkpointed samples",
-                step.name,
-                step.operator,
-                len(done),
-            )
-
-        pending = samples[checkpoint.consumed :] if checkpoint is not None else samples
+            restored = checkpoint.read_samples()
+            # Re-queue checkpointed failures / stale rows while preserving order.
+            if hasattr(operator, "should_retry_on_resume") and len(restored) <= len(samples):
+                kept: list[Sample | None] = [None] * len(restored)
+                retry_from_restored: list[Sample] = []
+                for idx, sample in enumerate(restored):
+                    if operator.should_retry_on_resume(sample, op_config):
+                        retry_from_restored.append(samples[idx])
+                        kept[idx] = None  # placeholder filled after re-run
+                    else:
+                        kept[idx] = sample
+                # Process retries first while holding slots for kept rows.
+                if retry_from_restored:
+                    logger.info(
+                        "Step '{}' ({}): resuming with {} reusable + {} retry samples",
+                        step.name,
+                        step.operator,
+                        sum(1 for s in kept if s is not None),
+                        len(retry_from_restored),
+                    )
+                    # Run retries as the pending prefix; merge back by original index.
+                    if isinstance(operator, BatchOperator):
+                        retry_updated, retry_counts = self._run_batch_operator(
+                            step, operator, op_config, retry_from_restored, execution
+                        )
+                    elif execution.concurrent and len(retry_from_restored) > 1:
+                        retry_updated, retry_counts = self._run_concurrent(
+                            step, operator, op_config, retry_from_restored, execution
+                        )
+                    else:
+                        retry_updated, retry_counts = self._run_sequential(
+                            step, operator, op_config, retry_from_restored, execution
+                        )
+                    self.metrics.record_counts(step.name, retry_counts)
+                    retry_iter = iter(retry_updated)
+                    merged_prefix: list[Sample] = []
+                    for slot in kept:
+                        if slot is None:
+                            merged_prefix.append(next(retry_iter))
+                        else:
+                            merged_prefix.append(slot)
+                    done = merged_prefix
+                    # Drop old parts; rewrite a single coherent prefix part.
+                    if checkpoint is not None:
+                        checkpoint.parts = []
+                        checkpoint.append(
+                            done,
+                            count_in=len(done),
+                            counts=retry_counts,
+                        )
+                    pending = samples[len(done) :]
+                else:
+                    done = restored
+                    self.metrics.record_counts(step.name, checkpoint.restored_counts())
+                    pending = samples[checkpoint.consumed :]
+                    logger.info(
+                        "Step '{}' ({}): resuming after {} checkpointed samples",
+                        step.name,
+                        step.operator,
+                        len(done),
+                    )
+            else:
+                done = restored
+                self.metrics.record_counts(step.name, checkpoint.restored_counts())
+                pending = samples[checkpoint.consumed :]
+                logger.info(
+                    "Step '{}' ({}): resuming after {} checkpointed samples",
+                    step.name,
+                    step.operator,
+                    len(done),
+                )
+        else:
+            pending = samples[checkpoint.consumed :] if checkpoint is not None else samples
         batch_size = (
             execution.checkpoint_every
             if checkpoint is not None and execution.checkpoint_every > 0
@@ -710,6 +838,9 @@ class PipelineRunner:
             return result.sample, "skipped"
         if result.cache_hit:
             return result.sample, "cache_hits"
+        # Operators may keep the row and mark_failed without raising (semantic.judge).
+        if result.sample.status.get(step.operator) == "failed":
+            return result.sample, "failed"
         return result.sample, "processed"
 
     def _run_sequential(

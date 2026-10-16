@@ -17,7 +17,6 @@
 
 白名单目录（与 scripts/sync_to_usb.bat 一致）：
   src  pipelines  configs  tests  scripts  tasks  手册
-  EfficientAT-main  silero-vad-master
 
 白名单根文件：
   pyproject.toml  README.md  .gitignore  .env.example
@@ -28,12 +27,13 @@
 
 明确不覆盖：
   docs/  data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/  .env
+  EfficientAT-main/  Qwen3-ASR-main/  GLM-4-Voice/  silero-vad-master/
   （datasets/ 含 stage1|stage3 全部产物；尤其 stage*/asr/ 识别结果本脚本绝不碰）
+  （上述 vendored 依赖目录由服务器自行维护，本脚本与 U 盘同步均不碰）
 
 说明（009 路径分层后）：
   正式工程 parquet 落在 datasets/stage1|stage3/…；热更新只覆盖下方白名单代码/配置/手册，
   不会同步、覆盖或清空服务器上的 ASR / 分拣 / 评测产物。
-  EfficientAT-main / silero-vad-master 为 v2.3 声学证据 vendored 依赖（含权重时一并增量覆盖）。
 
 --------------------------------------------------------------------------------
 一键执行（Bash，在服务器上跑）
@@ -43,7 +43,7 @@ SRC=/data2/data-cp/lizi/tmp/audio-data-engine
 DST=/data2/data-cp/lizi/audio-data-engine
 
 # 1) 代码与配置目录（增量覆盖，不 --delete；不含 docs）
-for d in src pipelines configs tests scripts tasks 手册 EfficientAT-main silero-vad-master; do
+for d in src pipelines configs tests scripts tasks 手册; do
   mkdir -p "$DST/$d"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --exclude '__pycache__/' --exclude '*.pyc' \

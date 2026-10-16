@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from loguru import logger
 
-from audio_engine.core.selection_v3.types import (
+from audio_engine.core.evidence.types import (
     DNSMOS_STATUS_FAILED,
     DNSMOS_STATUS_SUCCESS,
     DNSMOS_STATUS_UNSUPPORTED,
@@ -56,6 +58,48 @@ def file_digest(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+@lru_cache(maxsize=32)
+def _model_digest_for_stat(path: str, identity: tuple[int, ...]) -> str:
+    return file_digest(Path(path))
+
+
+def model_file_digest(path: Path) -> str:
+    """Avoid re-reading model weights for every sample; invalidate on replacement/edit."""
+    resolved = path.resolve()
+    stat = resolved.stat()
+    return _model_digest_for_stat(
+        str(resolved), (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns),
+    )
+
+
+@dataclass(frozen=True)
+class DnsmosRuntimeOptions:
+    """Explicit session thread budget; source-level concurrency stays in the pipeline."""
+
+    intra_op_num_threads: int = 1
+    inter_op_num_threads: int = 1
+    allow_spinning: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("intra_op_num_threads", "inter_op_num_threads"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"DNSMOS runtime.{name} must be a positive integer")
+        if not isinstance(self.allow_spinning, bool):
+            raise ValueError("DNSMOS runtime.allow_spinning must be a boolean")
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any] | None) -> DnsmosRuntimeOptions:
+        if config is None:
+            return cls()
+        if not isinstance(config, dict):
+            raise ValueError("DNSMOS runtime must be a mapping")
+        unknown = set(config) - {"intra_op_num_threads", "inter_op_num_threads", "allow_spinning"}
+        if unknown:
+            raise ValueError(f"Unknown DNSMOS runtime options: {sorted(unknown)}")
+        return cls(**config)
 
 
 def prepare_audio_for_dnsmos(
@@ -165,7 +209,11 @@ def derive_noise_band_explicit(
 class DnsmosP835Session:
     """Lazy ONNX session for the fixed primary DNSMOS P.835 model."""
 
-    def __init__(self, model_path: Path, *, providers: list[str] | None = None):
+    def __init__(
+        self, model_path: Path, *, providers: list[str] | None = None,
+        runtime_options: DnsmosRuntimeOptions | None = None,
+    ):
+        self.runtime_options = runtime_options or DnsmosRuntimeOptions()
         self.model_path = Path(model_path)
         if not self.model_path.exists():
             raise FileNotFoundError(
@@ -181,13 +229,25 @@ class DnsmosP835Session:
             ) from exc
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        opts.intra_op_num_threads = self.runtime_options.intra_op_num_threads
+        opts.inter_op_num_threads = self.runtime_options.inter_op_num_threads
+        spinning = "1" if self.runtime_options.allow_spinning else "0"
+        opts.add_session_config_entry("session.intra_op.allow_spinning", spinning)
+        opts.add_session_config_entry("session.inter_op.allow_spinning", spinning)
         self._session = ort.InferenceSession(
             str(self.model_path),
             sess_options=opts,
             providers=providers or ["CPUExecutionProvider"],
         )
-        self.model_digest = file_digest(self.model_path)
+        self.model_digest = model_file_digest(self.model_path)
         self.input_name = self._session.get_inputs()[0].name
+        logger.info(
+            "DNSMOS session ready: intra_threads={} inter_threads={} spinning={}",
+            self.runtime_options.intra_op_num_threads,
+            self.runtime_options.inter_op_num_threads,
+            self.runtime_options.allow_spinning,
+        )
 
     def score_array(
         self,

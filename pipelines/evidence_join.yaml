@@ -1,0 +1,34 @@
+# 045：证据对齐合并（片段快照 + N 路 ASR + 独立 DNSMOS）
+#
+#   audio-data pipeline run pipelines/evidence_join.yaml \
+#     --source-name "$BATCH" \
+#     --join-manifest qwen1 --join-manifest glm1
+#   → datasets/stage1/derived/prepared_evidence_<BATCH>.parquet
+#
+# 主编排会注入 AUDIO_ENGINE_DNSMOS_MANIFEST 与 join-manifest 路径。
+# 独立运行时也可：
+#   export AUDIO_ENGINE_DNSMOS_MANIFEST=datasets/stage1/quality/dnsmos_$BATCH.parquet
+
+name: evidence_join
+
+input:
+  manifest: datasets/stage1/segments/segments_source_A.parquet
+
+output:
+  manifest: datasets/stage1/derived/prepared_evidence_source_A.parquet
+
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: true
+  checkpoint_every: 0
+
+pipeline:
+  - name: evidence_join
+    operator: quality.evidence_join
+    params:
+      id_policy: exact
+      # manifests 由 CLI --join-manifest / source_naming 注入
+      manifests: []
+      # dnsmos_manifest 可由 params 或环境变量提供
+      dnsmos_manifest: datasets/stage1/quality/dnsmos_source_A.parquet

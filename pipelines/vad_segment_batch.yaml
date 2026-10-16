@@ -1,0 +1,60 @@
+# 045：FSMN VAD 切分（独立流水线）
+# 输入：父源 ingested_*（含 resampled_16k）
+# 输出：片段 segments_*；源结果写在 runs/.../vad_source_results/
+#
+# 切分语义与 041 一致，本文件不改端点 / 675ms 尾部 / 1s 过滤 / EOF 丢弃规则。
+#
+#   audio-data pipeline run pipelines/vad_segment_batch.yaml \
+#     --source-name "$BATCH"
+#   # 或显式：
+#   #   --input-manifest datasets/stage1/ingested/ingested_$BATCH.parquet \
+#   #   --output-manifest datasets/stage1/segments/segments_$BATCH.parquet
+#
+# 模型（生产）：
+#   export FSMN_VAD_SOURCE_MODEL_DIR=/data2/data-cp/xijujun/models/fsmn-vad
+#   # 首次：python scripts/prepare_fsmn_vad_runtime.py --source-model-dir "$FSMN_VAD_SOURCE_MODEL_DIR" ...
+#   export FSMN_VAD_RUNTIME_DIR="$PWD/var/models/fsmn-vad-fenshen-v1"
+# mock：AUDIO_ENGINE_VAD_MOCK=1 或 params.mock=true
+
+name: vad_segment_batch
+
+input:
+  manifest: datasets/stage1/ingested/ingested_source_A.parquet
+
+output:
+  manifest: datasets/stage1/segments/segments_source_A.parquet
+
+execution:
+  executor: thread
+  workers: 8
+  max_in_flight: 16
+  fail_fast: false
+  checkpoint_every: 1000
+
+# 父源级分片并行；同一源的流式块仍在算子内顺序处理。
+sharding:
+  shards: 8
+  strategy: duration-balanced
+  parallel_shards: 8
+  workers: 4
+  executor: thread
+
+pipeline:
+  - name: fsmn_vad_segment
+    operator: audio.fsmn_vad_segment
+    params:
+      input_audio_key: resampled_16k
+      output_audio_key: resampled_16k
+      channel_index: 0
+      include_eof_fallback: false
+      prepare_runtime: false
+      verify_fingerprints: true
+      source_results_dir: vad_source_results
+      segments_subdir: vad_segments
+      # 分片内父源有界并发：长驻 worker 各持一份 FunASR（勿按 wave 重建线程池）
+      # 内存紧或仍见反复 trust_remote_code 时改为 source_workers: 1
+      source_workers: 2
+      max_in_flight_sources: 4
+      # 两个 batch 共 32 路父源；小块推理不再各自开启多线程计算。
+      # 整机 CPU 上限由 scripts/run_vad_cpu_budget.py 的共享亲和性保证。
+      ncpu: 1

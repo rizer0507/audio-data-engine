@@ -1,0 +1,55 @@
+# 047｜指定 batch 整批保音高加速增强
+# 默认输入：datasets/stage1/segments/segments_<batch>.parquet
+# 默认倍率：1.2（YAML）；可用 --speed-factor 覆盖
+# 产物：datasets/stage1/augmented/<batch>/tempo_<factor_tag>_<recipe_digest>/
+#
+#   audio-data pipeline run pipelines/augment_batch_speed.yaml --source-name "$BATCH"
+#   audio-data pipeline run pipelines/augment_batch_speed.yaml --source-name "$BATCH" --speed-factor 1.3
+#   audio-data pipeline run pipelines/augment_batch_speed.yaml --source-name "$BATCH" \
+#     --input-manifest datasets/stage1/warehouses/$BATCH/manifest.parquet
+#   audio-data pipeline run pipelines/augment_batch_speed.yaml --resume <原run目录>
+#
+# 依赖：系统 FFmpeg（atempo）。勿用会变音高的 signal.resample 冒充。
+
+name: augment_batch_speed
+
+input:
+  manifest: datasets/stage1/segments/segments_source_A.parquet
+
+output:
+  manifest: datasets/stage1/augmented/source_A/tempo_1p2_placeholder/manifest.parquet
+
+execution:
+  executor: thread
+  workers: 4
+  max_in_flight: 16
+  fail_fast: false
+  checkpoint_every: 0
+
+# 大数据量可启用；分片参数含 --speed-factor，父进程 merge 后 finalize 正式 Manifest
+sharding:
+  shards: 4
+  strategy: hash
+  parallel_shards: 2
+  workers: 4
+  executor: thread
+
+pipeline:
+  - name: tempo_augment
+    operator: augmentation.tempo
+    params:
+      speed_factor: 1.2
+      input_audio_key: resampled_16k
+      output_audio_key: aug_speed
+      backend: ffmpeg_atempo
+      preserve_pitch: true
+      output_format: wav
+      output_subtype: PCM_16
+      channel_policy: preserve
+      backend_threads: 1
+      timeout_seconds: 120
+      max_attempts: 2
+      workers: 4
+      max_in_flight: 16
+      # 分片子进程由 CLI 注入 defer_publish=true；单进程直接发布
+      defer_publish: false

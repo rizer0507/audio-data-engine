@@ -103,25 +103,113 @@ export MKL_NUM_THREADS=1
 
 
 -------------------------------------------------------
-1. 数据切片落库
+0c. 新生产主链（045，推荐默认）
 -------------------------------------------------------
-# YAML: pipelines/data_cleaning_source_A.yaml
-# 产物: datasets/stage1/cleaned/cleaned_<source-name>.parquet|.jsonl
+# YAML: pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml
+# DAG: 入库 → FSMN VAD →〔N 路 ASR ∥ 独立 DNSMOS〕→ evidence_join → free_tags
+# 产物:
+#   datasets/stage1/ingested/ingested_$BATCH.parquet
+#   datasets/stage1/segments/segments_$BATCH.parquet
+#   datasets/stage1/asr/<route_id>_asr_$BATCH.parquet
+#   datasets/stage1/quality/dnsmos_$BATCH.parquet          # 正式 DNSMOS，非侧车
+#   datasets/stage1/derived/prepared_evidence_$BATCH.parquet
+#   datasets/stage1/derived/tagged_free_tags_v2_$BATCH.parquet
+# 父 run: runs/<ts>_audio_ingest_vad_asr_dnsmos_tags_$BATCH/
+# 需求: docs/04-改进需求/进行中/045-...
+# 手册: docs/07-操作手册/045-入库VAD多路ASR独立DNSMOS自由标签.md
+#
+# 必填环境（按部署改，勿照抄卡号/端口）:
+#   # 服务器原始权重（生产固定）
+#   export FSMN_VAD_SOURCE_MODEL_DIR=/data2/data-cp/xijujun/models/fsmn-vad
+#   # 本地 runtime（fenshen 覆盖后的目录；须先 prepare，不能用占位路径）
+#   # python scripts/prepare_fsmn_vad_runtime.py \
+#   #   --source-model-dir "$FSMN_VAD_SOURCE_MODEL_DIR" \
+#   #   --fenshen-config configs/vad/fenshen_vad_config.yaml \
+#   #   --runtime-dir "$PWD/var/models/fsmn-vad-fenshen-v1"
+#   export FSMN_VAD_RUNTIME_DIR="$PWD/var/models/fsmn-vad-fenshen-v1"
+#   # DNSMOS model_path 写在 configs/quality/dnsmos_p835.yaml
+#   # Qwen/GLM: QWEN_ASR_API_BASE / GLM_ASR_API_BASE 等按各 ASR YAML
+# 工程 mock（无真实模型）: 加 --mock，并 export AUDIO_ENGINE_VAD_MOCK=1
+
+audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
+  --source-name "$BATCH" \
+  --source-dir "$SOURCE_DIR"
+
+# 父 run 进度（可见 ASR∥DNSMOS 同时 running）:
+# audio-data pipeline progress "runs/<parent-run>" --follow
+#
+# 续跑未完成节点（已成功节点跳过，产物仍在则复用）:
+# audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
+#   --source-name "$BATCH" --source-dir "$SOURCE_DIR" \
+#   --resume "runs/<parent-run>"
+#
+# 失败重试：修好依赖后同一 --resume；仅重跑某独立节点见下方分项命令。
+# ASR 路次在 YAML production.asr_routes 配置，不写死三家族六路。
+
+# --- 各业务流水线也可独立运行 ---
+# audio-data pipeline run pipelines/audio_ingest.yaml \
+#   --source-name "$BATCH" --source-dir "$SOURCE_DIR"
+# audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
+# audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH" --asr-run qwen1
+# audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm1
+# audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"
+# audio-data pipeline run pipelines/evidence_join.yaml --source-name "$BATCH" \
+#   --join-manifest qwen1 --join-manifest glm1
+# audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml \
+#   --source-name "$BATCH" --config configs/tagging/zh_asr_free_tags_v2.yaml
+#
+# ASR 落盘已含转写清洗（048）：各 *_asr_batch.yaml 在识别后同进程 normalize
+# （zh_asr_v1；Qwen 另挂 blank_exact_qwen_v1）。join/tag 直接用 transcripts.*.text；
+# 原串在 extra.raw_text。asr_metric_pipeline 改为字准/历史补洗入口（幂等）。
+#
+# 旧 audio_quality_sidecar / quality_sidecar_* 已退出新默认流程（仅历史复现）。
+
+
+-------------------------------------------------------
+1. 数据切片落库（041 旧合并入口：规范化 + FSMN VAD；新默认请用 0c）
+-------------------------------------------------------
+# YAML: pipelines/data_cleaning_source_A.yaml（legacy：入库+VAD 同条）
+# 新拆分入口: pipelines/audio_ingest.yaml + pipelines/vad_segment_batch.yaml
+# 产物(旧): datasets/stage1/cleaned/cleaned_<source-name>.parquet|.jsonl
+# 产物(新): ingested_* → segments_*
+# 契约: docs/04-改进需求/进行中/041-兼容说明-父源与片段契约.md
+#
+# 策略（已确认，045 不改）:
+#   - 多声道只取第0声道；无头默认单声道；声明多声道则解交织后取 ch0
+#   - 输出统一 16k；无头默认 source_sample_rate=16000；有头读真实率
+#   - 真实 8k：控制台+日志+汇总明显提示后重采样；源率与规范率分字段
+#   - 模型 end 后保留 675ms 真实音频；实际时长 <1s 丢弃、恰好 1s 保留
+#   - 无 end 的 EOF 补尾与落到最后前端帧/EOF 的模型端点继续丢弃
+#
+# --- 首次：准备 fenshen 运行目录（服务器原始权重固定路径）---
+# export FSMN_VAD_SOURCE_MODEL_DIR=/data2/data-cp/xijujun/models/fsmn-vad
+# python scripts/prepare_fsmn_vad_runtime.py \
+#   --source-model-dir "$FSMN_VAD_SOURCE_MODEL_DIR" \
+#   --fenshen-config configs/vad/fenshen_vad_config.yaml \
+#   --runtime-dir var/models/fsmn-vad-fenshen-v1
+# export FSMN_VAD_RUNTIME_DIR="$PWD/var/models/fsmn-vad-fenshen-v1"
+#
+# 工程 mock（≠真实端点一致）:
+#   export AUDIO_ENGINE_VAD_MOCK=1
 
 audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
   --source-name test_local \
   --source-dir "D:\Work\audio-data-engine\数据集\wav-file"
 
-# 续跑:
+# 续跑（同切段版本，断点恢复；同版本重试不重复产段）:
 # audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 #   --source-name mt3000 --source-dir /path/to/wav_or_pcm \
 #   --resume runs/<上次_shards目录>
+#
+# 切段／规范化版本变更：换新 source-name 或 --force，隔离旧 cleaned／缓存／标注包
+# 单片段 ASR 失败：对 segments_/cleaned 中该 segment_id 重跑对应 ASR YAML（无需重跑 VAD）
 
 
 -------------------------------------------------------
 2a. Qwen 全量识别（独立；v3 契约别名用 --asr-run qwen_1 / qwen_2）
 -------------------------------------------------------
 # → cleaned_<name> → {alias}_asr_<name>.parquet
+# 落盘即清洗（048）：normalize + blank_exact_qwen_v1；text 无标点；raw_text 保留原串
 # 若用 vLLM HTTP：先在 tmux 起服（手册/dev/00 §2.0），批跑另开 tmux 会话
 export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
 
@@ -138,6 +226,7 @@ audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name test_local -
 2b. SenseVoice 全量识别（独立，不依赖 Qwen）
 -------------------------------------------------------
 # → cleaned_<name> → sensevoice_asr_<name>.parquet（或 --asr-run sensevoice_1）
+# 落盘即清洗（048）：text 无 <|…|> 控制标签与标点；raw_text 可留带标签原串
 export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
 
 audio-data pipeline run pipelines/sensevoice_asr_batch.yaml --source-name test_local
@@ -271,6 +360,7 @@ export GLM_ASR_MODEL=glm-asr
 # python scripts/probe_glm_vllm.py /path/to/mixed_wavs --concurrency 8
 # python scripts/probe_glm_vllm.py /path/to/short.wav --repeat 2
 
+# 落盘即清洗（048）：zh_asr_v1 + keep_raw；首版无 blank_exact_glm
 audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name test_local
 
 # 评测跑批（同一条 YAML；评测集音频仍是 resampled_16k）
@@ -301,6 +391,9 @@ audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name test_local
 -------------------------------------------------------
 # → multi_asr_aggregate_<name> → multi_asr_metrics_<name>.parquet
 # 配置: configs/metrics/gold_agreement.yaml
+# 定位（048）：生产 ASR 落盘已清洗；本流水线用于算字准 / 对历史脏 parquet 补洗。
+# 对新产物再跑 normalize 幂等，不会二次损伤 CER。
+# 可选历史补洗（不经 CER）：对单路 ASR parquet 只跑 normalize_transcripts 亦可。
 
 # audio-data pipeline run pipelines/asr_metric_pipeline.yaml --source-name test_local
 
@@ -587,15 +680,19 @@ audio-data pipeline run pipelines/classify_dataset_five_class_v2_4_on_demand_aco
 
 
 -------------------------------------------------------
-2f-v3-040. 可组合规则与多标签分流（独立入口；不覆盖五类）
+2f-v3-040 / 042 / 043. 可组合多标签 + Tag 规则库（独立入口；不覆盖五类）
 -------------------------------------------------------
 # 040：独立规则多标签；默认已有证据模式；不重跑 ASR。纯文本无需 GPU。
+# 042：configs/tagging/library/ 一 tag 一文件；运行配置显式 select_tags；可读总览自动生成。
+# 043：semantic_risk_text_disagreement（①且② 或 ③）；默认已选入；词表 semantic_risk_keywords_1012。
 # 不覆盖旧 category / risk_tag / noise_kind；训练门禁不因 tags 绕过。
 # 产物：datasets/stage1/derived/tagged_multi_tag_v1_<batch>.parquet
 #       data/exports/summary_multi_tag_v1_<batch>.xlsx
-#       runs/tagging/<batch>/selection_multi_tag_v1/
+#       runs/tagging/<batch>/selection_multi_tag_v1/（含 definition_snapshot.json）
 # YAML：pipelines/tag_dataset_multi_tag_v1.yaml → quality.multi_tag_v1
 # 手册：docs/07-操作手册/可组合规则与多标签分流.md
+# 总览：docs/02-规范规则/tag规则库.md（派生产物）
+# 旧「①且②」内联对照：configs/tagging/semantic_keywords_sg_qwen_1012.yaml（保留原 ID，勿扩义）
 #
 # 生产（PowerShell）：
 audio-data pipeline run pipelines/tag_dataset_multi_tag_v1.yaml `
@@ -607,20 +704,137 @@ audio-data pipeline run pipelines/tag_dataset_multi_tag_v1.yaml `
 #   --source-name "$BATCH" \
 #   --config configs/tagging/zh_asr_multi_tag_v1.yaml
 #
-# 校验 / 预演 / 解释 / 人工增删恢复 / 筛选导出：
+# —— 定义库：新增 / 查看 / 校验 / 文档（不启 ASR／声学）——
+# 1) 复制 configs/tagging/library/_example_new_tag.yaml → library/<tag_id>.yaml
+# 2) 在 configs/tagging/zh_asr_multi_tag_v1.yaml 的 select_tags 显式加入 tag_id+version
+# audio-data tags list
+# audio-data tags show tag_1
+# audio-data tags show semantic_risk_text_disagreement
 # audio-data tags validate -c configs/tagging/zh_asr_multi_tag_v1.yaml
+# audio-data tags docs --generate
+# audio-data tags docs --check
+#
+# 预演 / 解释 / 人工增删恢复 / 筛选导出：
 # audio-data tags preview --batch "$BATCH" -c configs/tagging/zh_asr_multi_tag_v1.yaml
 # audio-data tags explain --batch "$BATCH" --sample-id <id>
-# audio-data tags remove --batch "$BATCH" --sample-id <id> --tag-id tag_1 --sha256 <sha> --reason "..."
-# audio-data tags restore --batch "$BATCH" --sample-id <id> --tag-id tag_1 --sha256 <sha>
+# audio-data tags explain --batch "$BATCH" --sample-id <id> --rule-id rule_semantic_risk_keyword_sg_qwen_v1
+# audio-data tags explain --batch "$BATCH" --sample-id <id> --rule-id rule_semantic_risk_single_char_pairwise_v1
+# audio-data tags remove --batch "$BATCH" --sample-id <id> --tag-id semantic_risk_text_disagreement --sha256 <sha> --reason "..."
+# audio-data tags restore --batch "$BATCH" --sample-id <id> --tag-id semantic_risk_text_disagreement --sha256 <sha>
 # audio-data tags export --input datasets/stage1/derived/tagged_multi_tag_v1_$BATCH.parquet \
-#   --output data/exports/filter_$BATCH.parquet --include-all tag_1
+#   --output data/exports/filter_$BATCH.parquet --include-all semantic_risk_text_disagreement
 #
-# 续跑：算子 params resume_run_id=<runs/tagging/.../work/<run_id>>；勿用恢复误删人工日志。
+# 续跑：算子 params resume_run_id=<runs/tagging/.../work/<run_id>>；
+#   定义指纹变更会拒绝混用旧进度；勿用恢复误删人工日志。
 # 按需声学：evidence_mode=compute_acoustic（默认 existing；缺证据→unknown）。
 # 真实 VAD/DNSMOS 推理：服务器模型可用后再验；本机以模拟适配器验证调度。
-# 测试：pytest tests/test_tagging_engine.py -q
+# 测试：pytest tests/test_tagging_engine.py tests/test_tagging_library_042.py tests/test_tagging_semantic_risk_043.py -q
 # 需求：docs/04-改进需求/已完成/040-可组合规则与多标签分流.md
+#       docs/04-改进需求/进行中/042-tag规则库与定义管理需求理解.md
+#       docs/04-改进需求/进行中/043-语义风险与三族单字分歧规则入库需求.md
+
+
+-------------------------------------------------------
+2f-v3-044. 自由标签 free_tags_v2（与旧五类完全解耦）
+-------------------------------------------------------
+# 独立 evidence_config；禁止 prepared 缺失时回退 classified_*。
+# 产物：datasets/stage1/derived/tagged_free_tags_v2_<batch>.parquet
+#       data/exports/summary_free_tags_v2_<batch>.xlsx
+#       runs/tagging/<batch>/free_tags_v2/
+# YAML：pipelines/tag_dataset_free_tags_v2.yaml
+# 配置：configs/tagging/zh_asr_free_tags_v2.yaml
+# 证据：configs/tagging/evidence/zh_asr_families_v2.yaml
+# 审核消费：configs/tagging/consume/free_tags_v2_review.yaml（任意 tag ≠ 金标/训练准入）
+#
+# 生产（PowerShell）：
+audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml `
+  --source-name $BATCH `
+  --config configs/tagging/zh_asr_free_tags_v2.yaml
+
+# 校验 / 预演：
+# audio-data tags validate -c configs/tagging/zh_asr_free_tags_v2.yaml
+# audio-data tags preview --batch "$BATCH" -c configs/tagging/zh_asr_free_tags_v2.yaml
+#
+# 显式迁移（旧 selection_config 配置 / 人工状态）：
+# audio-data tagging migrate-config --from configs/tagging/<legacy>.yaml --to configs/tagging/zh_asr_free_tags_v2.yaml --dry-run
+# audio-data tagging migrate-state --from-work runs/tagging/$BATCH/selection_multi_tag_v1 --to-work runs/tagging/$BATCH/free_tags_v2 --dry-run
+#
+# 服务器声学 smoke（真实模型；本机未验证）：
+# audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml \
+#   --source-name "$BATCH" --config configs/tagging/zh_asr_free_tags_v2.yaml \
+#   -o evidence_mode=compute_acoustic
+# 测试：pytest tests/test_tagging_*044.py tests/test_tag_consume_044.py tests/test_free_tags_v2_entry_044.py -q
+# 需求：docs/04-改进需求/进行中/044-旧顺序分流与自由标签体系完全解耦实施需求.md
+
+
+-------------------------------------------------------
+2f-v3-046. 模板驱动语义判断（Qwen3.8-27B / semantic.judge）
+-------------------------------------------------------
+# 输入：已含多家族多路 ASR 的 Parquet；不读音频、不重跑 ASR
+# YAML：pipelines/semantic_judge.yaml → semantic.judge
+# 任务：configs/semantic/tasks/semantic_conflict_v1.yaml（冲突）
+#       configs/semantic/tasks/intent_v1.yaml（指定家族意图；改 task_config）
+# 服务：configs/semantic/services/qwen38_27b.yaml
+# 手册：docs/07-操作手册/046-Qwen3.8-27B模板驱动语义判断.md
+# 环境：SEMANTIC_JUDGE_API_BASE / SEMANTIC_JUDGE_API_KEY
+#       SEMANTIC_JUDGE_MODEL / SEMANTIC_JUDGE_MODEL_REVISION
+# 约束：parallel_shards * workers <= max_concurrency_total（超预算预检失败）
+# 产物：datasets/stage1/derived/semantic_*_<batch>.parquet
+#       labels.semantic_results[<task_id>]
+#
+# 生产：
+# export SEMANTIC_JUDGE_API_BASE=http://<host>:<port>/v1
+# export SEMANTIC_JUDGE_API_KEY=...
+# export SEMANTIC_JUDGE_MODEL_REVISION=<实测权重修订>
+audio-data pipeline run pipelines/semantic_judge.yaml \
+  --input-manifest datasets/stage1/derived/<已有多家族结果>.parquet \
+  --output-manifest datasets/stage1/derived/semantic_conflict_<batch>.parquet
+
+# 续跑：
+# audio-data pipeline run pipelines/semantic_judge.yaml --resume runs/<ts>_semantic_judge
+
+# Mock（无真实服务）：
+# audio-data pipeline run pipelines/semantic_judge.yaml \
+#   --input-manifest <小样本.parquet> \
+#   --output-manifest datasets/stage1/derived/semantic_mock_<batch>.parquet \
+#   --mock
+
+# 测试：pytest tests/test_semantic_judge.py -q
+# 需求：docs/04-改进需求/进行中/046-Qwen3.8-27B模板驱动语义判断流水线.md
+# 状态：代码已交付；真实模型质量与吞吐待验
+
+
+-------------------------------------------------------
+2f-v3-047. 指定 batch 整批保音高加速增强（augmentation.tempo）
+-------------------------------------------------------
+# 输入默认：datasets/stage1/segments/segments_<batch>.parquet（整批、无隐式筛选）
+# YAML：pipelines/augment_batch_speed.yaml → augmentation.tempo（FFmpeg atempo）
+# 配置：configs/augmentation/speed.yaml（默认 speed_factor=1.2）
+# 手册：docs/07-操作手册/047-指定batch整批保音高加速增强.md
+# 依赖：系统 PATH 上的 ffmpeg（需 atempo 滤镜）；勿用旧 speed_perturb/resample 冒充
+# 产物：datasets/stage1/augmented/<batch>/tempo_<factor_tag>_<recipe_digest>/
+#       manifest.parquet（仅全成功）/ results.parquet / recipe.json / summary.json / audio/
+# 说明：--source-name 表示批次；原始与增强默认分置，不自动合并训练集
+#
+# 默认 1.2 倍（YAML）：
+audio-data pipeline run pipelines/augment_batch_speed.yaml --source-name "$BATCH"
+
+# 指定倍率（CLI 覆盖 YAML）：
+# audio-data pipeline run pipelines/augment_batch_speed.yaml \
+#   --source-name "$BATCH" --speed-factor 1.3
+
+# 显式输入（如已入仓仓库 Manifest；须与 --source-name 同批）：
+# audio-data pipeline run pipelines/augment_batch_speed.yaml \
+#   --source-name "$BATCH" \
+#   --input-manifest datasets/stage1/warehouses/$BATCH/manifest.parquet \
+#   --speed-factor 1.2
+
+# 断点续跑（沿用原 run 冻结的 batch / 倍率 / 输入快照）：
+# audio-data pipeline run pipelines/augment_batch_speed.yaml --resume runs/<ts>_augment_batch_speed_$BATCH
+
+# 测试：pytest tests/test_augment_tempo.py -q
+# 需求：docs/04-改进需求/进行中/047-指定batch整批保音高加速增强流水线.md
+# 状态：代码已交付；真实语音听验与目标服务器吞吐待验
 
 
 -------------------------------------------------------
@@ -828,7 +1042,9 @@ audio-data pipeline run pipelines/classify_external_gold.yaml \
 [ ] （存量 0908）方案 B 配置 zh_asr_v3_0908_30000.yaml + run_identities/
 [ ] （029 正式五类 / stage1 内嵌）pipelines/classify_dataset_five_class_v2_2_auto_noise.yaml + zh_asr_five_class_v2_2_auto_noise_*.yaml；产物 classified_five_class_v2_2_auto_noise_*；勿覆盖 v1/v2
 [ ] （037 后置入口默认 v2.4）pipelines/classify_dataset_five_class_v2_4_on_demand_acoustic.yaml + zh_asr_five_class_v2_4_on_demand_acoustic_*.yaml；产物 classified_five_class_v2_4_on_demand_acoustic_*；勿覆盖 v2.3/v2.2/v2/v1
-[ ] （040 多标签）pipelines/tag_dataset_multi_tag_v1.yaml + configs/tagging/zh_asr_multi_tag_v1.yaml；产物 tagged_multi_tag_v1_*；见 §2f-v3-040
+[ ] （040/042/043 多标签+定义库）pipelines/tag_dataset_multi_tag_v1.yaml + configs/tagging/zh_asr_multi_tag_v1.yaml + library/（含 semantic_risk_text_disagreement）；产物 tagged_multi_tag_v1_*；见 §2f-v3-040
+[ ] （046 语义判断）pipelines/semantic_judge.yaml + configs/semantic/tasks/*；SEMANTIC_JUDGE_*；产物 semantic_*；见 §2f-v3-046
+[ ] （047 保音高加速）pipelines/augment_batch_speed.yaml + configs/augmentation/speed.yaml；需 ffmpeg；产物 datasets/stage1/augmented/<batch>/tempo_*；见 §2f-v3-047
 [ ] （034 v2.3 legacy）pipelines/classify_dataset_five_class_v2_3_min_acoustic.yaml + zh_asr_five_class_v2_3_min_acoustic_*.yaml；产物 classified_five_class_v2_3_min_acoustic_*
 [ ] （033 人审入仓）pipelines/warehouse_export_annotation.yaml → 人工 review import → pipelines/warehouse_freeze.yaml；产物 warehouses/<batch>/；见 §2f-v3-033
 [ ] （027 历史对照）pipelines/classify_dataset_five_class_v1.yaml + zh_asr_five_class_v1_*.yaml；产物 classified_five_class_v1_*

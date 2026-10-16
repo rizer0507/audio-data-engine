@@ -119,16 +119,19 @@ _DEFAULT_GOLD_BUCKETS = [
 
 
 def _apply_aggregate_manifests(cfg: PipelineConfig, manifests: list[dict]) -> None:
-    """Patch ``quality.aggregate_manifests`` step params with resolved join list."""
+    """Patch aggregate / evidence_join step params with resolved join list."""
     updated = False
     for step in cfg.steps:
-        if step.operator == "quality.aggregate_manifests":
+        if step.operator in {
+            "quality.aggregate_manifests",
+            "quality.evidence_join",
+        }:
             step.params = {**step.params, "manifests": list(manifests)}
             updated = True
     if not updated:
         raise typer.BadParameter(
             "--join-manifest / aggregate source-name rewrite requires a "
-            "quality.aggregate_manifests step"
+            "quality.aggregate_manifests or quality.evidence_join step"
         )
 
 
@@ -236,13 +239,19 @@ def _apply_warehouse_source_overrides(cfg: PipelineConfig, overrides: dict) -> N
 
 
 def _apply_asr_run_transcript_key(cfg: PipelineConfig, asr_run: str) -> None:
-    """Inject ``transcript_key`` into ASR steps for a result alias."""
+    """Inject ``transcript_key`` into ASR steps for a result alias.
+
+    Also scopes any trailing ``quality.normalize_transcripts`` step to the same
+    alias so on-write cleaning follows ``--asr-run`` (048).
+    """
     alias = validate_asr_run(asr_run)
     patched = False
     for step in cfg.steps:
         if str(step.operator).startswith("asr."):
             step.params = {**step.params, "transcript_key": alias}
             patched = True
+        elif str(step.operator) == "quality.normalize_transcripts":
+            step.params = {**step.params, "models": [alias]}
     if not patched:
         raise typer.BadParameter(
             "--asr-run / --transcript-key requires an ASR inference pipeline "
@@ -396,6 +405,7 @@ def _resolve_operator(name: str) -> str:
         "add_noise": "augmentation.add_noise",
         "speed_perturb": "augmentation.speed_perturb",
         "volume_perturb": "augmentation.volume_perturb",
+        "tempo": "augmentation.tempo",
     }
     if name in OperatorRegistry.list_operators():
         return name
@@ -693,6 +703,15 @@ def pipeline_run(
             "Does not replace the pipeline YAML argument."
         ),
     ),
+    speed_factor: Optional[float] = typer.Option(
+        None,
+        "--speed-factor",
+        help=(
+            "For augment_batch_speed / augmentation.tempo: playback tempo (>1). "
+            "Explicit CLI value overrides YAML; omitting this flag does not override "
+            "YAML (default in configs/augmentation/speed.yaml is 1.2)."
+        ),
+    ),
 ) -> None:
     """Run a pipeline from YAML configuration.
 
@@ -727,6 +746,61 @@ def pipeline_run(
         )
     if asr_run is not None and transcript_key is not None and asr_run != transcript_key:
         raise typer.BadParameter("--asr-run and --transcript-key must match when both set")
+
+    # 045 production master: ingest → VAD → parallel ASR∥DNSMOS → join → tags
+    from audio_engine.core.production import (
+        is_production_pipeline,
+        run_production_pipeline,
+    )
+
+    if is_production_pipeline(config_path.resolve()):
+        if source_name is None:
+            raise typer.BadParameter(
+                "production pipeline requires --source-name "
+                "(and --source-dir for a fresh ingest)"
+            )
+        if eval_name is not None:
+            raise typer.BadParameter("production pipeline does not use --eval-name")
+        if join_manifest:
+            raise typer.BadParameter(
+                "production pipeline manages ASR joins internally; "
+                "do not pass --join-manifest"
+            )
+        try:
+            result = run_production_pipeline(
+                config_path.resolve(),
+                source_name=source_name,
+                source_dir=source_dir,
+                runs_dir=runs_dir or Path("runs"),
+                resume=resume,
+                force=force,
+                mock=mock,
+                log=lambda msg: console.print(msg),
+                tagging_config=str(dataset_config) if dataset_config else None,
+            )
+        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        console.print(
+            f"[green]OK[/green] Production pipeline '{config_path.stem}' finished"
+        )
+        console.print(f"  Status:   [cyan]{result.status}[/cyan]")
+        console.print(f"  Run root: [cyan]{result.run_root}[/cyan]")
+        console.print(
+            f"  Evidence: [cyan]{result.paths.prepared_evidence}[/cyan]"
+        )
+        console.print(
+            f"  Tagged:   [cyan]{result.paths.tagged_free_tags}[/cyan]"
+        )
+        if result.overlap_evidence:
+            console.print(
+                "  Parallel ASR∥DNSMOS wave: "
+                f"[cyan]{result.overlap_evidence.get('wave_node_ids')}[/cyan]"
+            )
+        console.print(
+            f"  Progress: audio-data pipeline progress \"{result.run_root}\" --follow"
+        )
+        return
 
     stage_paths = load_stage_paths(config_path.resolve())
     if stage_paths is not None:
@@ -863,7 +937,15 @@ def pipeline_run(
         cfg.output_manifest = overrides["output_manifest"]
         if overrides.get("aggregate_manifests") is not None:
             _apply_aggregate_manifests(cfg, overrides["aggregate_manifests"])
+        if overrides.get("dnsmos_manifest"):
+            for step in cfg.steps:
+                if step.operator == "quality.evidence_join":
+                    step.params = {
+                        **(step.params or {}),
+                        "dnsmos_manifest": overrides["dnsmos_manifest"],
+                    }
         if overrides.get("quality_sidecar_manifest"):
+            # Legacy classify-only attach; new production chain never injects this.
             for step in cfg.steps:
                 if step.operator == "quality.classify":
                     step.params = {
@@ -874,13 +956,16 @@ def pipeline_run(
             _apply_warehouse_source_overrides(cfg, overrides)
         if overrides.get("tagging_batch"):
             batch = str(overrides["tagging_batch"])
+            summary_xlsx = overrides.get("summary_xlsx") or (
+                f"data/exports/summary_multi_tag_v1_{batch}.xlsx"
+            )
             for step in cfg.steps:
                 if str(step.operator) != "quality.multi_tag_v1":
                     continue
                 step.params = {
                     **(step.params or {}),
                     "batch_id": batch,
-                    "summary_xlsx": f"data/exports/summary_multi_tag_v1_{batch}.xlsx",
+                    "summary_xlsx": summary_xlsx,
                     "output_manifest": overrides["output_manifest"],
                 }
         if overrides.get("asr_run"):
@@ -1023,6 +1108,49 @@ def pipeline_run(
     if no_sharding:
         cfg.sharding = None
 
+    # 047: bind batch / speed_factor / product root for pitch-preserving tempo.
+    has_tempo = any(str(step.operator) == "augmentation.tempo" for step in cfg.steps)
+    if has_tempo or str(cfg.name).lower() in {
+        "augment_batch_speed",
+        "augment_tempo",
+        "tempo_augment_batch",
+    }:
+        from audio_engine.core.augmentation.cli_bind import bind_tempo_pipeline
+
+        try:
+            tempo_bind = bind_tempo_pipeline(
+                cfg,
+                source_batch=source_name
+                or next(
+                    (
+                        str(s.params.get("source_batch") or "")
+                        for s in cfg.steps
+                        if str(s.operator) == "augmentation.tempo"
+                    ),
+                    None,
+                )
+                or None,
+                speed_factor_cli=speed_factor,
+                input_manifest_override=cfg.input_manifest,
+                mock=cfg.mock,
+                defer_publish=True if cfg.sharding is not None else None,
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        console.print(f"  Tempo batch: [cyan]{tempo_bind['source_batch']}[/cyan]")
+        console.print(f"  Speed factor:[cyan]{tempo_bind['speed_factor']}[/cyan] (preserve pitch)")
+        console.print(f"  Backend:     [cyan]{tempo_bind['backend']}@{tempo_bind['ffmpeg_version']}[/cyan]")
+        console.print(f"  Filter:      [cyan]{tempo_bind['filter_graph']}[/cyan]")
+        console.print(f"  Input key:   [cyan]{tempo_bind['input_audio_key']}[/cyan]")
+        console.print(
+            "  Concurrency: "
+            f"workers={tempo_bind['workers']} max_in_flight={tempo_bind['max_in_flight']} "
+            f"backend_threads={tempo_bind['backend_threads']}"
+        )
+        console.print(f"  Product:     [cyan]{tempo_bind['product_root']}[/cyan]")
+        console.print(f"  Input:       [cyan]{tempo_bind['input_manifest']}[/cyan]")
+        console.print(f"  Output:      [cyan]{cfg.output_manifest}[/cyan]")
+
     if cfg.sharding is not None:
         try:
             result = run_sharded_pipeline(
@@ -1031,6 +1159,17 @@ def pipeline_run(
                 run_root=Path(cfg.resume) if cfg.resume else None,
                 log=lambda msg: console.print(msg),
                 transcript_key=_first_asr_transcript_key(cfg),
+                speed_factor=speed_factor
+                if speed_factor is not None
+                else next(
+                    (
+                        float(s.params["speed_factor"])
+                        for s in cfg.steps
+                        if str(s.operator) == "augmentation.tempo"
+                        and s.params.get("speed_factor") is not None
+                    ),
+                    None,
+                ),
             )
         except ShardedRunError as exc:
             console.print(f"[red]{exc}[/red]")
@@ -1049,14 +1188,29 @@ def pipeline_run(
         return
 
     runner = PipelineRunner(cfg)
-    result = runner.run()
+    try:
+        result = runner.run()
+    except Exception as exc:
+        from audio_engine.core.augmentation.publish import AugmentBatchIncomplete
+
+        if isinstance(exc, AugmentBatchIncomplete) or isinstance(
+            getattr(exc, "__cause__", None), AugmentBatchIncomplete
+        ):
+            console.print(f"[red]{exc}[/red]")
+            console.print(f"  Run dir: [cyan]{runner.run_dir}[/cyan]")
+            raise typer.Exit(code=1) from exc
+        raise
 
     if cfg.output_manifest:
         out = Path(cfg.output_manifest)
         out.parent.mkdir(parents=True, exist_ok=True)
-        result.save(out)
-        result.save(out.with_suffix(".jsonl"))
-        console.print(f"  Output: [cyan]{out}[/cyan]")
+        # Tempo already published a formal ordered manifest; avoid unsorted overwrite.
+        if has_tempo and out.is_file():
+            console.print(f"  Output: [cyan]{out}[/cyan] (tempo formal)")
+        else:
+            result.save(out)
+            result.save(out.with_suffix(".jsonl"))
+            console.print(f"  Output: [cyan]{out}[/cyan]")
         _register_output(
             out,
             pipeline=cfg.name,
@@ -2626,27 +2780,26 @@ def task_status(run_dir: Path = typer.Argument(..., help="Task run directory")) 
 def pipeline_progress(
     run_root: Path = typer.Argument(
         ...,
-        help="Sharded run directory (contains shards/ and shard-*.parquet / PROGRESS.log)",
+        help="Pipeline/tagging run directory, or a sharded run directory",
     ),
     follow: bool = typer.Option(
         False,
         "--follow",
         "-f",
-        help="Keep printing the latest PROGRESS.log line (Ctrl+C to stop)",
+        help="Keep printing live progress (Ctrl+C to stop)",
     ),
     interval: float = typer.Option(5.0, "--interval", help="Follow refresh seconds"),
 ) -> None:
     """Show aggregate recognition progress / throughput for a sharded run.
 
-    Prefer ``tail -f runs/<run>/PROGRESS.log`` while a job is running; this
-    command also rebuilds a snapshot from checkpoints if the log is missing.
+    Rebuilds done counts from checkpoints and VAD ``vad_source_results`` on each
+    refresh (does not blindly trust a stale ``progress.json``).
     """
     import time as _time
 
     from audio_engine.core.progress import (
         PROGRESS_JSON,
         PROGRESS_LOG,
-        checkpoint_consumed,
         collect_sharded_progress,
         shard_input_count,
     )
@@ -2655,57 +2808,172 @@ def pipeline_progress(
     if not root.is_dir():
         raise typer.BadParameter(f"run dir not found: {root}")
 
-    def _print_once() -> None:
-        progress_json = root / PROGRESS_JSON
-        if progress_json.is_file():
-            import json as _json
+    follow_state: dict[str, float] = {"prev_done": -1.0, "prev_at": 0.0}
 
-            data = _json.loads(progress_json.read_text(encoding="utf-8"))
-            console.print(
-                f"[PROGRESS] done={data.get('done')}/{data.get('total')} "
-                f"({data.get('pct', 0):.1f}%) "
-                f"rate={data.get('rate_overall', 0):.2f} samples/s "
-                f"(window={data.get('rate_window', 0):.2f}/s) "
-                f"elapsed={data.get('elapsed_s', 0):.0f}s "
-                f"eta={data.get('eta_s')} "
-                f"shards[run={data.get('running')} done={data.get('finished')} "
-                f"queue={data.get('queued')}]"
-            )
-            console.print(f"  Source: [cyan]{progress_json}[/cyan]")
-            console.print(f"  Log:    [cyan]{root / PROGRESS_LOG}[/cyan]")
-            return
-
+    def _resolve_shard_totals(stored: dict | None) -> dict[str, int]:
         shard_dir = root / "shards"
         shards = sorted(shard_dir.glob("shard-*.parquet")) if shard_dir.is_dir() else []
         if not shards:
             shards = sorted(root.glob("shard-*.parquet"))
-        if not shards:
-            raise typer.BadParameter(f"no shard-*.parquet under {root}")
-        totals = {p.stem: shard_input_count(p) for p in shards}
-        done = sum(min(checkpoint_consumed(root, stem), size) for stem, size in totals.items())
-        total = sum(totals.values())
-        finished = sum(1 for stem in totals if (root / f"{stem}.parquet").exists())
+        if shards:
+            return {p.stem: shard_input_count(p) for p in shards}
+
+        # Infer from shard run dirs / logs when parquet inputs are elsewhere.
+        stems: set[str] = set()
+        for path in root.iterdir():
+            name = path.name
+            if path.is_dir() and name.startswith("shard-"):
+                stems.add(name)
+            elif path.is_file() and name.startswith("shard-") and name.endswith(".log"):
+                stems.add(Path(name).stem)
+            elif path.is_file() and name.startswith("shard-") and name.endswith(".parquet"):
+                stems.add(Path(name).stem)
+        if stems and stored and stored.get("total"):
+            # Evenly split stored total across discovered stems as last resort.
+            total = int(stored["total"])
+            ordered = sorted(stems)
+            base, rem = divmod(total, len(ordered))
+            return {
+                stem: base + (1 if i < rem else 0) for i, stem in enumerate(ordered)
+            }
+        if stored and stored.get("total") and stored.get("config", {}).get("shards"):
+            n = int(stored["config"]["shards"])
+            total = int(stored["total"])
+            base, rem = divmod(total, n)
+            return {
+                f"shard-{i:03d}": base + (1 if i < rem else 0) for i in range(n)
+            }
+        return {}
+
+    def _print_once() -> None:
+        production_view = root / "progress_view.json"
+        if production_view.is_file():
+            data = json.loads(production_view.read_text(encoding="utf-8"))
+            if data.get("kind") == "production":
+                console.print(
+                    f"[PRODUCTION] status={data.get('status')} phase={data.get('phase')} "
+                    f"running={data.get('running')} succeeded={data.get('succeeded')} "
+                    f"failed={data.get('failed')} pending={data.get('pending')} "
+                    f"asr∥dnsmos={data.get('asr_dnsmos_parallel_visible')} "
+                    f"blocking_join={data.get('blocking_join')} "
+                    f"updated_at={data.get('updated_at')}"
+                )
+                for node_id, info in (data.get("nodes") or {}).items():
+                    console.print(
+                        f"  {node_id}: status={info.get('status')} "
+                        f"started={info.get('started_at')} finished={info.get('finished_at')} "
+                        f"error={info.get('error')}"
+                    )
+                overlap = root / "overlap_evidence.json"
+                if overlap.is_file():
+                    console.print(f"  Overlap evidence: [cyan]{overlap}[/cyan]")
+                console.print(f"  View: [cyan]{production_view}[/cyan]")
+                console.print(f"  Log:  [cyan]{root / 'PROGRESS.log'}[/cyan]")
+                return
+        tag_metrics = sorted((root / "tagging").glob("*/metrics.json"))
+        if not tag_metrics and (root / "metrics.json").is_file():
+            candidate = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+            if candidate.get("tagging_run_id"):
+                tag_metrics = [root / "metrics.json"]
+        if tag_metrics:
+            for path in tag_metrics:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                progress = data.get("progress") or {}
+                console.print(
+                    f"[TAGGING] step={data.get('step_name')} status={data.get('status')} "
+                    f"stage={data.get('stage')} done={progress.get('processed', 0)}/{progress.get('total', 0)} "
+                    f"committed={progress.get('committed', 0)} restored={progress.get('restored', 0)} "
+                    f"rate={progress.get('rate_per_second', 0):.2f}/s "
+                    f"eta={progress.get('eta_seconds')} updated_at={data.get('updated_at')}"
+                )
+                for engine, values in (data.get("engines") or {}).items():
+                    console.print(
+                        f"  {engine}: in_flight={values.get('in_flight', 0)} "
+                        f"running={values.get('running')} queued={values.get('queued')} "
+                        f"completed={values.get('completed', 0)} failed={values.get('failed', 0)} "
+                        f"reused={values.get('reused', 0)} retries={values.get('retries', 0)} "
+                        f"mean={values.get('mean_seconds', 0):.4f}s"
+                    )
+                console.print(f"  Metrics: [cyan]{path}[/cyan]")
+                console.print(f"  Log: [cyan]{data.get('log_path')}[/cyan]")
+            return
+
+        progress_json = root / PROGRESS_JSON
+        stored: dict | None = None
+        if progress_json.is_file():
+            try:
+                stored = json.loads(progress_json.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                stored = None
+
+        totals = _resolve_shard_totals(stored)
+        if not totals:
+            if stored is not None:
+                # Last resort: print stored file when we cannot rebuild shard map.
+                console.print(
+                    f"[PROGRESS] done={stored.get('done')}/{stored.get('total')} "
+                    f"({stored.get('pct', 0):.1f}%) "
+                    f"rate={stored.get('rate_overall', 0):.2f} samples/s "
+                    f"(window={stored.get('rate_window', 0):.2f}/s) "
+                    f"elapsed={stored.get('elapsed_s', 0):.0f}s "
+                    f"eta={stored.get('eta_s')} "
+                    f"shards[run={stored.get('running')} done={stored.get('finished')} "
+                    f"queue={stored.get('queued')}]"
+                )
+                console.print(f"  Source: [cyan]{progress_json}[/cyan] (stale file; no shard map)")
+                console.print(f"  Log:    [cyan]{root / PROGRESS_LOG}[/cyan]")
+                return
+            raise typer.BadParameter(f"no shard map / progress.json under {root}")
+
+        finished_stems = {stem for stem in totals if (root / f"{stem}.parquet").exists()}
+        running = int(stored.get("running") or 0) if stored else 0
+        finished = int(stored.get("finished") or len(finished_stems)) if stored else len(finished_stems)
+        queued = int(stored.get("queued") or 0) if stored else 0
+        # Approximate stem sets from counts when parent metadata is the only signal.
+        running_stems = {s for s in totals if s not in finished_stems}
+        if running and len(running_stems) > running:
+            running_stems = set(sorted(running_stems)[:running])
+        queued_stems = set()
+        if queued:
+            leftover = [s for s in totals if s not in finished_stems and s not in running_stems]
+            queued_stems = set(leftover[:queued])
+
+        now = _time.time()
+        if stored and stored.get("elapsed_s") is not None:
+            started_at = now - float(stored["elapsed_s"])
+        else:
+            started_at = now
+        prev_done = int(follow_state["prev_done"])
+        prev_at = float(follow_state["prev_at"])
+        if prev_done < 0:
+            prev_done = int(stored.get("done") or 0) if stored else 0
+            prev_at = float(stored.get("updated_at") or now) if stored else now
+
         snapshot = collect_sharded_progress(
             run_root=root,
             shard_totals=totals,
-            running_stems=set(),
-            finished_stems={stem for stem in totals if (root / f"{stem}.parquet").exists()},
-            queued_stems=set(),
-            started_at=_time.time(),
-            prev_done=done,
-            prev_at=_time.time(),
-            config={},
+            running_stems=running_stems,
+            finished_stems=finished_stems,
+            queued_stems=queued_stems,
+            started_at=started_at,
+            prev_done=prev_done,
+            prev_at=prev_at,
+            config=dict((stored or {}).get("config") or {}),
         )
-        # Override done/total from fresh scan (started_at unknown without progress.json).
-        snapshot.done = done
-        snapshot.total = total
-        snapshot.finished = finished
-        snapshot.pct = (100.0 * done / total) if total else 0.0
-        snapshot.rate_overall = 0.0
-        snapshot.rate_window = 0.0
-        snapshot.eta_s = None
+        # Prefer live shard-role counts from stored parent when available.
+        if stored is not None:
+            snapshot.running = running
+            snapshot.finished = finished
+            snapshot.queued = queued
+        follow_state["prev_done"] = float(snapshot.done)
+        follow_state["prev_at"] = snapshot.updated_at
+
         console.print(snapshot.format_line())
-        console.print("  (no progress.json yet — counts from checkpoints only, rate n/a)")
+        if progress_json.is_file():
+            console.print(f"  Source: live scan (+ metadata from [cyan]{progress_json}[/cyan])")
+        else:
+            console.print("  Source: live scan (checkpoints / vad_source_results)")
+        console.print(f"  Log:    [cyan]{root / PROGRESS_LOG}[/cyan]")
 
     try:
         _print_once()
@@ -3881,7 +4149,7 @@ def stage1_serve_identity(
     )
 
 
-tags_app = typer.Typer(help="Composable multi-tag management (040)")
+tags_app = typer.Typer(help="Composable multi-tag management (040/042)")
 app.add_typer(tags_app, name="tags")
 
 
@@ -3889,6 +4157,205 @@ def _tagging_service(config: Path):
     from audio_engine.core.tagging.service import TaggingService
 
     return TaggingService.from_path(config)
+
+
+def _tagging_engine_limits(value: Optional[str], option: str) -> dict[str, int]:
+    if not value:
+        return {}
+    try:
+        limits = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter("Expected a JSON object", param_hint=option) from exc
+    if (not isinstance(limits, dict) or set(limits) - {"vad", "energy", "dnsmos"}
+            or any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in limits.values())):
+        raise typer.BadParameter("Use positive integer limits for vad, energy and dnsmos", param_hint=option)
+    return limits
+
+
+@tags_app.command("list")
+def tags_list(
+    library: Path = typer.Option(
+        Path("configs/tagging/library"),
+        "--library",
+        "-L",
+        help="Tag definition library directory",
+    ),
+    include_disabled: bool = typer.Option(
+        True, "--include-disabled/--enabled-only", help="Include disabled/archived"
+    ),
+    config: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Optional run config; when set, mark which tags are selected",
+    ),
+) -> None:
+    """List all tag definitions in the library (no ASR / acoustic)."""
+    from audio_engine.core.tagging.config import load_tagging_config
+    from audio_engine.core.tagging.library import load_tag_library
+
+    lib = load_tag_library(library)
+    selected: set[str] = set()
+    if config is not None:
+        cfg = load_tagging_config(config)
+        selected = set(cfg.tags)
+    rows = []
+    for entry in lib.list_entries(include_disabled=include_disabled):
+        rows.append(
+            {
+                "tag_id": entry.tag.tag_id,
+                "name": entry.tag.name,
+                "version": entry.tag.version,
+                "status": entry.tag.status_label(),
+                "rule_count": len(entry.rules),
+                "selected_in_config": entry.tag.tag_id in selected if config else None,
+                "definition_path": entry.source_path,
+            }
+        )
+    console.print_json(
+        json.dumps(
+            {"ok": True, "count": len(rows), "tags": rows, "asr_or_acoustic_invoked": False},
+            ensure_ascii=False,
+        )
+    )
+
+
+@tags_app.command("show")
+def tags_show(
+    tag_id: str = typer.Argument(..., help="tag_id to show"),
+    library: Path = typer.Option(
+        Path("configs/tagging/library"),
+        "--library",
+        "-L",
+    ),
+    fragments: Path = typer.Option(
+        Path("configs/tagging/fragments_v1.yaml"),
+        "--fragments",
+        help="Shared fragments YAML for expanding conditions",
+    ),
+    snapshot: Optional[Path] = typer.Option(
+        None,
+        "--snapshot",
+        help="definition_snapshot.json from a past run (view historical definition)",
+    ),
+    expand: bool = typer.Option(True, "--expand/--no-expand", help="Expand fragment refs"),
+) -> None:
+    """Show one tag definition with full conditions/examples (no ASR / acoustic)."""
+    from audio_engine.core.tagging.config import _load_fragments
+    from audio_engine.core.tagging.library import (
+        TagLibraryError,
+        expand_condition_fragments,
+        load_definition_snapshot,
+        load_tag_library,
+    )
+
+    if snapshot is not None:
+        if not snapshot.is_file():
+            raise typer.BadParameter(
+                f"definition snapshot missing: {snapshot}. "
+                "Historical run without full definition_snapshot cannot be fully restored; "
+                "refusing to substitute current library definitions."
+            )
+        snap = load_definition_snapshot(snapshot)
+        if snap.get("schema") != "tagging_definition_snapshot_v1" and "tags" not in snap:
+            raise typer.BadParameter(
+                f"snapshot {snapshot} is not a full definition snapshot; "
+                "cannot fully restore historical tag definitions "
+                "(refuse to pretend current library is the historical one)."
+            )
+        tags = snap.get("tags") or {}
+        rules = snap.get("rules") or []
+        if tag_id not in tags:
+            raise typer.BadParameter(
+                f"tag_id {tag_id} not in snapshot (historical snapshot cannot invent current defs)"
+            )
+        tag = tags[tag_id]
+        rule_rows = []
+        frag_map = {}
+        for fid, f in (snap.get("fragments") or {}).items():
+            from audio_engine.core.tagging.config import FragmentDef
+
+            frag_map[fid] = FragmentDef(
+                fragment_id=str(f.get("fragment_id") or fid),
+                version=str(f.get("version") or "1"),
+                condition=dict(f.get("condition") or {}),
+                description=str(f.get("description") or ""),
+            )
+        for r in rules:
+            if str(r.get("tag_id")) != tag_id:
+                continue
+            row = dict(r)
+            if expand:
+                row["condition"] = expand_condition_fragments(row.get("condition"), frag_map)
+            rule_rows.append(row)
+        console.print_json(
+            json.dumps(
+                {
+                    "ok": True,
+                    "source": "snapshot",
+                    "snapshot_path": str(snapshot.as_posix()),
+                    "content_fingerprint": snap.get("content_fingerprint"),
+                    "tag": tag,
+                    "rules": rule_rows,
+                    "lexicons": {
+                        lid: snap.get("lexicons", {}).get(lid)
+                        for lid in (tag.get("dependency_lexicons") or [])
+                    },
+                    "asr_or_acoustic_invoked": False,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+        return
+
+    lib = load_tag_library(library)
+    try:
+        entry = lib.get(tag_id)
+    except TagLibraryError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    frag_defs = _load_fragments({"path": str(fragments)}, base_dir=Path.cwd())
+    payload = entry.as_view_dict(expand_fragments=frag_defs if expand else None)
+    console.print_json(
+        json.dumps(
+            {"ok": True, "source": "library", "tag": payload, "asr_or_acoustic_invoked": False},
+            ensure_ascii=False,
+            default=str,
+        )
+    )
+
+
+@tags_app.command("docs")
+def tags_docs(
+    generate: bool = typer.Option(False, "--generate", help="Generate docs/02-规范规则/tag规则库.md"),
+    check: bool = typer.Option(False, "--check", help="Check whether generated doc is stale"),
+    library: Path = typer.Option(Path("configs/tagging/library"), "--library", "-L"),
+    fragments: Path = typer.Option(
+        Path("configs/tagging/fragments_v1.yaml"), "--fragments"
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Override doc output path"
+    ),
+) -> None:
+    """Generate or check the human-readable tag library document (no ASR / acoustic)."""
+    from audio_engine.core.tagging.docs_gen import (
+        check_tag_library_docs,
+        generate_tag_library_docs,
+    )
+
+    if generate == check:
+        raise typer.BadParameter("specify exactly one of --generate or --check")
+    if generate:
+        result = generate_tag_library_docs(
+            library_dir=library, fragments_path=fragments, output=output
+        )
+    else:
+        result = check_tag_library_docs(
+            library_dir=library, fragments_path=fragments, doc_path=output
+        )
+        if result.get("stale"):
+            raise typer.Exit(code=2)
+    console.print_json(json.dumps(result, ensure_ascii=False))
 
 
 @tags_app.command("validate")
@@ -3900,7 +4367,7 @@ def tags_validate(
         help="Tagging config YAML",
     ),
 ) -> None:
-    """Validate tags/rules/fragments/lexicons."""
+    """Validate tags/rules/fragments/lexicons (library or inline)."""
     service = _tagging_service(config)
     console.print_json(json.dumps(service.validate(), ensure_ascii=False))
 
@@ -3920,6 +4387,10 @@ def tags_preview(
         None, "--evidence-mode", help="existing | compute_acoustic"
     ),
     work_root: Optional[Path] = typer.Option(None, "--work-root"),
+    workers: Optional[int] = typer.Option(None, "--workers", "-w", min=1),
+    executor: str = typer.Option("auto", "--executor", help="auto | sequential | thread | process"),
+    max_in_flight: Optional[int] = typer.Option(None, "--max-in-flight", min=1),
+    batch_size: int = typer.Option(32, "--batch-size", min=1),
 ) -> None:
     """Dry-run tagging without publishing formal snapshots."""
     from audio_engine.core.manifest import Manifest
@@ -3939,6 +4410,10 @@ def tags_preview(
             work_root=work_root,
             preview=True,
             publish=False,
+            workers=workers,
+            executor=executor,
+            max_in_flight=max_in_flight,
+            batch_size=batch_size,
         )
     )
     matched = sum(
@@ -4140,6 +4615,11 @@ def tags_export(
     ),
     require_unknown: bool = typer.Option(False, "--require-unknown"),
     require_manual_block: bool = typer.Option(False, "--require-manual-block"),
+    sort_by_dnsmos_sig: bool = typer.Option(
+        False,
+        "--sort-by-dnsmos-sig",
+        help="Sort by successful finite DNSMOS SIG ascending; keep unavailable scores last",
+    ),
 ) -> None:
     from audio_engine.core.manifest import Manifest
 
@@ -4155,6 +4635,7 @@ def tags_export(
                 exclude_tags=exclude_tag,
                 require_unknown=require_unknown,
                 require_manual_block=require_manual_block,
+                sort_by_dnsmos_sig=sort_by_dnsmos_sig,
             ),
             ensure_ascii=False,
         )
@@ -4175,6 +4656,14 @@ def tags_run(
     work_root: Optional[Path] = typer.Option(None, "--work-root"),
     rule_id: Optional[list[str]] = typer.Option(None, "--rule-id"),
     sample_id: Optional[list[str]] = typer.Option(None, "--sample-id"),
+    workers: Optional[int] = typer.Option(None, "--workers", "-w", min=1),
+    executor: str = typer.Option("auto", "--executor", help="auto | sequential | thread | process"),
+    max_in_flight: Optional[int] = typer.Option(None, "--max-in-flight", min=1),
+    checkpoint_every: int = typer.Option(100, "--checkpoint-every", min=1),
+    batch_size: int = typer.Option(32, "--batch-size", min=1),
+    engine_workers: Optional[str] = typer.Option(None, "--engine-workers", help='JSON mapping: {"vad":4,"dnsmos":4,"energy":8}'),
+    engine_max_in_flight: Optional[str] = typer.Option(None, "--engine-max-in-flight", help="JSON mapping of per-engine in-flight limits"),
+    engine_retries: int = typer.Option(0, "--engine-retries", min=0),
 ) -> None:
     """Service-layer tagging run (same logic as pipeline). Prefer pipeline for production."""
     from audio_engine.core.manifest import Manifest
@@ -4195,6 +4684,15 @@ def tags_run(
             resume_run_id=resume_run_id,
             rule_ids=rule_id,
             sample_ids=sample_id,
+            workers=workers,
+            executor=executor,
+            max_in_flight=max_in_flight,
+            checkpoint_every=checkpoint_every,
+            batch_size=batch_size,
+            engine_workers=_tagging_engine_limits(engine_workers, "--engine-workers"),
+            engine_max_in_flight=_tagging_engine_limits(engine_max_in_flight, "--engine-max-in-flight"),
+            engine_retries=engine_retries,
+            retain_results=False,
             preview=False,
             publish=True,
             summary_xlsx=Path(f"data/exports/summary_multi_tag_v1_{batch}.xlsx"),
@@ -4211,10 +4709,80 @@ def tags_run(
                 "stats": result.stats,
                 "published": result.published,
                 "work_dir": result.work_dir,
+                "tagging_run_dir": result.run_dir,
             },
             ensure_ascii=False,
         )
     )
+
+
+tagging_app = typer.Typer(help="Tagging migration and free_tags_v2 scaffolding (044)")
+app.add_typer(tagging_app, name="tagging")
+
+
+@tagging_app.command("migrate-config")
+def tagging_migrate_config(
+    from_path: Path = typer.Option(
+        ...,
+        "--from",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Legacy tagging YAML with selection_config",
+    ),
+    to_path: Path = typer.Option(
+        ...,
+        "--to",
+        help="Output free_tags_v2 tagging YAML path",
+    ),
+    evidence_out: Optional[Path] = typer.Option(
+        None,
+        "--evidence-out",
+        help="Evidence YAML path (default: configs/tagging/evidence/zh_asr_families_v2.yaml)",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview migration without writing files",
+    ),
+) -> None:
+    """Migrate selection-coupled tagging config to independent free_tags_v2 layout."""
+    from audio_engine.core.tagging.migrate import migrate_tagging_config
+
+    report = migrate_tagging_config(
+        from_path,
+        to_path,
+        dry_run=dry_run,
+        evidence_out=evidence_out,
+    )
+    console.print_json(json.dumps(report, ensure_ascii=False, default=str))
+
+
+@tagging_app.command("migrate-state")
+def tagging_migrate_state(
+    from_work: Path = typer.Option(
+        ...,
+        "--from-work",
+        exists=True,
+        file_okay=False,
+        help="Source runs/tagging/<batch>/<policy>/ work directory",
+    ),
+    to_work: Path = typer.Option(
+        ...,
+        "--to-work",
+        help="Target free_tags_v2 work directory",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview file copies only",
+    ),
+) -> None:
+    """Copy tag_state / manual_ops between policy work directories."""
+    from audio_engine.core.tagging.migrate import migrate_manual_tag_state
+
+    report = migrate_manual_tag_state(from_work, to_work, dry_run=dry_run)
+    console.print_json(json.dumps(report, ensure_ascii=False, default=str))
 
 
 def main() -> None:

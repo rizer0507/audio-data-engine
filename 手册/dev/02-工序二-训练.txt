@@ -7,7 +7,7 @@
 cd /data2/data-cp/lizi/audio-data-engine
 source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
 
-export BATCH=mt3000
+export BATCH=20260813-n-1
 export RELEASE_ID=ds_${BATCH}_v1
 export TRAIN_RECIPE=/data2/data-cp/lizi/trainer/recipes/qwen_sft_v3.yaml
 export TRAIN_COMMAND="python /data2/data-cp/lizi/trainer/train.py"

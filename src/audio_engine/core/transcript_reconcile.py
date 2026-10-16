@@ -114,6 +114,33 @@ def resolve_blank_exact_hotwords(
     return hotwords, models
 
 
+def blank_applies_to_model(model: str, blank_models: set[str] | frozenset[str]) -> bool:
+    """Whether a transcript key should use blank_exact (exact or same-family alias).
+
+    Family stems cover ``--asr-run`` aliases: configured ``qwen`` also matches
+    ``qwen1`` / ``qwen2`` / ``qwen-sft-epoch10``. A stem only extends when the
+    next character is non-alphabetic so ``qwen`` does not match ``qwenthing``.
+    """
+    if not blank_models:
+        return False
+    if "*" in blank_models or "all" in blank_models:
+        return True
+    key = str(model).strip()
+    if not key:
+        return False
+    if key in blank_models:
+        return True
+    for stem in blank_models:
+        name = str(stem).strip()
+        if not name or name in {"*", "all"}:
+            continue
+        if key.startswith(name) and (
+            len(key) == len(name) or not key[len(name)].isalpha()
+        ):
+            return True
+    return False
+
+
 def rewrite_plain_transcript_entry(
     entry: Any,
     *,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from audio_engine.operators.asr.vllm import call_vllm_transcription
+from audio_engine.operators.asr.vllm import call_vllm_chat_asr, call_vllm_transcription
 
 
 @dataclass(frozen=True)
@@ -36,19 +36,25 @@ def probe_vllm_transcription(
     api_key: str = "dummy",
     language: str = "zh",
     timeout_s: float = 120.0,
+    context: str = "",
+    chat_template_kwargs: dict[str, Any] | None = None,
 ) -> ProbeResult:
     audio = require_probe_audio(audio_path)
-    result = call_vllm_transcription(
-        str(audio),
-        {
-            "api_base": api_base,
-            "api_key": api_key,
-            "model": model,
-            "language": language,
-            "temperature": 0,
-            "timeout": timeout_s,
-        },
-    )
+    settings: dict[str, Any] = {
+        "api_base": api_base,
+        "api_key": api_key,
+        "model": model,
+        "language": language,
+        "temperature": 0,
+        "timeout": timeout_s,
+        "context": context,
+        "chat_template_kwargs": chat_template_kwargs
+        or {"force_language": "Chinese"},
+    }
+    if family == "qwen":
+        result = call_vllm_chat_asr(str(audio), settings)
+    else:
+        result = call_vllm_transcription(str(audio), settings)
     text = str(result.get("text") or "").strip()
     return ProbeResult(
         ok=bool(text),

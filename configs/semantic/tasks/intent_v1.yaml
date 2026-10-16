@@ -1,0 +1,18 @@
+task_id: intent_v1
+task_version: "1"
+service_config: configs/semantic/services/qwen38_27b.yaml
+prompts:
+  system: configs/semantic/prompts/intent.system.jinja
+  user: configs/semantic/prompts/intent.user.jinja
+output_schema: configs/semantic/schemas/intent_v1.json
+evidence:
+  model_families:
+    qwen: [qwen_1, qwen_2]
+    # 其它家族仍可配置进候选；模板通过 focus_family 只引用 qwen
+    glm: [glm_1, glm_2]
+  required_families: [qwen]
+  min_successful_runs: 1
+  on_insufficient_evidence: judge
+  sample_context_fields: [id, duration, source_path]
+parameters:
+  focus_family: qwen

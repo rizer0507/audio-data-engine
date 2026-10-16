@@ -75,18 +75,30 @@ def _format_config(config: dict[str, Any]) -> str:
 
 
 def shard_input_count(shard_path: Path) -> int:
-    """Fast row count for a shard parquet (fallback to Manifest)."""
+    """Fast row count for a shard parquet (fallback to Manifest).
+
+    Returns 0 for missing/empty/unreadable files so a mid-write 0-byte parquet
+    never crashes parent progress polls.
+    """
     path = Path(shard_path)
     if not path.exists():
+        return 0
+    try:
+        if path.stat().st_size == 0:
+            return 0
+    except OSError:
         return 0
     try:
         import pyarrow.parquet as pq
 
         return int(pq.ParquetFile(path).metadata.num_rows)
     except Exception:
-        from audio_engine.core.manifest import Manifest
+        try:
+            from audio_engine.core.manifest import Manifest
 
-        return len(Manifest.load(path))
+            return len(Manifest.load(path))
+        except Exception:
+            return 0
 
 
 def checkpoint_consumed(run_root: Path, shard_stem: str) -> int:
@@ -118,6 +130,45 @@ def checkpoint_consumed(run_root: Path, shard_stem: str) -> int:
     return best
 
 
+def _count_result_jsons(directory: Path) -> int:
+    """Count per-source result JSONs; skip sidecar summaries like ``_batch_summary.json``."""
+    if not directory.is_dir():
+        return 0
+    n = 0
+    for path in directory.glob("*.json"):
+        if path.name.startswith("_"):
+            continue
+        n += 1
+    return n
+
+
+def count_vad_source_results(run_root: Path, shard_stem: str | None = None) -> int:
+    """Count FSMN VAD per-source result files already written under a run.
+
+    Looks at ``run_root/<shard>/vad_source_results/`` when ``shard_stem`` is set,
+    otherwise sums all ``shard-*/vad_source_results/`` plus a parent-level
+    ``run_root/vad_source_results/`` (used when results are aggregated at the parent).
+    """
+    root = Path(run_root)
+    if shard_stem is not None:
+        return _count_result_jsons(root / shard_stem / "vad_source_results")
+
+    total = 0
+    for shard_dir in root.glob("shard-*"):
+        if shard_dir.is_dir():
+            total += _count_result_jsons(shard_dir / "vad_source_results")
+    # Parent-level aggregate (compat with layouts that write all sources here).
+    total += _count_result_jsons(root / "vad_source_results")
+    return total
+
+
+def shard_done_count(run_root: Path, shard_stem: str, shard_total: int) -> int:
+    """Best-effort done for one shard: max(checkpoint, per-shard VAD source results)."""
+    ckpt = checkpoint_consumed(run_root, shard_stem)
+    vad = count_vad_source_results(run_root, shard_stem)
+    return min(max(ckpt, vad), shard_total)
+
+
 def collect_sharded_progress(
     *,
     run_root: Path,
@@ -130,12 +181,19 @@ def collect_sharded_progress(
     prev_at: float,
     config: dict[str, Any] | None = None,
 ) -> ProgressSnapshot:
-    """Aggregate done counts across shard checkpoints / outputs."""
-    done = 0
-    total = 0
-    for stem, size in shard_totals.items():
-        total += size
-        done += min(checkpoint_consumed(run_root, stem), size)
+    """Aggregate done counts across shard checkpoints / VAD source results / outputs."""
+    root = Path(run_root)
+    total = sum(shard_totals.values())
+    per_shard_done = sum(
+        shard_done_count(root, stem, size) for stem, size in shard_totals.items()
+    )
+    # Prefer per-shard vad_source_results; fall back to parent-level aggregate.
+    parent_vad = _count_result_jsons(root / "vad_source_results")
+    shard_vad = sum(count_vad_source_results(root, stem) for stem in shard_totals)
+    done = per_shard_done
+    if parent_vad and shard_vad == 0:
+        done = max(done, parent_vad)
+    done = min(done, total)
 
     now = time.time()
     elapsed = max(now - started_at, 1e-6)

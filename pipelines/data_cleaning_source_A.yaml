@@ -1,10 +1,24 @@
-# 数据清洗流水线：只做音频质量，不做标注决策
+# 数据清洗流水线：规范化（16k mono ch0）+ FSMN VAD 切段（041）
 #
 # 推荐（按批次名统一产物命名，无需改本文件路径）：
 #   audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 #     --source-name mt3000 \
 #     --source-dir /path/to/wav_or_pcm
-#   → datasets/stage1/cleaned/cleaned_mt3000.parquet|.jsonl
+#   → datasets/stage1/cleaned/cleaned_mt3000.parquet|.jsonl  （片段样本，丢弃无 end 的 EOF 补尾）
+#
+# 模型（生产）：
+#   export FSMN_VAD_SOURCE_MODEL_DIR=/data2/data-cp/xijujun/models/fsmn-vad
+#   # 首次：python scripts/prepare_fsmn_vad_runtime.py \
+#   #   --source-model-dir "$FSMN_VAD_SOURCE_MODEL_DIR" \
+#   #   --fenshen-config configs/vad/fenshen_vad_config.yaml \
+#   #   --runtime-dir var/models/fsmn-vad-fenshen-v1
+#   export FSMN_VAD_RUNTIME_DIR="$PWD/var/models/fsmn-vad-fenshen-v1"
+#
+# 工程 mock（无 FunASR 时）：params.mock=true 或环境 AUDIO_ENGINE_VAD_MOCK=1
+#
+# 声道：多声道只取第0声道；无头 PCM 默认单声道；声明多声道时先解交织再取 ch0。
+# 采样率：输出统一 16k；无头默认 source_sample_rate=16000；有头读文件头。
+#         真实 8k 会明显告警并重采样，source/normalized 分字段记录。
 #
 # 兼容旧用法：不传 --source-name 时，仍读下方 input.source / output.manifest
 #   （input.source 见 resources/manifest.yaml）
@@ -44,8 +58,9 @@ pipeline:
     execution:
       workers: 32
     params:
-      # sample_rate = 输出目标。有 WAV 头则先探测真实采样率再重采样到该目标。
-      # source_sample_rate 仅用于无头 pcm/raw（默认 16k；真 8k PCM 时改这里）。
+      # sample_rate = 规范输出目标（全局 16 kHz）。
+      # source_sample_rate 仅用于无头 pcm/raw（默认 16k；可信来源声明 8k 时改这里）。
+      # channels：无头默认 1；可信来源声明多声道时设真实声道数，算子解交织后只取 ch0。
       sample_rate: 16000
       source_sample_rate: 16000
       channels: 1
@@ -60,6 +75,9 @@ pipeline:
       sample_rate: 16000
       input_audio_key: pcm_wav
       output_audio_key: resampled_16k
+
+  - name: normalize_report
+    operator: audio.normalize_report
 
   - name: probe
     operator: quality.probe
@@ -78,3 +96,21 @@ pipeline:
     operator: quality.select
     params:
       expr: "label_audio_pass == True"
+
+  # 一对多：模型 end 后保留 675ms 原音频；实际时长 <1s 丢弃，恰好 1s 保留；到文件末尾截断。
+  # 只有 start、到 EOF 仍没有 end 的补尾一律丢弃。产物 cleaned_* 为片段 Manifest。
+  # 模型原始 end 到达最后 VAD 帧/文件截止的片段也丢弃（25ms 窗、10ms 步）；加尾后碰 EOF 不算。
+  # 路径由算子读取环境变量（YAML 不展开 ${}）：
+  #   FSMN_VAD_RUNTIME_DIR / FSMN_VAD_SOURCE_MODEL_DIR / FSMN_VAD_FENSHEN_CONFIG
+  #   AUDIO_ENGINE_VAD_MOCK=1 → 工程 mock
+  - name: fsmn_vad_segment
+    operator: audio.fsmn_vad_segment
+    params:
+      input_audio_key: resampled_16k
+      output_audio_key: resampled_16k
+      channel_index: 0
+      include_eof_fallback: false
+      prepare_runtime: false
+      verify_fingerprints: true
+      source_results_dir: vad_source_results
+      segments_subdir: vad_segments

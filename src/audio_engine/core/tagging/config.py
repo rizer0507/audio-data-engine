@@ -11,7 +11,10 @@ from typing import Any
 
 import yaml
 
-from audio_engine.core.selection_v3.config import SelectionV3Config
+from audio_engine.core.tagging.evidence_config import (
+    TagEvidenceConfig,
+    load_tag_evidence_config,
+)
 from audio_engine.core.tagging.types import POLICY_VERSION
 
 
@@ -65,8 +68,39 @@ class TagDef:
     tag_id: str
     name: str
     description: str = ""
+    version: str = "1"
     enabled: bool = True
     archived: bool = False
+    business_definition: str = ""
+    examples: dict[str, Any] = field(default_factory=dict)
+    definition_path: str = ""
+    requires_acoustic: bool | None = None
+    dependency_fragments: list[str] = field(default_factory=list)
+    dependency_lexicons: list[str] = field(default_factory=list)
+
+    def status_label(self) -> str:
+        if self.archived:
+            return "archived"
+        if not self.enabled:
+            return "disabled"
+        return "enabled"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "tag_id": self.tag_id,
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "enabled": self.enabled,
+            "archived": self.archived,
+            "status": self.status_label(),
+            "business_definition": self.business_definition,
+            "examples": dict(self.examples),
+            "definition_path": self.definition_path,
+            "requires_acoustic": self.requires_acoustic,
+            "dependency_fragments": list(self.dependency_fragments),
+            "dependency_lexicons": list(self.dependency_lexicons),
+        }
 
 
 @dataclass
@@ -91,17 +125,27 @@ class RuleDef:
 @dataclass
 class TaggingConfig:
     policy_version: str
-    selection_config_path: str
-    selection: SelectionV3Config
+    evidence: TagEvidenceConfig
     evidence_mode: str  # existing | compute_acoustic
     tags: dict[str, TagDef]
     rules: list[RuleDef]
     fragments: dict[str, FragmentDef]
     lexicons: dict[str, LexiconSpec]
+    evidence_config_path: str = ""
+    # Deprecated alias kept for snapshot readability of pre-044 runs.
+    selection_config_path: str = ""
     work_dir_template: str = "runs/tagging/{batch_id}/{policy_version}"
     acoustic: dict[str, Any] = field(default_factory=dict)
     content_fingerprint: str = ""
     source_path: str = ""
+    library_mode: bool = False
+    library_path: str = ""
+    select_tags: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def selection(self) -> TagEvidenceConfig:
+        """Compatibility alias: historical code used ``config.selection`` for family/route."""
+        return self.evidence
 
     def enabled_rules(self) -> list[RuleDef]:
         out: list[RuleDef] = []
@@ -117,20 +161,15 @@ class TaggingConfig:
     def as_dict(self) -> dict[str, Any]:
         return {
             "policy_version": self.policy_version,
-            "selection_config_path": self.selection_config_path,
+            "evidence_config_path": self.evidence_config_path,
+            "evidence": self.evidence.as_dict(),
             "evidence_mode": self.evidence_mode,
             "content_fingerprint": self.content_fingerprint,
             "source_path": self.source_path,
-            "tags": {
-                tid: {
-                    "tag_id": t.tag_id,
-                    "name": t.name,
-                    "description": t.description,
-                    "enabled": t.enabled,
-                    "archived": t.archived,
-                }
-                for tid, t in self.tags.items()
-            },
+            "library_mode": self.library_mode,
+            "library_path": self.library_path,
+            "select_tags": list(self.select_tags),
+            "tags": {tid: t.as_dict() for tid, t in self.tags.items()},
             "rules": [
                 {
                     "rule_id": r.rule_id,
@@ -306,6 +345,8 @@ _KNOWN_CAPABILITIES = frozenset(
     {
         "family_all_dual_success",
         "family_dual_success",
+        "family_has_successful_raw_text",
+        "cross_family_text_disagreement",
         "family_state",
         "family_states_quantified",
         "texts_equivalent",
@@ -397,6 +438,23 @@ def validate_condition_tree(
     cap = str(node.get("capability") or "")
     if cap not in _KNOWN_CAPABILITIES:
         raise ValueError(f"{path}: unknown capability {cap}")
+    if cap == "family_has_successful_raw_text":
+        family = node.get("family")
+        if not isinstance(family, str) or not family.strip():
+            raise ValueError(f"{path}: family_has_successful_raw_text requires family")
+    if cap == "cross_family_text_disagreement":
+        family_names = node.get("families")
+        if (
+            not isinstance(family_names, list)
+            or len(family_names) < 2
+            or any(not isinstance(family, str) or not family.strip() for family in family_names)
+            or len(set(family_names)) != len(family_names)
+        ):
+            raise ValueError(
+                f"{path}: cross_family_text_disagreement requires at least two distinct families"
+            )
+        if "include_empty" in node and not isinstance(node["include_empty"], bool):
+            raise ValueError(f"{path}.include_empty must be bool")
     for key in ("family", "families", "left", "right", "text"):
         # family existence checked when present
         pass
@@ -418,16 +476,14 @@ def validate_condition_tree(
 
 
 def _load_fragments(raw: Any, *, base_dir: Path) -> dict[str, FragmentDef]:
+    from audio_engine.core.tagging.paths import resolve_tagging_path
+
     out: dict[str, FragmentDef] = {}
     if raw is None:
         return out
     items: list[Any]
     if isinstance(raw, dict) and "path" in raw:
-        frag_path = Path(str(raw["path"]))
-        if not frag_path.is_absolute():
-            frag_path = (base_dir / frag_path).resolve() if False else Path(frag_path)
-        # Prefer repo-relative path as-is (cwd = repo root in this project).
-        frag_path = Path(str(raw["path"]))
+        frag_path = resolve_tagging_path(str(raw["path"]), base_dir=base_dir)
         data = _load_yaml(frag_path)
         items = data.get("fragments") if isinstance(data, dict) else data
     elif isinstance(raw, dict) and "fragments" in raw:
@@ -457,37 +513,206 @@ def _load_fragments(raw: Any, *, base_dir: Path) -> dict[str, FragmentDef]:
     return out
 
 
+def _parse_inline_tag(item: dict[str, Any], *, source_path: str = "") -> TagDef:
+    tid = str(item.get("tag_id") or "").strip()
+    if not tid:
+        raise ValueError("tag requires tag_id")
+    if "status" in item:
+        status = str(item.get("status") or "enabled").strip().lower()
+        if status in {"enabled", "active", "on"}:
+            enabled, archived = True, False
+        elif status in {"disabled", "off", "inactive"}:
+            enabled, archived = False, False
+        elif status in {"archived", "archive"}:
+            enabled, archived = False, True
+        else:
+            raise ValueError(f"tag {tid}: invalid status {status!r}")
+    else:
+        enabled = bool(item.get("enabled", True))
+        archived = bool(item.get("archived", False))
+    examples = item.get("examples") or {}
+    if examples is not None and not isinstance(examples, dict):
+        raise ValueError(f"tag {tid}: examples must be mapping")
+    deps = item.get("dependencies") or {}
+    if deps is not None and not isinstance(deps, dict):
+        raise ValueError(f"tag {tid}: dependencies must be mapping")
+    return TagDef(
+        tag_id=tid,
+        name=str(item.get("name") or tid),
+        description=str(item.get("description") or ""),
+        version=str(item.get("version") or "1"),
+        enabled=enabled,
+        archived=archived,
+        business_definition=str(item.get("business_definition") or item.get("definition") or ""),
+        examples=dict(examples or {}),
+        definition_path=source_path,
+        requires_acoustic=(
+            None
+            if (deps.get("requires_acoustic") if isinstance(deps, dict) else None) is None
+            and item.get("requires_acoustic") is None
+            else bool(
+                deps.get("requires_acoustic")
+                if isinstance(deps, dict) and deps.get("requires_acoustic") is not None
+                else item.get("requires_acoustic")
+            )
+        ),
+        dependency_fragments=[str(x) for x in ((deps or {}).get("fragments") or [])],
+        dependency_lexicons=[str(x) for x in ((deps or {}).get("lexicons") or [])],
+    )
+
+
+def _parse_inline_rule(item: dict[str, Any], *, tags: dict[str, TagDef]) -> RuleDef:
+    rid = str(item.get("rule_id") or "").strip()
+    if not rid:
+        raise ValueError("rule requires rule_id")
+    tag_id = str(item.get("tag_id") or "").strip()
+    if not tag_id:
+        raise ValueError(f"rule {rid} requires tag_id")
+    if tag_id not in tags:
+        raise ValueError(f"rule {rid} references unknown tag {tag_id}")
+    cond = item.get("condition")
+    if not isinstance(cond, dict):
+        raise ValueError(f"rule {rid} requires condition mapping")
+    binding = item.get("text_binding")
+    if binding is not None and not isinstance(binding, dict):
+        raise ValueError(f"rule {rid} text_binding must be mapping")
+    return RuleDef(
+        rule_id=rid,
+        version=str(item.get("version") or "1"),
+        tag_id=tag_id,
+        condition=cond,
+        enabled=bool(item.get("enabled", True)),
+        description=str(item.get("description") or ""),
+        text_binding=binding,
+    )
+
+
 def load_tagging_config(path: str | Path) -> TaggingConfig:
-    p = Path(path)
+    from audio_engine.core.tagging.library import (
+        TagLibraryError,
+        load_tag_library,
+        select_from_library,
+    )
+    from audio_engine.core.tagging.paths import find_repo_root, resolve_tagging_path
+
+    p = Path(path).resolve()
     raw = _load_yaml(p)
     if not isinstance(raw, dict):
         raise ValueError(f"tagging config must be mapping: {p}")
 
+    repo_root = find_repo_root(p.parent)
     policy = str(raw.get("policy_version") or POLICY_VERSION)
-    selection_path = str(raw.get("selection_config") or raw.get("selection_config_path") or "").strip()
-    if not selection_path:
-        raise ValueError(f"{p}: selection_config is required")
-    selection = SelectionV3Config.from_yaml(selection_path)
-    families = set(selection.ordered_families())
+
+    # 044: refuse implicit selection_config loading — migrate explicitly.
+    legacy_selection = str(
+        raw.get("selection_config") or raw.get("selection_config_path") or ""
+    ).strip()
+    evidence_path_raw = str(
+        raw.get("evidence_config") or raw.get("evidence_config_path") or ""
+    ).strip()
+    evidence_inline = raw.get("evidence") if isinstance(raw.get("evidence"), dict) else None
+    if legacy_selection:
+        raise ValueError(
+            f"{p}: legacy selection_config={legacy_selection!r} is no longer loaded at "
+            "runtime. Migrate with `audio-data tagging migrate-config` to produce an "
+            "independent evidence_config, then remove selection_config."
+        )
+    if evidence_inline is not None:
+        # Write temp-less load via in-memory dump through load_tag_evidence_config path.
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as tmp:
+            import yaml as _yaml
+
+            _yaml.safe_dump(evidence_inline, tmp, allow_unicode=True)
+            tmp_path = Path(tmp.name)
+        try:
+            evidence = load_tag_evidence_config(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        evidence_path = f"inline:{p.as_posix()}"
+    elif evidence_path_raw:
+        evidence_resolved = resolve_tagging_path(
+            evidence_path_raw, base_dir=p.parent, repo_root=repo_root
+        )
+        evidence = load_tag_evidence_config(evidence_resolved)
+        evidence_path = str(evidence_resolved.as_posix())
+    else:
+        raise ValueError(
+            f"{p}: evidence_config (path) or evidence (inline mapping) is required"
+        )
+    families = set(evidence.ordered_families())
 
     evidence_mode = str(raw.get("evidence_mode") or "existing").strip().lower()
     if evidence_mode not in {"existing", "compute_acoustic"}:
         raise ValueError(f"{p}: evidence_mode must be existing|compute_acoustic")
 
+    library_raw = raw.get("library")
+    select_raw = raw.get("select_tags")
+    library_mode = library_raw is not None or select_raw is not None
+    library_path = ""
+    select_tags_norm: list[dict[str, Any]] = []
+
     tags: dict[str, TagDef] = {}
-    for item in raw.get("tags") or []:
+    rules: list[RuleDef] = []
+
+    if library_mode:
+        if library_raw is None:
+            raise TagLibraryError(f"{p}: select_tags requires library.path")
+        if isinstance(library_raw, str):
+            lib_dir = library_raw
+        elif isinstance(library_raw, dict):
+            lib_dir = str(library_raw.get("path") or "").strip()
+        else:
+            raise TagLibraryError(f"{p}: library must be path string or mapping with path")
+        if not lib_dir:
+            raise TagLibraryError(f"{p}: library.path is required")
+        library_path = str(
+            resolve_tagging_path(lib_dir, base_dir=p.parent, repo_root=repo_root).as_posix()
+        )
+        library = load_tag_library(library_path, base_dir=p.parent)
+        if select_raw is None:
+            raise TagLibraryError(
+                f"{p}: library mode requires select_tags "
+                "(refusing to implicitly enable the whole library)"
+            )
+        if not isinstance(select_raw, list):
+            raise TagLibraryError(f"{p}: select_tags must be a list")
+        for item in select_raw:
+            if isinstance(item, str):
+                select_tags_norm.append({"tag_id": item})
+            elif isinstance(item, dict):
+                select_tags_norm.append(dict(item))
+            else:
+                raise TagLibraryError(f"{p}: select_tags entries must be string or mapping")
+        tags, rules = select_from_library(library, select_tags_norm, source_label=str(p.as_posix()))
+
+    # Inline tags/rules (compatibility). Conflict with library IDs is rejected.
+    inline_tags_raw = raw.get("tags") or []
+    inline_rules_raw = raw.get("rules") or []
+    if library_mode and (inline_tags_raw or inline_rules_raw):
+        inline_ids = set()
+        for item in inline_tags_raw:
+            if isinstance(item, dict) and item.get("tag_id"):
+                inline_ids.add(str(item["tag_id"]))
+        for item in inline_rules_raw:
+            if isinstance(item, dict) and item.get("tag_id"):
+                inline_ids.add(str(item["tag_id"]))
+        overlap = inline_ids & set(tags)
+        if overlap:
+            raise TagLibraryError(
+                f"{p}: inline tags/rules conflict with library-selected IDs: {sorted(overlap)}"
+            )
+
+    for item in inline_tags_raw:
         if not isinstance(item, dict):
             raise ValueError("tag entry must be mapping")
-        tid = str(item.get("tag_id") or "").strip()
-        if not tid:
-            raise ValueError("tag requires tag_id")
-        tags[tid] = TagDef(
-            tag_id=tid,
-            name=str(item.get("name") or tid),
-            description=str(item.get("description") or ""),
-            enabled=bool(item.get("enabled", True)),
-            archived=bool(item.get("archived", False)),
-        )
+        tag = _parse_inline_tag(item, source_path=str(p.as_posix()))
+        if tag.tag_id in tags:
+            raise TagLibraryError(f"{p}: duplicate tag_id {tag.tag_id} (inline vs library)")
+        tags[tag.tag_id] = tag
 
     fragments = _load_fragments(raw.get("fragments"), base_dir=p.parent)
     _detect_fragment_cycles(fragments)
@@ -498,49 +723,41 @@ def load_tagging_config(path: str | Path) -> TaggingConfig:
         raise ValueError("lexicons must be mapping")
     for lid, spec in lex_raw.items():
         if isinstance(spec, str):
-            lexicons[str(lid)] = load_lexicon(spec, lexicon_id=str(lid))
+            lpath = resolve_tagging_path(spec, base_dir=p.parent, repo_root=repo_root)
+            lexicons[str(lid)] = load_lexicon(lpath, lexicon_id=str(lid))
         elif isinstance(spec, dict):
-            lpath = spec.get("path")
-            if not lpath:
+            lpath_raw = spec.get("path")
+            if not lpath_raw:
                 raise ValueError(f"lexicon {lid} requires path")
+            lpath = resolve_tagging_path(str(lpath_raw), base_dir=p.parent, repo_root=repo_root)
             lexicons[str(lid)] = load_lexicon(lpath, lexicon_id=str(lid))
         else:
             raise ValueError(f"invalid lexicon spec for {lid}")
 
-    rules: list[RuleDef] = []
-    for item in raw.get("rules") or []:
+    seen_rule_ids: set[str] = {r.rule_id for r in rules}
+    for item in inline_rules_raw:
         if not isinstance(item, dict):
             raise ValueError("rule entry must be mapping")
-        rid = str(item.get("rule_id") or "").strip()
-        if not rid:
-            raise ValueError("rule requires rule_id")
-        tag_id = str(item.get("tag_id") or "").strip()
-        if not tag_id:
-            raise ValueError(f"rule {rid} requires tag_id")
-        if tag_id not in tags:
-            raise ValueError(f"rule {rid} references unknown tag {tag_id}")
-        cond = item.get("condition")
-        if not isinstance(cond, dict):
-            raise ValueError(f"rule {rid} requires condition mapping")
+        rule = _parse_inline_rule(item, tags=tags)
+        if rule.rule_id in seen_rule_ids:
+            raise TagLibraryError(f"{p}: duplicate rule_id {rule.rule_id}")
+        seen_rule_ids.add(rule.rule_id)
+        rules.append(rule)
+
+    if not tags:
+        raise ValueError(f"{p}: no tags selected or defined")
+    if not rules:
+        raise ValueError(f"{p}: no rules selected or defined")
+
+    for rule in rules:
         validate_condition_tree(
-            cond, fragments=fragments, lexicons=lexicons, families=families, path=f"rule:{rid}"
-        )
-        binding = item.get("text_binding")
-        if binding is not None and not isinstance(binding, dict):
-            raise ValueError(f"rule {rid} text_binding must be mapping")
-        rules.append(
-            RuleDef(
-                rule_id=rid,
-                version=str(item.get("version") or "1"),
-                tag_id=tag_id,
-                condition=cond,
-                enabled=bool(item.get("enabled", True)),
-                description=str(item.get("description") or ""),
-                text_binding=binding,
-            )
+            rule.condition,
+            fragments=fragments,
+            lexicons=lexicons,
+            families=families,
+            path=f"rule:{rule.rule_id}",
         )
 
-    # Validate fragment trees too.
     for fid, frag in fragments.items():
         validate_condition_tree(
             frag.condition,
@@ -551,24 +768,77 @@ def load_tagging_config(path: str | Path) -> TaggingConfig:
         )
 
     acoustic = dict(raw.get("acoustic") or {})
+    # Resolve acoustic nested paths when present (voicemail etc. stay as configured strings
+    # but fingerprint uses resolved content when file exists).
+    acoustic_fp = dict(acoustic)
+    for key in ("voicemail_patterns_path", "silero_vad_config", "audio_energy_config", "dnsmos_config"):
+        if key in acoustic and acoustic[key]:
+            try:
+                resolved = resolve_tagging_path(
+                    str(acoustic[key]), base_dir=p.parent, repo_root=repo_root
+                )
+                acoustic[key] = str(resolved.as_posix())
+                acoustic_fp[key] = {
+                    "path": str(resolved.as_posix()),
+                    "content_hash": _sha256_text(resolved.read_text(encoding="utf-8")),
+                }
+            except FileNotFoundError:
+                acoustic_fp[key] = {"path": str(acoustic[key]), "missing": True}
+
     work_dir = str(
         raw.get("work_dir_template")
         or "runs/tagging/{batch_id}/{policy_version}"
     )
+
     fingerprint_payload = {
         "policy_version": policy,
-        "selection_config": selection_path,
+        "evidence_config_path": evidence_path,
+        "evidence": evidence.as_dict(),
         "evidence_mode": evidence_mode,
-        "tags": raw.get("tags"),
-        "rules": raw.get("rules"),
-        "fragments": {k: {"version": v.version, "condition": v.condition} for k, v in fragments.items()},
-        "lexicons": {k: v.content_hash for k, v in lexicons.items()},
-        "acoustic": acoustic,
+        "library_mode": library_mode,
+        "library_path": library_path,
+        "select_tags": select_tags_norm,
+        "tags": {
+            tid: {
+                "version": t.version,
+                "enabled": t.enabled,
+                "archived": t.archived,
+                "name": t.name,
+                "description": t.description,
+                "business_definition": t.business_definition,
+                "examples": t.examples,
+                "definition_path": t.definition_path,
+            }
+            for tid, t in sorted(tags.items())
+        },
+        "rules": [
+            {
+                "rule_id": r.rule_id,
+                "version": r.version,
+                "tag_id": r.tag_id,
+                "enabled": r.enabled,
+                "description": r.description,
+                "text_binding": r.text_binding,
+                "condition": r.condition,
+            }
+            for r in rules
+        ],
+        "fragments": {
+            k: {"version": v.version, "condition": v.condition} for k, v in sorted(fragments.items())
+        },
+        "lexicons": {
+            k: {"version": v.version, "content_hash": v.content_hash, "entries": [
+                {"entry_id": e.entry_id, "pattern": e.pattern, "entry_type": e.entry_type, "match_mode": e.match_mode}
+                for e in v.entries
+            ]}
+            for k, v in sorted(lexicons.items())
+        },
+        "acoustic": acoustic_fp,
     }
     cfg = TaggingConfig(
         policy_version=policy,
-        selection_config_path=selection_path,
-        selection=selection,
+        evidence=evidence,
+        evidence_config_path=evidence_path,
         evidence_mode=evidence_mode,
         tags=tags,
         rules=rules,
@@ -578,5 +848,8 @@ def load_tagging_config(path: str | Path) -> TaggingConfig:
         acoustic=acoustic,
         content_fingerprint=_sha256_obj(fingerprint_payload),
         source_path=str(p.as_posix()),
+        library_mode=library_mode,
+        library_path=library_path,
+        select_tags=select_tags_norm,
     )
     return cfg

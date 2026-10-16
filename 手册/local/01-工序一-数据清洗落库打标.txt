@@ -1,4 +1,8 @@
 ﻿工序一：数据清洗落库打标（local · 一键执行）
+# 【045 新默认】见 单条流水线执行命令.txt §0c 与
+# docs/07-操作手册/045-入库VAD多路ASR独立DNSMOS自由标签.md
+# audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
+#   --source-name "$BATCH" --source-dir "$SOURCE_DIR"
 ================================================================================
 # 对齐：docs/01-项目架构/工序总览.md · 工序一
 # 详解：手册/local/00-总详细手册.txt
@@ -10,6 +14,7 @@
 # 前置：另开终端已起好所需 ASR 服务（本机 Windows 可用多窗口；服务器过夜批跑见 dev/00 §2.0 tmux）
 #       按需评分前确认 DNSMOS ONNX + 音频路径可读
 # 改批次只改 BATCH / SOURCE_DIR / 配置中的 runs 登记
+# Tag 高并发：§3c（本册仅_local_；dev 见 手册/dev/01）
 # 外源金标路径仍可用 classify_external_gold（见 006），与下方共识分拣互斥选型
 
 cd D:/Work/audio-data-engine
@@ -31,6 +36,8 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml `
   --source-dir $env:SOURCE_DIR
 
 # 2) 同源多 ASR（契约别名：每族 _1/_2；≥3 族）
+# 落盘即清洗（048）：text 已去标点/控制标签；Qwen 整句 blank；raw_text 留原串。
+# 字准/历史补洗仍可用 asr_metric_pipeline（对已清洗数据幂等），join/tag 不强制先跑。
 $env:QWEN_ASR_API_BASE = "http://127.0.0.1:5559"
 audio-data pipeline run pipelines/qwen_asr_batch.yaml `
   --source-name $env:BATCH --asr-run qwen_1
@@ -148,6 +155,37 @@ audio-data pipeline run pipelines/classify_dataset_v3_asr_anomaly_noise.yaml `
 audio-data review export-summary "datasets/stage1/derived/classified_v3_$env:BATCH.parquet" `
   --output "data/exports/summary_v3_$env:BATCH.xlsx" `
   --max-rows 20000
+
+# ---------------------------------------------------------------------------
+# 3c) Tag 打标（共用 TaggingService 高并发；与五类解耦）
+# 环境：仅 local（PowerShell / Windows）；dev 勿套本段，见 手册/dev/01-工序一-数据清洗落库打标.txt
+# 详解：docs/07-操作手册/tag并发执行与日志.md
+# 默认（YAML）：workers=8 batch_size=32；本机小批可降 workers；真实声学模型以_dev_为准
+# 输入：prepared_asr_v3_$BATCH（free_tags 禁止回退 classified）
+# ---------------------------------------------------------------------------
+
+# 正式：free_tags_v2（YAML 已含并发默认；纯文本 existing 无需 GPU）
+audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml `
+  --source-name $env:BATCH `
+  --config configs/tagging/zh_asr_free_tags_v2.yaml
+
+# 覆盖并发（本机建议 thread；小批勿盲目拉高）
+# audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml `
+#   --source-name $env:BATCH --config configs/tagging/zh_asr_free_tags_v2.yaml `
+#   --workers 4 --executor thread --max-in-flight 16 --checkpoint-every 100
+
+# 服务入口细调
+# audio-data tags run --batch $env:BATCH -c configs/tagging/zh_asr_free_tags_v2.yaml `
+#   --workers 4 --batch-size 16 --executor thread
+
+# 进度 / 续跑
+# audio-data pipeline progress "runs/<pipeline-run>" --follow
+# audio-data tags run --batch $env:BATCH -c configs/tagging/zh_asr_free_tags_v2.yaml `
+#   --resume-run-id $env:RUN_ID --workers 4
+
+# 对照：multi_tag_v1（不覆盖 free_tags 产物）
+# audio-data pipeline run pipelines/tag_dataset_multi_tag_v1.yaml `
+#   --source-name $env:BATCH --config configs/tagging/zh_asr_multi_tag_v1.yaml
 
 # 4) 可选：v3 人审 / build（见总手册与 012-C/D）
 # audio-data review export ... --protocol v3

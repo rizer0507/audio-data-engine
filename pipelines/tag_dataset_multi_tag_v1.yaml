@@ -32,5 +32,14 @@ pipeline:
       batch_id: source_A
       evidence_mode: existing
       publish: true
+      # TaggingService 内部并发；与整批算子的外层 execution 分开。
+      executor: auto
+      workers: 8
+      checkpoint_every: 100
+      batch_size: 32
+      retain_results: false
+      engine_workers: {vad: 4, dnsmos: 4, energy: 8}
+      engine_max_in_flight: {vad: 8, dnsmos: 8, energy: 16}
+      engine_retries: 0
       summary_xlsx: data/exports/summary_multi_tag_v1_source_A.xlsx
       output_manifest: datasets/stage1/derived/tagged_multi_tag_v1_source_A.parquet

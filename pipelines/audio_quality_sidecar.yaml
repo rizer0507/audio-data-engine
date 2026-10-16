@@ -1,14 +1,18 @@
-# 研究/历史复现：全量 DNSMOS。023 新分拣入口不得隐式调用本文件。
-# 新默认：pipelines/classify_dataset_v3_asr_anomaly_noise.yaml
-# 012-B：音频质量侧车 — 仅 DNSMOS（与 ASR 独立，分拣前按 ID+原音频哈希合并）
+# 【已退出新生产默认流程 — 045】
+# 历史/研究复现入口：全量 DNSMOS 侧车（quality_sidecar_*）。
+# 新生产正式入口请使用：
+#   pipelines/dnsmos_score_batch.yaml
+#   → datasets/stage1/quality/dnsmos_<batch>.parquet
+# 主编排：pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml
+#
+# 本文件仅保留可读，不参与新链默认发现；请勿再作为「附加侧车才能打标」步骤。
 #
 #   audio-data pipeline run pipelines/audio_quality_sidecar.yaml \
 #     --source-name mt3000 \
 #     --config configs/quality/dnsmos_p835.yaml
 #
 # 输入：清洗后的 cleaned_*（resampled_16k，未 pad）
-# 输出：quality_sidecar_*（quality.dnsmos_* / noise_band / noise_risk）
-# 缺模型文件或 onnxruntime 时启动失败，禁止写默认干净分。
+# 输出：quality_sidecar_*（历史 stem；新链禁止使用）
 
 name: audio_quality_sidecar
 input:

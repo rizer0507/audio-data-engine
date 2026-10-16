@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import json
+import threading
 from dataclasses import asdict
 from typing import Any, ClassVar
 
@@ -14,6 +15,7 @@ import yaml
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.quality.dnsmos_p835 import (
     DnsmosP835Session,
+    DnsmosRuntimeOptions,
     DnsmosScores,
     derive_noise_band_explicit,
     scores_to_quality_dict,
@@ -52,29 +54,71 @@ class DnsmosOperator(BaseOperator):
     """
 
     name = "dnsmos"
-    version = "1.0.0"
+    version = "1.1.0"
     category = "quality"
 
     _session: ClassVar[DnsmosP835Session | None] = None
     _session_key: ClassVar[str | None] = None
     _startup_validated: ClassVar[bool] = False
+    _thread_local: ClassVar[threading.local] = threading.local()
+    _process_sessions: ClassVar[dict[str, DnsmosP835Session]] = {}
+    _process_lock: ClassVar[threading.Lock] = threading.Lock()
 
-    def _get_session(self, cfg: dict[str, Any]) -> DnsmosP835Session:
+    def _session_cache_key(self, cfg: dict[str, Any]) -> str:
         model_path = Path(str(cfg.get("model_path") or "")).expanduser()
         if not str(model_path):
             raise ValueError("quality.dnsmos requires model_path in config")
-        from audio_engine.core.quality.dnsmos_p835 import file_digest
-        key = str(model_path.resolve()) + (file_digest(model_path) if model_path.is_file() else "") + str(cfg.get("providers"))
-        if DnsmosOperator._session is None or DnsmosOperator._session_key != key:
-            providers = cfg.get("providers")
-            if isinstance(providers, str):
-                providers = [providers]
-            DnsmosOperator._session = DnsmosP835Session(
-                model_path, providers=list(providers) if providers else None
-            )
-            DnsmosOperator._session_key = key
-            DnsmosOperator._startup_validated = True
-        return DnsmosOperator._session
+        from audio_engine.core.quality.dnsmos_p835 import model_file_digest
+
+        digest = model_file_digest(model_path) if model_path.is_file() else ""
+        runtime = DnsmosRuntimeOptions.from_config(cfg.get("runtime"))
+        return json.dumps({"path": str(model_path.resolve()), "digest": digest,
+                           "providers": cfg.get("providers"), "runtime": asdict(runtime)},
+                          sort_keys=True)
+
+    def _create_session(self, cfg: dict[str, Any]) -> DnsmosP835Session:
+        model_path = Path(str(cfg.get("model_path") or "")).expanduser()
+        providers = cfg.get("providers")
+        if isinstance(providers, str):
+            providers = [providers]
+        return DnsmosP835Session(
+            model_path, providers=list(providers) if providers else None,
+            runtime_options=DnsmosRuntimeOptions.from_config(cfg.get("runtime")),
+        )
+
+    def _get_session(self, cfg: dict[str, Any]) -> DnsmosP835Session:
+        """Return an isolated ONNX session for the configured session_mode.
+
+        - ``thread_local`` (045 default for concurrent DNSMOS): one session per
+          worker thread; mutable preprocess state is not shared across threads.
+        - ``process`` / ``class`` (legacy): process-wide singleton (sequential OK).
+        """
+        key = self._session_cache_key(cfg)
+        mode = str(cfg.get("session_mode") or "class").strip().lower()
+        if mode in {"thread_local", "thread", "per_thread"}:
+            store = getattr(DnsmosOperator._thread_local, "sessions", None)
+            if store is None:
+                store = {}
+                DnsmosOperator._thread_local.sessions = store
+            session = store.get(key)
+            if session is None:
+                session = self._create_session(cfg)
+                store[key] = session
+                DnsmosOperator._startup_validated = True
+            return session
+        if mode in {"process", "class", "singleton"}:
+            with DnsmosOperator._process_lock:
+                session = DnsmosOperator._process_sessions.get(key)
+                if session is None:
+                    session = self._create_session(cfg)
+                    DnsmosOperator._process_sessions[key] = session
+                    DnsmosOperator._session = session
+                    DnsmosOperator._session_key = key
+                    DnsmosOperator._startup_validated = True
+                return session
+        raise ValueError(
+            f"quality.dnsmos session_mode must be thread_local|process|class; got {mode!r}"
+        )
 
     def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
         # Include model + preprocess version so cache invalidates on vendor change.
@@ -83,9 +127,9 @@ class DnsmosOperator(BaseOperator):
         digest = ""
         path = Path(model_path)
         if path.exists():
-            from audio_engine.core.quality.dnsmos_p835 import file_digest
+            from audio_engine.core.quality.dnsmos_p835 import model_file_digest
 
-            digest = file_digest(path)[:16]
+            digest = model_file_digest(path)[:16]
         payload = {"audio": sample.sha256, "config": cfg, "model_digest": digest,
                    "preprocess": DNSMOS_PREPROCESS_VERSION}
         if cfg.get("risk_only") or cfg.get("recompute_risk_only"):

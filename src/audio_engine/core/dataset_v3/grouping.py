@@ -28,7 +28,12 @@ class GroupingConfig:
         default_factory=lambda: ["original_audio_sha256", "sha256"]
     )
     pcm_hash_fields: list[str] = field(
-        default_factory=lambda: ["pcm_sha256", "normalized_pcm_sha256"]
+        default_factory=lambda: [
+            "pcm_sha256",
+            "normalized_pcm_sha256",
+            "parent_pcm_sha256",
+            "source_pcm_sha256",
+        ]
     )
     confirmed_near_duplicate_field: str = "near_duplicate_group_id"
     uncertain_near_duplicate_field: str = "near_duplicate_uncertain_id"
@@ -61,7 +66,13 @@ class GroupingConfig:
             pcm_hash_fields=[
                 str(x)
                 for x in (
-                    raw.get("pcm_hash_fields") or ["pcm_sha256", "normalized_pcm_sha256"]
+                    raw.get("pcm_hash_fields")
+                    or [
+                        "pcm_sha256",
+                        "normalized_pcm_sha256",
+                        "parent_pcm_sha256",
+                        "source_pcm_sha256",
+                    ]
                 )
             ],
             confirmed_near_duplicate_field=str(

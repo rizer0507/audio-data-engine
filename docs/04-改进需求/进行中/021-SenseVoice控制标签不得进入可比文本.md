@@ -1,6 +1,6 @@
 # 021 · SenseVoice 控制标签不得进入可比文本与候选金标
 
-> 状态：**进行中**（[022](../已完成/022-v3语义容错分拣与金标选文落地.md) 已让分拣候选正文去掉控制标签；ASR 落盘 `text` 白名单仍保留未知标签，本项不因此标完成）  
+> 状态：**进行中**（[022](../已完成/022-v3语义容错分拣与金标选文落地.md) 已让分拣候选正文去掉控制标签；[048](./048-ASR落盘并入转写清洗.md) 已使**新跑** SenseVoice ASR 落盘 `text` 经 `normalize_transcripts`/`clean_control_tags` 无控制标签；历史 parquet 补洗与候选回写若仍缺，本项可保留为后续小项）  
 > 日期：2026-09-11  
 > 触发：工序一产物里 SenseVoice 转写仍然带着 `<|zh|>`、`<|NEUTRAL|>`、`<|Speech|>`、`<|withitn|>` 这类控制字段。下游表、人审候选、训练目标看上去像「没洗干净」。  
 > 前置 / 关联：标签解析见 `src/audio_engine/operators/asr/sensevoice.py`（`parse_sensevoice_text`）与 [SenseVoice识别流水线](../../07-操作手册/SenseVoice识别流水线.md) §7.1；全标签剥离函数在 `src/audio_engine/core/transcript_reconcile.py`（`clean_control_tags`）；v3 候选文本取自 `selection_v3/consensus.py` 的 `medoid.raw_text`。清洗边界与 [018](../已完成/018-转写语速不可能防护栏.md) 同类：**不要把本项塞进①音频清洗 DAG**。  

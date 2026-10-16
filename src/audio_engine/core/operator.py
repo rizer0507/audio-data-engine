@@ -22,6 +22,7 @@ class OperatorConfig(BaseModel):
     mock: bool = False
     run_dir: Path | None = None
     step_name: str | None = None
+    resume: bool = False
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -53,6 +54,15 @@ class ManifestOperator(ABC):
     def full_name(self) -> str:
         return f"{self.category}.{self.name}"
 
+    def dependency_fingerprint(self, config: OperatorConfig) -> dict[str, Any] | None:
+        """Optional external dependency digest for pipeline checkpoint invalidation.
+
+        Override when params only list file paths but semantic identity depends on
+        file contents (tag rules, lexicons, evidence configs, manual state versions).
+        Return a JSON-serializable mapping; ``None`` means no extra deps.
+        """
+        return None
+
     @abstractmethod
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
         """Take the current sample list and return the updated list."""
@@ -68,6 +78,20 @@ class BaseOperator(ABC):
     @property
     def full_name(self) -> str:
         return f"{self.category}.{self.name}"
+
+    def dependency_fingerprint(self, config: OperatorConfig) -> dict[str, Any] | None:
+        """Optional external dependency digest for pipeline checkpoint invalidation."""
+        return None
+
+    def input_fingerprint(
+        self, samples: list[Sample], config: OperatorConfig
+    ) -> str | None:
+        """Optional extra input digest (beyond default digest_samples) for checkpoints."""
+        return None
+
+    def should_retry_on_resume(self, sample: Sample, config: OperatorConfig) -> bool:
+        """Return True to re-queue a checkpointed sample on --resume (e.g. prior failure)."""
+        return False
 
     def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
         """Cache key = hash(input_sha256 + operator + version + params + model)."""

@@ -1,7 +1,10 @@
+# 语义风险分支准入词表（2026-10-14 收紧）。
+# 保留多字需求、意愿、接受、明确拒绝，以及用户指定的肯定和礼貌准入表达。
+# 不收录单字或纯问候；Qwen单字分歧继续由独立规则处理。
+# “用”的正向倾向使用“要用 / 需要用”；Qwen单字分歧由独立规则处理，无需词表命中。
+# 本词表独立维护，不再作为 selection 业务语义词表的完整快照。
 lexicon_id: semantic_risk_keywords
-version: semantic_lexicon_zh_v3_snapshot_20261012
-source_path: configs/selection/semantic_lexicon_zh_v3.yaml
-source_sha256: f9b4437977f1ea1d36f5f3dcf330b7d7bd1b82971f9deccb5dc342647a0077de
+version: semantic_risk_intent_phrases_20261014_v3
 flags: IGNORECASE
 entries:
 - entry_id: negative_1
@@ -48,22 +51,6 @@ entries:
   type: literal
   pattern: 不行
   match_mode: search
-- entry_id: negative_12
-  type: literal
-  pattern: 不是
-  match_mode: search
-- entry_id: negative_13
-  type: literal
-  pattern: 没有
-  match_mode: search
-- entry_id: negative_14
-  type: literal
-  pattern: 没用
-  match_mode: search
-- entry_id: negative_15
-  type: literal
-  pattern: 没要
-  match_mode: search
 - entry_id: negative_16
   type: literal
   pattern: 不用
@@ -71,14 +58,6 @@ entries:
 - entry_id: negative_17
   type: literal
   pattern: 不要
-  match_mode: search
-- entry_id: negative_18
-  type: literal
-  pattern: 没
-  match_mode: search
-- entry_id: negative_19
-  type: literal
-  pattern: 不
   match_mode: search
 - entry_id: positive_1
   type: literal
@@ -100,10 +79,6 @@ entries:
   type: literal
   pattern: 要用
   match_mode: search
-- entry_id: positive_6
-  type: literal
-  pattern: 好的
-  match_mode: search
 - entry_id: positive_7
   type: literal
   pattern: 需要
@@ -116,153 +91,93 @@ entries:
   type: literal
   pattern: 考虑
   match_mode: search
-- entry_id: positive_10
+- entry_id: positive_need_use
   type: literal
-  pattern: 缺
+  pattern: 需要用
   match_mode: search
-- entry_id: positive_11
+- entry_id: positive_willing
   type: literal
-  pattern: 要
+  pattern: 愿意
   match_mode: search
-- entry_id: positive_12
+- entry_id: positive_confirm_duiya
   type: literal
-  pattern: 是
+  pattern: 对呀
   match_mode: search
-- entry_id: positive_13
+- entry_id: positive_thanks
   type: literal
-  pattern: 有
+  pattern: 谢谢
   match_mode: search
-- entry_id: positive_14
+- entry_id: positive_i_have
   type: literal
-  pattern: 好
+  pattern: 我有
   match_mode: search
-- entry_id: filler_1
+- entry_id: positive_have_a
   type: literal
-  pattern: 嗯嗯
+  pattern: 有啊
   match_mode: search
-- entry_id: filler_2
+- entry_id: positive_indeed
   type: literal
-  pattern: 嗯
+  pattern: 确实
   match_mode: search
-- entry_id: filler_3
+- entry_id: positive_confirm_duia
   type: literal
-  pattern: 啊
+  pattern: 对啊
   match_mode: search
-- entry_id: filler_4
+- entry_id: positive_confirm_shia
   type: literal
-  pattern: 哦
+  pattern: 是啊
   match_mode: search
-- entry_id: filler_5
+- entry_id: positive_accept_xinga
   type: literal
-  pattern: 呃
+  pattern: 行啊
   match_mode: search
-- entry_id: filler_6
+- entry_id: positive_accept_xingya
   type: literal
-  pattern: 额
+  pattern: 行呀
   match_mode: search
-- entry_id: filler_7
+- entry_id: positive_accept_xingde
   type: literal
-  pattern: 唔
+  pattern: 行的
   match_mode: search
-- entry_id: affirmation_1
+- entry_id: positive_confirm_duidui
   type: literal
-  pattern: 需要
+  pattern: 对对
   match_mode: search
-- entry_id: affirmation_2
+- entry_id: positive_exclaim_aiya
   type: literal
-  pattern: 可以
+  pattern: 哎呀
   match_mode: search
-- entry_id: affirmation_3
+- entry_id: positive_accept_haoa
   type: literal
-  pattern: 是
+  pattern: 好啊
   match_mode: search
-- entry_id: affirmation_4
+- entry_id: positive_arrived
   type: literal
-  pattern: 有
+  pattern: 到了
   match_mode: search
-- entry_id: affirmation_5
+- entry_id: positive_mama
   type: literal
-  pattern: 好的
+  pattern: 妈妈
   match_mode: search
-- entry_id: affirmation_6
+- entry_id: positive_filler_enne
   type: literal
-  pattern: 好
+  pattern: 嗯呢
   match_mode: search
-- entry_id: critical_tokens_1
+- entry_id: positive_been_there
   type: literal
-  pattern: 不需要
+  pattern: 去过
   match_mode: search
-- entry_id: critical_tokens_2
+- entry_id: positive_accept_xingxing
   type: literal
-  pattern: 不要
+  pattern: 行行
   match_mode: search
-- entry_id: critical_tokens_3
-  type: literal
-  pattern: 不用
-  match_mode: search
-- entry_id: critical_tokens_4
-  type: literal
-  pattern: 没有
-  match_mode: search
-- entry_id: critical_tokens_5
-  type: literal
-  pattern: 需要
-  match_mode: search
-- entry_id: critical_tokens_6
-  type: literal
-  pattern: 嗯嗯
-  match_mode: search
-- entry_id: critical_tokens_7
-  type: literal
-  pattern: 嗯
-  match_mode: search
-- entry_id: critical_tokens_8
-  type: literal
-  pattern: 啊
-  match_mode: search
-- entry_id: critical_tokens_9
-  type: literal
-  pattern: 有
-  match_mode: search
-- entry_id: critical_tokens_10
-  type: literal
-  pattern: 是
-  match_mode: search
-- entry_id: critical_tokens_11
-  type: literal
-  pattern: 对
-  match_mode: search
-- entry_id: critical_tokens_12
-  type: literal
-  pattern: 好
-  match_mode: search
-- entry_id: critical_tokens_13
-  type: literal
-  pattern: 没
-  match_mode: search
-- entry_id: critical_tokens_14
-  type: literal
-  pattern: 不
-  match_mode: search
-- entry_id: critical_tokens_15
-  type: literal
-  pattern: 要
-  match_mode: search
-- entry_id: profanity_or_reject_1
-  type: literal
-  pattern: 滚
-  match_mode: search
-- entry_id: profanity_or_reject_2
-  type: literal
-  pattern: 傻逼
-  match_mode: search
-- entry_id: profanity_or_reject_3
+- entry_id: profanity_or_reject_tama
   type: literal
   pattern: 他妈
   match_mode: search
-- entry_id: profanity_or_reject_4
+- entry_id: profanity_or_reject_nima
   type: literal
-  pattern: 去死
+  pattern: 你妈
   match_mode: search
 - entry_id: profanity_or_reject_5
   type: literal

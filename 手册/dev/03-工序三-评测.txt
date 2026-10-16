@@ -11,7 +11,7 @@
 cd /data2/data-cp/lizi/audio-data-engine
 source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
 
-export BATCH=mt3000
+export BATCH=20260813-n-1
 export EVAL_NAME="eval_${BATCH}"
 unset QWEN_ASR_API_BASE QWEN_ASR_API_KEY QWEN_ASR_API_BASES
 unset GLM_ASR_API_BASE GLM_ASR_API_KEY GLM_ASR_API_BASES

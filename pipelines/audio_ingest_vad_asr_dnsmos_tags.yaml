@@ -1,0 +1,43 @@
+# 045 生产主链（一条命令）
+#
+#   export FSMN_VAD_SOURCE_MODEL_DIR=/data2/data-cp/xijujun/models/fsmn-vad
+#   export FSMN_VAD_RUNTIME_DIR="$PWD/var/models/fsmn-vad-fenshen-v1"
+#   audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
+#     --source-name "$BATCH" --source-dir /path/to/raw
+#
+# DAG：
+#   ingest → vad →〔N 路 ASR ∥ 独立 DNSMOS〕→ evidence_join → free_tags
+#
+# ASR 路次由 production.asr_routes 配置驱动，不写死三家族六路。
+# DNSMOS 是正式独立流水线（dnsmos_score_batch），与 ASR 同级并行。
+# 父 run：runs/<ts>_audio_ingest_vad_asr_dnsmos_tags_<BATCH>/
+# 进度：audio-data pipeline progress <parent-run> --follow
+
+name: audio_ingest_vad_asr_dnsmos_tags
+
+production:
+  ingest:
+    pipeline: pipelines/audio_ingest.yaml
+  vad:
+    pipeline: pipelines/vad_segment_batch.yaml
+  asr_routes:
+    - route_id: qwen1
+      family: qwen
+      pipeline: pipelines/qwen_asr_batch.yaml
+      asr_run: qwen1
+    - route_id: glm1
+      family: glm
+      pipeline: pipelines/glm_asr_batch.yaml
+      asr_run: glm1
+  dnsmos:
+    pipeline: pipelines/dnsmos_score_batch.yaml
+  evidence_join:
+    pipeline: pipelines/evidence_join.yaml
+  tagging:
+    pipeline: pipelines/tag_dataset_free_tags_v2.yaml
+    config: configs/tagging/zh_asr_free_tags_v2.yaml
+  resource_budget:
+    note: >
+      实际 GPU/HTTP/ONNX 并发以各子流水线 YAML 与部署配置为准；
+      总编排只保证 VAD 完成后 ASR 与 DNSMOS 同波并行启动。
+    asr_routes_parallel_with_dnsmos: true

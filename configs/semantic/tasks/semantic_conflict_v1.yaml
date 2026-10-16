@@ -1,0 +1,18 @@
+task_id: semantic_conflict_v1
+task_version: "1"
+service_config: configs/semantic/services/qwen38_27b.yaml
+prompts:
+  system: configs/semantic/prompts/semantic_conflict.system.jinja
+  user: configs/semantic/prompts/semantic_conflict.user.jinja
+output_schema: configs/semantic/schemas/semantic_conflict_v1.json
+evidence:
+  model_families:
+    qwen: [qwen_1, qwen_2]
+    glm: [glm_1, glm_2]
+    sensevoice: [sensevoice_1, sensevoice_2]
+  required_families: [qwen, glm]
+  min_successful_runs: 2
+  on_insufficient_evidence: judge
+  sample_context_fields: [id, duration, source_path]
+parameters:
+  focus: [negation, intent, quantity, time, entity, action]

@@ -85,6 +85,33 @@ def _not_required_dnsmos_fields() -> dict[str, Any]:
     }
 
 
+def _fact_status(quality: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        status = str(quality.get(key) or "").strip().lower()
+        if status:
+            return status
+    return ""
+
+
+def _apply_schedule_not_required(
+    quality: dict[str, Any],
+    *,
+    status_keys: tuple[str, ...],
+    fields: dict[str, Any],
+    schedule_key: str,
+) -> None:
+    """Record schedule-only not_required without wiping existing SUCCESS facts.
+
+    ``not_required`` is a consumer scheduling decision, not a shared evidence fact.
+    Successful VAD/energy/DNSMOS values must remain readable by other modes (e.g. tagging).
+    """
+    quality[schedule_key] = ACOUSTIC_STATUS_NOT_REQUIRED
+    existing = _fact_status(quality, *status_keys)
+    if existing == "success":
+        return
+    quality.update(fields)
+
+
 @register_operator
 class SileroVadCandidatesOperator(ManifestOperator):
     """Mark Silero candidates (queues A—E); non-candidates get not_required."""
@@ -110,9 +137,15 @@ class SileroVadCandidatesOperator(ManifestOperator):
             quality = dict(sample.quality or {})
             if decision["required"]:
                 required += 1
+                quality["vad_schedule"] = "required"
                 quality.setdefault("vad_status", "pending")
             else:
-                quality.update(_not_required_vad_fields())
+                _apply_schedule_not_required(
+                    quality,
+                    status_keys=("vad_status",),
+                    fields=_not_required_vad_fields(),
+                    schedule_key="vad_schedule",
+                )
             sample.quality = quality
         return updated
 
@@ -144,9 +177,15 @@ class AudioEnergyCandidatesOperator(ManifestOperator):
             sample.labels = labels
             if decision["required"]:
                 required += 1
+                quality["energy_schedule"] = "required"
                 quality.setdefault("energy_status", "pending")
             else:
-                quality.update(_not_required_energy_fields())
+                _apply_schedule_not_required(
+                    quality,
+                    status_keys=("energy_status", "energy_compute_status"),
+                    fields=_not_required_energy_fields(),
+                    schedule_key="energy_schedule",
+                )
             sample.quality = quality
         return updated
 
@@ -199,10 +238,16 @@ class DnsmosV24CandidatesOperator(ManifestOperator):
             labels["dnsmos_v2_4_candidate"] = decision
             sample.labels = labels
             if not decision["required"]:
-                quality.update(_not_required_dnsmos_fields())
+                _apply_schedule_not_required(
+                    quality,
+                    status_keys=("dnsmos_status",),
+                    fields=_not_required_dnsmos_fields(),
+                    schedule_key="dnsmos_schedule",
+                )
                 sample.quality = quality
                 continue
             required += 1
+            quality["dnsmos_schedule"] = "required"
             if _has_reusable_scores(quality):
                 sample.quality = quality
                 continue

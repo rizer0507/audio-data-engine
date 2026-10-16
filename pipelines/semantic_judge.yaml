@@ -1,0 +1,40 @@
+# 模板驱动语义判断（046）
+# 输入：已含多家族/多路 ASR 识别结果的 Parquet
+# 输出：写入 labels.semantic_results[<task_id>] 的新 Parquet
+#
+# 切换任务：改下方 task_config（或复制本 YAML 改 task_config）
+#   configs/semantic/tasks/semantic_conflict_v1.yaml
+#   configs/semantic/tasks/intent_v1.yaml
+#
+# 环境变量：
+#   SEMANTIC_JUDGE_API_BASE / SEMANTIC_JUDGE_API_KEY
+#   SEMANTIC_JUDGE_MODEL / SEMANTIC_JUDGE_MODEL_REVISION
+#
+# 并发预算：parallel_shards * workers <= service.max_concurrency_total
+
+name: semantic_judge
+
+input:
+  manifest: datasets/stage1/derived/prepared_evidence_source_A.parquet
+
+output:
+  manifest: datasets/stage1/derived/semantic_conflict_source_A.parquet
+
+execution:
+  executor: thread
+  workers: 8
+  max_in_flight: 32
+  checkpoint_every: 100
+  fail_fast: false
+
+# 大数据量时启用；小样本可删掉 sharding 或 --no-sharding
+# sharding:
+#   shards: 8
+#   strategy: hash
+#   parallel_shards: 4
+
+pipeline:
+  - name: semantic_conflict
+    operator: semantic.judge
+    params:
+      task_config: configs/semantic/tasks/semantic_conflict_v1.yaml

@@ -167,6 +167,27 @@ def build_export_rows(
             "reservation_role": sample.labels.get("reservation_role")
             or sample.labels.get("dataset_role")
             or "",
+            # 041 segment lineage (immutable when present)
+            "source_audio_id": sample.labels.get("source_audio_id") or "",
+            "parent_pcm_sha256": sample.labels.get("parent_pcm_sha256")
+            or sample.labels.get("source_pcm_sha256")
+            or "",
+            "segment_id": sample.labels.get("segment_id") or sample.id,
+            "vad_start_ms": sample.labels.get("vad_start_ms")
+            if sample.labels.get("vad_start_ms") is not None
+            else "",
+            "vad_end_ms": sample.labels.get("vad_end_ms")
+            if sample.labels.get("vad_end_ms") is not None
+            else "",
+            "clip_start_sample": sample.labels.get("clip_start_sample")
+            if sample.labels.get("clip_start_sample") is not None
+            else "",
+            "clip_end_sample": sample.labels.get("clip_end_sample")
+            if sample.labels.get("clip_end_sample") is not None
+            else "",
+            "vad_processing_version": sample.labels.get("vad_processing_version") or "",
+            "is_vad_segment": "true" if sample.labels.get("is_vad_segment") else "",
+            "parent_raw_audio": (sample.audio or {}).get("parent_raw") or "",
             # Editable annotation columns
             "decision": "",
             "gold_kind": "",

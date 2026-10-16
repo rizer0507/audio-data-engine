@@ -1,0 +1,38 @@
+# Qwen3.8-27B 纯文本 Chat 服务（语义判断，勿与 Qwen ASR 配置混用）
+# API Key 仅通过环境变量读取，禁止写入本文件。
+
+# 也可用环境变量 SEMANTIC_JUDGE_API_BASE 覆盖本字段。
+api_base: http://127.0.0.1:8000/v1
+# 须与 vLLM --served-model-name 一致；HF 模型卡标识为 Qwen/Qwen3.8-27B。
+model: Qwen3.8-27B
+# 权重修订 / 缓存命名空间身份；换权重但 served-name 不变时必须改此字段或 cache_namespace
+model_revision: unset
+api_key_env: SEMANTIC_JUDGE_API_KEY
+
+
+generation:
+  max_tokens: 1024
+  temperature: 0.0
+  top_p: 1.0
+
+retry:
+  max_attempts: 3
+  connect_timeout_s: 10
+  read_timeout_s: 120
+  request_timeout_s: 180
+  backoff_base_s: 0.5
+  backoff_max_s: 30
+  parse_retry_once: false
+
+# 同一 pipeline run（含分片并行）活跃 HTTP 请求总预算
+max_concurrency_total: 64
+# rate_limit_rps: 20
+
+# json_schema：服务端 structured outputs；不支持时预检失败，可显式改为 prompt_schema_validate
+structured_output_mode: json_schema
+# enable_thinking: false
+
+cache_namespace: default
+max_input_chars: 120000
+max_raw_content_chars: 32000
+probe_on_start: true

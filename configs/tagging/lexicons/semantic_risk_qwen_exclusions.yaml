@@ -1,0 +1,27 @@
+# semantic_risk_text_disagreement 的 Qwen 专用排除词表。
+# 对清洗后的 Qwen 稳定代表文本做包含匹配；命中任一项即排除整个 tag。
+# GLM/SenseVoice 命中这些词不触发排除，不影响其他 tag。
+lexicon_id: semantic_risk_qwen_exclusions
+version: semantic_risk_qwen_exclusions_20261014_v1
+flags: IGNORECASE
+entries:
+  - entry_id: qwen_no_need
+    type: literal
+    pattern: 不需要
+    match_mode: search
+  - entry_id: qwen_no_use
+    type: literal
+    pattern: 不用
+    match_mode: search
+  - entry_id: qwen_do_not_want
+    type: literal
+    pattern: 不要
+    match_mode: search
+  - entry_id: qwen_unavailable
+    type: literal
+    pattern: 不可用
+    match_mode: search
+  - entry_id: qwen_no_have
+    type: regex
+    pattern: '[没沒]有'
+    match_mode: search
