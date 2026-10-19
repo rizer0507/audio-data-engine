@@ -28,18 +28,19 @@ from audio_engine.core.fsmn_vad.identity import (
     stable_segment_id,
 )
 from audio_engine.core.fsmn_vad.runtime import (
+    assert_fenshen_runtime_config,
+    check_generate_options_against_fenshen,
     dependency_versions,
     prepare_runtime_model_dir,
     validate_runtime_model_dir,
 )
 from audio_engine.core.fsmn_vad.types import (
     END_SILENCE_KEEP_MS,
-    MIN_KEEP_MS,
+    MODEL_CHUNK_MS,
+    PACKET_MS,
     SOURCE_STATUS_DECODE_FAILED,
     SOURCE_STATUS_VAD_FAILED,
     SR,
-    VAD_FRAME_LENGTH_MS,
-    VAD_FRAME_SHIFT_MS,
     VAD_PROCESSING_VERSION,
     VadKeptSegment,
     VadStreamResult,
@@ -83,9 +84,13 @@ def _segment_to_dict(seg: VadKeptSegment) -> dict[str, Any]:
         "start_ms": seg.start_ms,
         "end_ms": seg.end_ms,
         "inferred_end_ms": seg.inferred_end_ms,
+        "reported_start_ms": seg.reported_start_ms,
+        "reported_end_ms": seg.reported_end_ms,
         "end_reason": seg.end_reason,
+        "clip_branch": seg.clip_branch,
         "start_sample": seg.start_sample,
         "end_sample": seg.end_sample,
+        "buffer_end_sample": seg.buffer_end_sample,
         "duration_ms": seg.duration_ms,
         "boundary_clamped": seg.boundary_clamped,
         "extra_padding_ms": seg.extra_padding_ms,
@@ -124,6 +129,9 @@ def _result_to_source_record(
                 "start_ms": c.start_ms,
                 "end_ms": c.end_ms,
                 "end_reason": c.end_reason,
+                "clip_branch": c.clip_branch,
+                "reported_start_ms": c.reported_start_ms,
+                "reported_end_ms": c.reported_end_ms,
                 "start_sample": c.start_sample,
                 "end_sample": c.end_sample,
                 "boundary_clamped": c.boundary_clamped,
@@ -136,6 +144,9 @@ def _result_to_source_record(
                 "end_ms": d.end_ms,
                 "end_reason": d.end_reason,
                 "reason": d.reason,
+                "clip_branch": d.clip_branch,
+                "reported_start_ms": d.reported_start_ms,
+                "reported_end_ms": d.reported_end_ms,
                 "start_sample": d.start_sample,
                 "end_sample": d.end_sample,
                 "duration_ms": d.duration_ms,
@@ -162,26 +173,35 @@ class FsmnVadSegmentOperator(ManifestOperator):
     model_runtime_dir / source_model_dir / fenshen_config: real-model paths
     mock: use scripted mock (tests / dry-run without FunASR)
     mock_intervals: list of [start_ms, end_ms] for ScheduleVadModel
-    include_eof_fallback: legacy parameter; starts without an end are always discarded
-    Model endpoints at the last frontend frame / file EOF are also always discarded.
-    min_keep_ms: 1000 — discard clips with actual duration < 1s (exactly 1s kept)
-    end_silence_keep_ms: fixed via END_SILENCE_KEEP_MS (675); retain real audio after model end
+    packet_ms: client packet size for deterministic replay (default 100)
+    send_end_result: fenshen default True — publish EOF fallback when pending remains
+    include_eof_fallback: legacy alias of send_end_result (049: default True)
     channel_index: default 0（与规范化「只取第0声道」一致；不按声道拆多路）
     prepare_runtime: if True, copy/overlay model into runtime dir
     ncpu: positive integer, default 1; FunASR/PyTorch intra-op threads per invocation
+
+    Semantics (049 / fenshen): 100 ms packets, generate every two packets,
+    split-end / complete-endpoint branch filters, no 675 ms tail, no unified 1s gate,
+    EOF fallback when pending remains at client end.
     """
 
     name = "fsmn_vad_segment"
-    version = "1.8.0"
+    version = "1.9.0"
     category = "audio"
 
     def run(self, samples: list[Sample], config: OperatorConfig) -> list[Sample]:
         params, mock = self.preflight(config.params, mock=config.mock)
         input_key = str(params.get("input_audio_key", "resampled_16k"))
         output_key = str(params.get("output_audio_key", "resampled_16k"))
-        include_eof = False
+        if "send_end_result" in params:
+            include_eof = bool(params.get("send_end_result"))
+        elif "include_eof_fallback" in params:
+            include_eof = bool(params.get("include_eof_fallback"))
+        else:
+            include_eof = True
         channel_index = int(params.get("channel_index", 0))
         processing_version = str(params.get("vad_processing_version") or VAD_PROCESSING_VERSION)
+        packet_ms = int(params.get("packet_ms") or PACKET_MS)
 
         base_dir = Path(config.run_dir) if config.run_dir else Path(config.output_dir)
         source_results_dir = base_dir / str(params.get("source_results_dir", "vad_source_results"))
@@ -190,7 +210,11 @@ class FsmnVadSegmentOperator(ManifestOperator):
         segments_dir.mkdir(parents=True, exist_ok=True)
 
         fingerprint = self._build_fingerprint(
-            params, mock=mock, processing_version=processing_version,
+            params,
+            mock=mock,
+            processing_version=processing_version,
+            packet_ms=packet_ms,
+            send_end_result=include_eof,
         )
         source_workers = max(1, int(params.get("source_workers") or 1))
         max_in_flight = int(params.get("max_in_flight_sources") or source_workers)
@@ -241,6 +265,7 @@ class FsmnVadSegmentOperator(ManifestOperator):
                 input_key=input_key,
                 output_key=output_key,
                 include_eof=include_eof,
+                packet_ms=packet_ms,
                 channel_index=channel_index,
                 processing_version=processing_version,
                 fingerprint=fingerprint,
@@ -298,25 +323,23 @@ class FsmnVadSegmentOperator(ManifestOperator):
                 "fingerprint": fingerprint,
                 "summary": summary,
                 "include_eof_fallback": include_eof,
+                "send_end_result": include_eof,
+                "packet_ms": packet_ms,
                 "note": (
-                    f"Actual segment duration < {MIN_KEEP_MS}ms discarded; "
-                    f"exactly {MIN_KEEP_MS}ms kept. "
-                    f"Model end retains {END_SILENCE_KEEP_MS}ms real audio (EOF truncate). "
-                    "EOF without an end and model endpoints at the last frontend frame "
-                    "are always discarded."
+                    "049 fenshen alignment: 100 ms client packets, generate every two packets, "
+                    "split-end drop <=150 ms, complete-endpoint pending drop <=200 ms, "
+                    "complete branch crops to buffer end at event time, no fixed 675 ms tail, "
+                    "no unified 1s gate; send_end_result publishes EOF fallback when pending remains."
                 ),
             },
         )
         logger.info(
             "audio.fsmn_vad_segment: sources={} kept={} discarded={} "
-            "eof_published={} eof_discarded={} endpoint_at_eof_discarded={} "
-            "no_speech={} all_short={} failed={} source_workers={}",
+            "eof_published={} no_speech={} all_short={} failed={} source_workers={}",
             summary["sources"],
             summary["kept_segments"],
             summary["discarded"],
             summary["eof_published"],
-            summary["eof_discarded"],
-            summary["endpoint_at_eof_discarded"],
             summary["no_speech"],
             summary["all_short"],
             summary["failed"],
@@ -332,6 +355,7 @@ class FsmnVadSegmentOperator(ManifestOperator):
         input_key: str,
         output_key: str,
         include_eof: bool,
+        packet_ms: int,
         channel_index: int,
         processing_version: str,
         fingerprint: dict[str, Any],
@@ -387,6 +411,8 @@ class FsmnVadSegmentOperator(ManifestOperator):
             result = run_streaming_vad(
                 local_vad,
                 pcm16le,
+                packet_ms=packet_ms,
+                send_end_result=include_eof,
                 include_eof_fallback_in_kept=include_eof,
                 generate_options=params.get("generate_options") or None,
             )
@@ -458,6 +484,7 @@ class FsmnVadSegmentOperator(ManifestOperator):
                 labels=labels,
                 quality={
                     "vad_end_reason": seg.end_reason,
+                    "vad_clip_branch": seg.clip_branch,
                     "clip_start_sample": seg.start_sample,
                     "clip_end_sample": seg.end_sample,
                 },
@@ -488,24 +515,13 @@ class FsmnVadSegmentOperator(ManifestOperator):
         with summary_lock:
             summary["kept_segments"] += len(result.kept)
             summary["discarded"] += len(result.discarded)
-            eof_n = len(result.eof_fallback)
-            if include_eof:
-                summary["eof_published"] += sum(
-                    1 for s in result.kept if s.end_reason == "eof_fallback"
-                )
-            else:
-                summary["eof_held"] += eof_n
+            summary["eof_published"] += sum(
+                1 for s in result.kept if s.end_reason == "eof_fallback"
+            )
             if result.status == "no_speech":
                 summary["no_speech"] += 1
             elif result.status == "all_short":
                 summary["all_short"] += 1
-            summary["eof_discarded"] += sum(
-                d.end_reason == "eof_fallback" or d.reason == "endpoint_at_eof"
-                for d in result.discarded
-            )
-            summary["endpoint_at_eof_discarded"] += sum(
-                d.reason == "endpoint_at_eof" for d in result.discarded
-            )
 
         record = _result_to_source_record(
             source_audio_id=source_audio_id,
@@ -586,20 +602,30 @@ class FsmnVadSegmentOperator(ManifestOperator):
                 params["prepare_runtime"] = True
 
     def _build_fingerprint(
-        self, params: dict[str, Any], *, mock: bool, processing_version: str
+        self,
+        params: dict[str, Any],
+        *,
+        mock: bool,
+        processing_version: str,
+        packet_ms: int,
+        send_end_result: bool,
     ) -> dict[str, Any]:
         fp: dict[str, Any] = {
             "vad_processing_version": processing_version,
             "operator_version": self.version,
             "mock": mock,
-            "chunk_ms": 200,
-            "min_keep_ms": MIN_KEEP_MS,
-            "eof_without_end_policy": "discard",
-            "endpoint_at_eof_policy": "discard",
-            "endpoint_at_eof_boundary": "last_frontend_frame",
-            "vad_frame_length_ms": VAD_FRAME_LENGTH_MS,
-            "vad_frame_shift_ms": VAD_FRAME_SHIFT_MS,
+            "packet_ms": packet_ms,
+            "model_chunk_ms": MODEL_CHUNK_MS,
+            "infer_every_packets": 2,
+            "final_mode": "original_service_send_end_result",
+            "send_end_result": send_end_result,
+            "eof_without_end_policy": "publish" if send_end_result else "discard",
+            "split_end_drop_max_ms": 150,
+            "complete_pending_drop_max_ms": 200,
+            "complete_endpoint_crop": "buffer_end_at_event",
             "end_silence_keep_ms": END_SILENCE_KEEP_MS,
+            "unified_min_keep_ms": None,
+            "endpoint_at_eof_policy": "none",
             "dependencies": dependency_versions(),
         }
         if mock:
@@ -619,14 +645,25 @@ class FsmnVadSegmentOperator(ManifestOperator):
                 verify_fingerprints=bool(params.get("verify_fingerprints", True)),
             )
             fp.update(prepared)
-            validate_runtime_model_dir(prepared["runtime_dir"])
+            runtime_path = validate_runtime_model_dir(prepared["runtime_dir"])
+            expected = assert_fenshen_runtime_config(runtime_path)
+            check_generate_options_against_fenshen(
+                params.get("generate_options") or None, expected
+            )
             fp["engine"] = "funasr/FsmnVADStreaming"
+            fp["fenshen_config_verified"] = True
         elif runtime_dir:
-            runtime = Path(str(runtime_dir))
-            cfg = runtime / "config.yaml"
-            fp["runtime_dir"] = str(runtime.resolve())
-            fp["config_sha256"] = file_sha256(cfg) if cfg.is_file() else ""
+            runtime_path = validate_runtime_model_dir(runtime_dir)
+            expected = assert_fenshen_runtime_config(runtime_path)
+            check_generate_options_against_fenshen(
+                params.get("generate_options") or None, expected
+            )
+            cfg = runtime_path / "config.yaml"
+            fp["runtime_dir"] = str(runtime_path)
+            fp["config_sha256"] = file_sha256(cfg)
             fp["engine"] = "funasr/FsmnVADStreaming"
+            fp["fenshen_config_verified"] = True
+            fp["loaded_model_conf"] = dict(expected.get("model_conf") or {})
         else:
             fp["config_sha256"] = ""
             fp["engine"] = "funasr/FsmnVADStreaming"

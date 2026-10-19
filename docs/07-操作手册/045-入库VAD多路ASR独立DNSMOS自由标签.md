@@ -17,7 +17,8 @@ audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
   --source-dir "$SOURCE_DIR"
 ```
 
-`$FSMN_VAD_RUNTIME_DIR` 必须包含 `config.yaml`（已覆盖 fenshen 参数）、`configuration.json`、`model.pt`、`am.mvn`。
+`$FSMN_VAD_RUNTIME_DIR` 必须包含 `config.yaml`（已覆盖**完整** fenshen 参数，不能是 FunASR 默认 `800/0.6/60000`）、`configuration.json`、`model.pt`、`am.mvn`。生产入口会校验 YAML 与加载后的 `vad_opts`。VAD 切分语义见 **049**（与分身实时服务对齐；`fsmn_vad_segment/v8`）。旧片段不会自动更新，须从父音频重跑 VAD（必要时 `--force`），输出到新目录/新 Manifest。
+
 首次部署：
 
 ```bash

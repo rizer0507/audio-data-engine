@@ -15,9 +15,124 @@ EXPECTED_FINGERPRINTS = {
     "fenshen_vad_config.yaml": "9057c765320b48d5a1247528dd8c5ea9fa818d4d6e3d073db0036ec4b81b79e6",
 }
 
+# Required model_conf / top-level values from the full fenshen YAML.
+REQUIRED_FENSHEN_VALUES: dict[str, Any] = {
+    "model": "FsmnVADStreaming",
+    "frontend": "WavFrontendOnline",
+    "frontend_conf.fs": 16000,
+    "model_conf.sample_rate": 16000,
+    "model_conf.max_end_silence_time": 1100,
+    "model_conf.max_start_silence_time": 4000,
+    "model_conf.sil_to_speech_time_thres": 200,
+    "model_conf.speech_to_sil_time_thres": 50,
+    "model_conf.speech_noise_thres": 0.85,
+    "model_conf.max_single_segment_time": 10000,
+    "model_conf.lookback_time_start_point": 200,
+    "model_conf.lookahead_time_end_point": 100,
+}
+
+# Stock FunASR defaults that must never be used as a silent production runtime.
+DEFAULT_STOCK_MODEL_CONF = {
+    "max_end_silence_time": 800,
+    "speech_noise_thres": 0.6,
+    "max_single_segment_time": 60000,
+}
+
+
+def _config_get(data: Any, key: str, default: Any = None) -> Any:
+    cur = data
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_runtime_config_yaml(runtime_dir: str | Path) -> dict[str, Any]:
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("PyYAML is required to validate FSMN VAD config.yaml") from exc
+    path = Path(runtime_dir) / "config.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid FSMN VAD config.yaml (not a mapping): {path}")
+    return data
+
+
+def assert_fenshen_config_data(data: dict[str, Any], *, source: str) -> dict[str, Any]:
+    """Fail when YAML is not the full fenshen config (incl. stock defaults)."""
+    model_conf = data.get("model_conf") or {}
+    stock_hit = {
+        k: model_conf.get(k)
+        for k, v in DEFAULT_STOCK_MODEL_CONF.items()
+        if model_conf.get(k) == v
+    }
+    if len(stock_hit) == len(DEFAULT_STOCK_MODEL_CONF):
+        raise ValueError(
+            f"Runtime config still has FunASR stock defaults {DEFAULT_STOCK_MODEL_CONF} "
+            f"at {source}. Re-run scripts/prepare_fsmn_vad_runtime.py with "
+            "configs/vad/fenshen_vad_config.yaml into an isolated runtime directory; "
+            "do not modify the shared weight directory."
+        )
+
+    mismatches = {
+        key: {"expected": expected, "actual": _config_get(data, key)}
+        for key, expected in REQUIRED_FENSHEN_VALUES.items()
+        if _config_get(data, key) != expected
+    }
+    if mismatches:
+        raise ValueError(f"Not the required fenshen VAD configuration: {source}: {mismatches}")
+    return data
+
+
+def assert_fenshen_runtime_config(runtime_dir: str | Path) -> dict[str, Any]:
+    runtime = Path(runtime_dir)
+    data = load_runtime_config_yaml(runtime)
+    return assert_fenshen_config_data(data, source=str(runtime / "config.yaml"))
+
+
+def validate_loaded_vad_opts(expected_yaml: dict[str, Any], actual_opts: dict[str, Any]) -> None:
+    model_conf = expected_yaml.get("model_conf") or {}
+    if not actual_opts:
+        raise RuntimeError("Loaded FSMN model has no vad_opts; cannot verify fenshen config")
+    mismatches = {
+        key: {"expected": value, "actual": actual_opts.get(key)}
+        for key, value in model_conf.items()
+        if actual_opts.get(key) != value
+    }
+    if mismatches:
+        raise RuntimeError(
+            f"Loaded FSMN options do not match the full fenshen model_conf: {mismatches}"
+        )
+
+
+def check_generate_options_against_fenshen(
+    generate_options: dict[str, Any] | None,
+    expected_yaml: dict[str, Any],
+) -> None:
+    """Reject runtime overrides that silently undo fenshen model_conf."""
+    if not generate_options:
+        return
+    model_conf = expected_yaml.get("model_conf") or {}
+    for key in ("max_end_silence_time", "speech_noise_thres", "max_single_segment_time"):
+        if key in generate_options and generate_options[key] != model_conf.get(key):
+            raise ValueError(
+                f"generate_options.{key}={generate_options[key]!r} conflicts with "
+                f"fenshen model_conf.{key}={model_conf.get(key)!r}"
+            )
+
 
 def validate_runtime_model_dir(runtime_dir: str | Path) -> Path:
-    """Reject missing local assets before FunASR can interpret a path as a hub ID."""
+    """Reject missing local assets and non-fenshen config.yaml before FunASR loads."""
     raw = str(runtime_dir).strip()
     if not raw:
         raise ValueError("Set FSMN_VAD_RUNTIME_DIR/model_runtime_dir to a prepared local directory")
@@ -35,15 +150,8 @@ def validate_runtime_model_dir(runtime_dir: str | Path) -> Path:
             f"Incomplete FSMN VAD runtime {runtime}: missing {', '.join(missing)}. "
             "Run scripts/prepare_fsmn_vad_runtime.py first."
         )
+    assert_fenshen_runtime_config(runtime)
     return runtime
-
-
-def file_sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while chunk := f.read(65536):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def prepare_runtime_model_dir(
@@ -69,6 +177,15 @@ def prepare_runtime_model_dir(
         raise FileNotFoundError(f"fenshen VAD config not found: {config_src}")
 
     config_sha = file_sha256(config_src)
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("PyYAML is required to prepare FSMN VAD runtime") from exc
+    config_data = yaml.safe_load(config_src.read_text(encoding="utf-8"))
+    if not isinstance(config_data, dict):
+        raise ValueError(f"Invalid fenshen VAD config (not a mapping): {config_src}")
+    assert_fenshen_config_data(config_data, source=str(config_src))
+
     if verify_fingerprints:
         expected = EXPECTED_FINGERPRINTS["fenshen_vad_config.yaml"]
         if config_sha != expected:
@@ -101,6 +218,7 @@ def prepare_runtime_model_dir(
                     f"existing runtime config sha {existing_sha} != source {config_sha}; "
                     "pass overwrite=True to rebuild"
                 )
+            assert_fenshen_runtime_config(runtime)
         else:
             shutil.rmtree(runtime)
             shutil.copytree(source, runtime)
@@ -113,6 +231,7 @@ def prepare_runtime_model_dir(
     runtime_cfg_sha = file_sha256(runtime / "config.yaml")
     if runtime_cfg_sha != config_sha:
         raise RuntimeError("Failed to overlay fenshen config.yaml into runtime dir")
+    assert_fenshen_runtime_config(runtime)
 
     return {
         "runtime_dir": str(runtime.resolve()),
@@ -121,6 +240,7 @@ def prepare_runtime_model_dir(
         "am_mvn_sha256": file_sha256(runtime / "am.mvn"),
         "source_model_dir": str(source.resolve()),
         "fenshen_config_path": str(config_src.resolve()),
+        "fenshen_required_values": dict(REQUIRED_FENSHEN_VALUES),
     }
 
 

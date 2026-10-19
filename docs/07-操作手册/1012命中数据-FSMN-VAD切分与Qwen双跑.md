@@ -69,6 +69,7 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 - 模型原始 end 到达文件截止或最后 VAD 帧的片段也丢弃，记录原因 `endpoint_at_eof`。按当前 25 ms 窗、10 ms 步长判定，覆盖 EOF 强制 end 比文件时长早约 15–25 ms 的情况（例如 1000 ms 文件的 980 ms end）。
 - 无有效起点、无语音、只有无终点的 EOF 补尾或处理失败的父音频不生成下游片段。
 - 沿用项目完整 fenshen 配置（模型侧 `max_end_silence_time=1100` 只影响端点检测，不用于裁切加尾）；最长单段模型参数 10000 ms 不是额外固定切片长度。
+- **049 起**：切分语义与分身实时服务完全对齐（100 ms 分包 / 每两包推理、`send_end_result` EOF 补尾、无 675 ms 固定尾、无统一 1 秒门限）。旧 041/045 中冲突规则已废止；版本为 `fsmn_vad_segment/v8`，旧片段须从父音频 `--force` 重跑。
 
 **保持上述命令参数即可。** 对这个原清洗 YAML，不要额外添加 `--source-name`、`--source-dir`、`--skip-step ingest` 或 `--no-sharding`：显式 Manifest 与当前分片入口会自动跳过目录扫描；这些额外参数可能触发源目录校验或破坏子进程的 ingest 跳过逻辑。
 

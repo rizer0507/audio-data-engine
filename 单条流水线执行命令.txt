@@ -178,7 +178,7 @@ audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
 #   - 多声道只取第0声道；无头默认单声道；声明多声道则解交织后取 ch0
 #   - 输出统一 16k；无头默认 source_sample_rate=16000；有头读真实率
 #   - 真实 8k：控制台+日志+汇总明显提示后重采样；源率与规范率分字段
-#   - 模型 end 后保留 675ms 真实音频；实际时长 <1s 丢弃、恰好 1s 保留
+#   - 049：与分身 fenshen 对齐（100ms 分包、分支过滤、无 675ms 尾、EOF 补尾）；旧 675ms/1s/EOF 丢弃已废止
 #   - 无 end 的 EOF 补尾与落到最后前端帧/EOF 的模型端点继续丢弃
 #
 # --- 首次：准备 fenshen 运行目录（服务器原始权重固定路径）---

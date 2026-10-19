@@ -19,7 +19,8 @@ export BATCH=20260813-n-1
 export SOURCE_DIR=/data2/data-cp/datasets/asr_datasets/fenshen/20260813/1
 # FSMN VAD：服务器原始权重（只读资产）
 export FSMN_VAD_SOURCE_MODEL_DIR=/data2/data-cp/xijujun/models/fsmn-vad
-# 本地运行目录（须已用 prepare 覆盖 fenshen config；必须含 config.yaml、configuration.json、model.pt、am.mvn）
+# 本地运行目录（须已用 prepare 覆盖完整 fenshen config；必须含 config.yaml、configuration.json、model.pt、am.mvn）
+# 不能是 FunASR 默认 800/0.6/60000；生产会校验 YAML 与加载后 vad_opts。VAD 语义见 049（v8）。
 # 首次准备（每机一次即可）：
 # python scripts/prepare_fsmn_vad_runtime.py \
 #   --source-model-dir "$FSMN_VAD_SOURCE_MODEL_DIR" \

@@ -1,4 +1,4 @@
-"""Streaming FSMN VAD adapter (FunASR) with injectable mock for tests."""
+"""Streaming FSMN VAD adapter aligned with fenshen client packet / end scheduling."""
 
 from __future__ import annotations
 
@@ -7,11 +7,15 @@ from typing import Any, Callable, Protocol
 
 import numpy as np
 
-from audio_engine.core.fsmn_vad.pairing import pair_and_filter
-from audio_engine.core.fsmn_vad.runtime import validate_runtime_model_dir
+from audio_engine.core.fsmn_vad.pairing import FenshenEventPairer
+from audio_engine.core.fsmn_vad.runtime import (
+    assert_fenshen_runtime_config,
+    validate_loaded_vad_opts,
+    validate_runtime_model_dir,
+)
 from audio_engine.core.fsmn_vad.types import (
-    CHUNK_MS,
-    CHUNK_SAMPLES,
+    MODEL_CHUNK_MS,
+    PACKET_MS,
     SR,
     VadStreamResult,
 )
@@ -36,17 +40,39 @@ def run_streaming_vad(
     vad: VadModel | GenerateFn,
     pcm16le: bytes,
     *,
-    chunk_samples: int = CHUNK_SAMPLES,
-    chunk_ms: int = CHUNK_MS,
+    packet_ms: int = PACKET_MS,
+    chunk_samples: int | None = None,
+    chunk_ms: int = MODEL_CHUNK_MS,
     generate_options: dict[str, Any] | None = None,
-    include_eof_fallback_in_kept: bool = False,
+    include_eof_fallback_in_kept: bool = True,
+    send_end_result: bool = True,
     sample_rate: int = SR,
 ) -> VadStreamResult:
-    """Feed normalized PCM16 in 200 ms chunks; last non-empty chunk is final."""
+    """Replay PCM as 100 ms client packets; infer every two packets; then signal=end.
+
+    Matches ``process_audio_chunk`` / ``process_str_message(end)`` with
+    ``send_end_result=true``: leftover non-empty accum uses ``is_final=True``;
+    empty accum skips ``generate`` but still runs application EOF logic.
+
+    ``chunk_samples`` is accepted only as an alias for packet size in samples;
+    if set it must equal ``packet_ms`` at ``sample_rate``.
+    ``include_eof_fallback_in_kept`` is ignored when ``send_end_result`` is True.
+    """
+    del include_eof_fallback_in_kept
     if len(pcm16le) % 2:
         raise ValueError("PCM16 byte length must be even")
-    samples = np.frombuffer(pcm16le, dtype="<i2")
-    total = len(samples)
+    if sample_rate != SR:
+        raise ValueError(f"run_streaming_vad requires sample_rate={SR}, got {sample_rate}")
+    if packet_ms < 1:
+        raise ValueError("packet_ms must be >= 1")
+    packet_samples = sample_rate * packet_ms // 1000
+    if chunk_samples is not None and int(chunk_samples) != packet_samples:
+        raise ValueError(
+            f"chunk_samples={chunk_samples} conflicts with packet_ms={packet_ms} "
+            f"({packet_samples} samples)"
+        )
+    packet_bytes = packet_samples * 2
+    total = len(pcm16le) // 2
     if total == 0:
         return VadStreamResult(status="empty_audio", event_log=[])
 
@@ -58,43 +84,80 @@ def run_streaming_vad(
     cache: dict[str, Any] = {}
     event_log: list[dict[str, Any]] = []
     generate = vad.generate if hasattr(vad, "generate") else vad  # type: ignore[assignment]
+    pairer = FenshenEventPairer(sample_rate=sample_rate)
 
-    for left in range(0, total, chunk_samples):
-        right = min(total, left + chunk_samples)
-        final = right == total
-        chunk = samples[left:right].astype(np.float32) / np.iinfo(np.int16).max
-        result = generate(
-            input=chunk,
-            cache=cache,
-            is_final=final,
-            chunk_size=chunk_ms,
-            **options,
-        )
-        events = result[0].get("value", []) if result else []
-        event_log.append(
-            {
-                "input_start_sample": left,
-                "input_end_sample": right,
-                "is_final": final,
-                "events": [list(pair) for pair in events],
-            }
-        )
+    received = 0
+    chunk_idx = 0
+    vad_accum = b""
+    call_index = 0
 
-    return pair_and_filter(
-        event_log,
-        pcm16le,
-        total_samples=total,
-        include_eof_fallback_in_kept=include_eof_fallback_in_kept,
-        sample_rate=sample_rate,
-    )
+    def _flush(*, is_final: bool, application_end: bool) -> None:
+        nonlocal call_index, vad_accum
+        audio = pcm16le_to_float32(vad_accum) if vad_accum else np.asarray([], dtype=np.float32)
+        input_end = received // 2
+        input_start = (received - len(vad_accum)) // 2 if vad_accum else input_end
+        entry: dict[str, Any] = {
+            "call_index": call_index,
+            "input_start_sample": input_start,
+            "input_end_sample": input_end,
+            "received_bytes": received,
+            "is_final": is_final,
+            "application_end": application_end,
+            "packet_ms": packet_ms,
+            "model_chunk_size": chunk_ms,
+        }
+        if len(audio) > 0:
+            result = generate(
+                input=audio,
+                cache=cache,
+                is_final=is_final,
+                chunk_size=chunk_ms,
+                **options,
+            )
+            events = result[0].get("value", []) if result else []
+            entry["skipped_generate"] = False
+            entry["events"] = [list(pair) for pair in events]
+            pairer.consume_events(events, pcm16le, received_bytes=received)
+            call_index += 1
+        else:
+            entry["skipped_generate"] = True
+            entry["events"] = []
+            # Distinguish app-end-without-generate from a model final call.
+            entry["application_end_only"] = True
+        event_log.append(entry)
+        vad_accum = b""
+        if application_end:
+            pairer.finalize_application_end(
+                pcm16le,
+                received_bytes=received,
+                send_end_result=send_end_result,
+            )
+
+    while received < len(pcm16le):
+        packet = pcm16le[received : received + packet_bytes]
+        received += len(packet)
+        if packet:
+            vad_accum += packet
+        chunk_idx += 1
+        if chunk_idx >= 2:
+            chunk_idx = 0
+            _flush(is_final=False, application_end=False)
+
+    # Client signal=end with send_end_result=true → process_audio_chunk(b'').
+    if send_end_result:
+        _flush(is_final=True, application_end=True)
+    elif vad_accum:
+        # Non-fenshen path: flush leftover without application EOF publication.
+        _flush(is_final=True, application_end=False)
+
+    return pairer.to_result(event_log)
 
 
 class MockVadModel:
-    """Deterministic mock: emits scripted events keyed by chunk index or absolute time.
+    """Deterministic mock: emits scripted events keyed by generate-call index.
 
-    ``script`` maps ``(input_start_sample, input_end_sample)`` or chunk index
-    to a list of ``[start_ms, end_ms]`` events. Use ``by_chunk_index=True`` for
-    simpler tests.
+    ``script`` maps call index (after two-packet merges / final flush) to
+    ``[start_ms, end_ms]`` events.
     """
 
     def __init__(
@@ -124,7 +187,6 @@ class MockVadModel:
         if self.by_chunk_index:
             events = self.script.get(self._chunk_i, self.default_events)
         else:
-            # Caller may pass absolute sample range via side channel — not used here.
             events = self.default_events
         self._chunk_i += 1
         return [{"value": [list(e) for e in events]}]
@@ -135,10 +197,7 @@ class MockVadModel:
 
 
 class ScheduleVadModel:
-    """Emit events when cumulative input covers their start; complete ends at/after end_ms.
-
-    Useful for multi-chunk streaming tests without hard-coding chunk indices.
-    """
+    """Emit events when cumulative input covers their start; complete ends at/after end_ms."""
 
     def __init__(self, intervals: list[tuple[float, float]], *, sample_rate: int = SR):
         self.intervals = list(intervals)
@@ -171,9 +230,7 @@ class ScheduleVadModel:
         for idx, (start_ms, end_ms) in enumerate(self.intervals):
             if idx in self._emitted:
                 continue
-            # Split-style: emit start when covered, then end later.
             if idx not in self._pending_starts and covered_ms >= start_ms:
-                # Prefer complete event if end also covered in same chunk.
                 if covered_ms >= end_ms:
                     events.append([start_ms, end_ms])
                     self._emitted.add(idx)
@@ -186,8 +243,21 @@ class ScheduleVadModel:
                 self._pending_starts.pop(idx, None)
         return [{"value": events}]
 
+    def reset(self) -> None:
+        self.calls.clear()
+        self._emitted.clear()
+        self._pending_starts.clear()
+        self._cum_samples = 0
+        self._cache_ids.clear()
 
-def load_funasr_vad(runtime_dir: str | Path, *, ncpu: int = 1, **kwargs: Any) -> Any:
+
+def load_funasr_vad(
+    runtime_dir: str | Path,
+    *,
+    ncpu: int = 1,
+    verify_loaded_config: bool = True,
+    **kwargs: Any,
+) -> Any:
     """Load CPU VAD with bounded intra-op threads; parallelism lives across sources."""
     if isinstance(ncpu, bool) or not isinstance(ncpu, int) or ncpu < 1:
         raise ValueError("FSMN VAD ncpu must be a positive integer")
@@ -212,4 +282,20 @@ def load_funasr_vad(runtime_dir: str | Path, *, ncpu: int = 1, **kwargs: Any) ->
         "disable_update": True,
     }
     params.update(kwargs)
-    return AutoModel(**params)
+    model = AutoModel(**params)
+    if verify_loaded_config:
+        expected = assert_fenshen_runtime_config(path)
+        detector = getattr(model, "model", None)
+        opts = dict(vars(detector.vad_opts)) if detector is not None and hasattr(detector, "vad_opts") else {}
+        validate_loaded_vad_opts(expected, opts)
+    return model
+
+
+__all__ = [
+    "MockVadModel",
+    "ScheduleVadModel",
+    "VadModel",
+    "load_funasr_vad",
+    "pcm16le_to_float32",
+    "run_streaming_vad",
+]

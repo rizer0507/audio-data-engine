@@ -20,8 +20,12 @@ from audio_engine.core.fsmn_vad.runtime import dependency_versions, prepare_runt
 from audio_engine.core.fsmn_vad.types import (
     CHUNK_MS,
     CHUNK_SAMPLES,
+    END_SILENCE_KEEP_MS,
     MIN_KEEP_MS,
     MIN_KEEP_SAMPLES,
+    MODEL_CHUNK_MS,
+    PACKET_MS,
+    PACKET_SAMPLES,
     SR,
     VAD_PROCESSING_VERSION,
 )
@@ -29,9 +33,13 @@ from audio_engine.core.fsmn_vad.types import (
 __all__ = [
     "CHUNK_MS",
     "CHUNK_SAMPLES",
+    "END_SILENCE_KEEP_MS",
     "MIN_KEEP_MS",
     "MIN_KEEP_SAMPLES",
+    "MODEL_CHUNK_MS",
     "MockVadModel",
+    "PACKET_MS",
+    "PACKET_SAMPLES",
     "SR",
     "ScheduleVadModel",
     "VAD_PROCESSING_VERSION",

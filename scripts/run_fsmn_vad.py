@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """对单个音频或目录跑与流水线同源的 FSMN VAD，输出拼接语音 WAV 或片段目录。
 
-规则与 ``audio.fsmn_vad_segment`` 一致：16 kHz / 单声道 ch0、200 ms 流式分块、
-模型 end 后保留 675 ms 原音频、EOF 无终点与 endpoint_at_eof 丢弃。
+规则与 ``audio.fsmn_vad_segment`` 一致（049 / fenshen）：16 kHz / 单声道 ch0、
+100 ms 客户端分包、每两包推理、split-end / 完整端点分支过滤与裁切、
+``send_end_result=true`` 时 EOF 补尾；无 675 ms 固定尾、无统一 1 秒门限。
 
 配置与环境（与 ``pipelines/data_cleaning_source_A.yaml`` 一致）
 ----------------------------------------------------------
-- 模型运行目录：``FSMN_VAD_RUNTIME_DIR`` 或 ``--runtime-dir``
+- 模型运行目录：``FSMN_VAD_RUNTIME_DIR`` 或 ``--runtime-dir``（须为完整 fenshen overlay，不能是 800/0.6/60000 默认配置）
 - 配置：``configs/vad/fenshen_vad_config.yaml``（须已 overlay 进 runtime 的 ``config.yaml``）
 - 工程 mock：``AUDIO_ENGINE_VAD_MOCK=1`` 或 ``--mock``
 
@@ -61,6 +62,7 @@ from audio_engine.core.fsmn_vad.adapter import (  # noqa: E402
     load_funasr_vad,
     run_streaming_vad,
 )
+from audio_engine.core.fsmn_vad.runtime import validate_runtime_model_dir  # noqa: E402
 from audio_engine.core.fsmn_vad.types import SR, VadKeptSegment, VadStreamResult  # noqa: E402
 from audio_engine.core.manifest import file_sha256  # noqa: E402
 from audio_engine.operators.audio.pcm import looks_like_wav  # noqa: E402
@@ -241,14 +243,13 @@ def build_vad(*, runtime_dir: Path, mock: bool, mock_intervals: list[list[float]
         intervals = mock_intervals or [[200.0, 1800.0]]
         pairs = [(float(a), float(b)) for a, b in intervals]
         return ScheduleVadModel(pairs, sample_rate=SR)
-    if not runtime_dir.is_dir():
+    try:
+        runtime_dir = validate_runtime_model_dir(runtime_dir)
+    except (FileNotFoundError, ValueError) as exc:
         raise VadCliError(
-            f"FSMN VAD runtime 不存在: {runtime_dir}\n"
-            "请先运行 scripts/prepare_fsmn_vad_runtime.py，或设置 FSMN_VAD_RUNTIME_DIR"
-        )
-    cfg = runtime_dir / "config.yaml"
-    if not cfg.is_file():
-        raise VadCliError(f"runtime 缺少 config.yaml: {runtime_dir}")
+            f"{exc}\n请先运行 scripts/prepare_fsmn_vad_runtime.py 覆盖完整 fenshen 配置，"
+            "或设置 FSMN_VAD_RUNTIME_DIR"
+        ) from exc
     return load_funasr_vad(runtime_dir)
 
 
@@ -315,7 +316,7 @@ def process_one(
         intervals = list(vad.intervals)
         vad = ScheduleVadModel(intervals, sample_rate=SR)
 
-    result = run_streaming_vad(vad, pcm16le, include_eof_fallback_in_kept=False)
+    result = run_streaming_vad(vad, pcm16le, send_end_result=True)
     record: dict[str, Any] = {
         "source": str(src),
         "normalize": norm_meta,

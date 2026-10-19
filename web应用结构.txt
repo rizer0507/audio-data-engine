@@ -1,0 +1,84 @@
+audio-data-engine/
+├── frontend/                          # 新增：前端
+│   ├── package.json
+│   ├── index.html
+│   ├── tsconfig.json
+│   ├── vite.config.ts                 # 开发时将 /api 代理到后端
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx                    # 路由和整体布局
+│       ├── api.ts                     # 统一请求入口、错误处理
+│       ├── types.ts                   # 前后端交互类型
+│       ├── styles.css
+│       ├── components/
+│       │   ├── Layout.tsx             # 导航和页面容器
+│       │   ├── AudioPlayer.tsx        # 音频播放
+│       │   ├── TaskStatus.tsx         # 任务状态和进度
+│       │   └── SampleTable.tsx        # 样本列表、转写、指标和标签
+│       └── pages/
+│           ├── Sources.tsx            # 登记、检查服务器真实数据源
+│           ├── Models.tsx             # 配置模型地址、端口、连接测试
+│           ├── Jobs.tsx               # 新建任务、查看任务列表
+│           ├── JobDetail.tsx          # 参数、进度、日志、失败重试
+│           ├── Datasets.tsx           # 数据集与产物列表
+│           ├── DatasetDetail.tsx      # 试听、筛选、审核和导出
+│           └── Evaluations.tsx        # 发起评测、查看指标和模型对比
+│
+├── src/
+│   └── audio_engine/
+│       ├── web/                       # 新增：Web 服务层
+│       │   ├── __init__.py
+│       │   ├── app.py                 # FastAPI 入口、API 注册、前端静态文件
+│       │   ├── settings.py            # 配置加载、路径与环境变量
+│       │   ├── schemas.py             # 请求和响应结构
+│       │   ├── store.py               # SQLite：任务、参数快照、执行状态
+│       │   ├── worker.py              # 独立进程领取和执行任务
+│       │   ├── api/
+│       │   │   ├── __init__.py
+│       │   │   ├── sources.py         # 数据源登记、查询、可读性检查
+│       │   │   ├── models.py          # 模型连接配置、可用性检查
+│       │   │   ├── jobs.py            # 提交、查询、取消、重试、读取日志
+│       │   │   ├── datasets.py        # 样本、音频、审核、产物下载
+│       │   │   └── evaluations.py     # 评测任务和指标查询
+│       │   └── services/
+│       │       ├── __init__.py
+│       │       ├── engine.py          # 将页面参数转换为现有引擎调用
+│       │       ├── jobs.py            # 任务状态流转、取消与恢复
+│       │       └── results.py         # Manifest 分页查询、审核与导出
+│       │
+│       ├── cli/                       # 已有：保留命令行入口
+│       ├── core/                      # 已有：复用执行、标签、数据集等能力
+│       ├── operators/                 # 已有：复用 ASR、VAD、DNSMOS 等算子
+│       └── metrics/                   # 已有：复用评测指标
+│
+├── configs/                           # 已有
+│   ├── web.yaml                       # 新增：Web、Worker、外部模型连接配置
+│   ├── asr/                           # 已有：模型推理参数
+│   └── ...                            # 其余现有配置保留
+│
+├── resources/
+│   └── manifest.yaml                  # 已有：真实数据源统一登记
+│
+├── pipelines/                         # 已有：复用现有流水线
+├── tasks/                             # 已有：保留现有任务定义
+├── scripts/                           # 已有：保留辅助脚本
+│
+├── tests/                             # 已有
+│   └── web/                           # 新增
+│       ├── test_api.py                 # 数据源、模型、任务接口
+│       ├── test_jobs.py                # 领取、取消、失败和恢复
+│       └── test_engine.py              # 参数与模型端口传递
+│
+├── var/                               # 已有：运行时生成，不创建空数据库
+│   └── web.sqlite3                    # Web 任务记录
+├── runs/                              # 已有：每次任务的日志、配置和断点
+├── datasets/                          # 已有：Manifest 与业务产物
+├── data/                              # 已有：派生音频、缓存、导出文件
+│
+├── docs/
+│   ├── web-service.md                 # 新增：配置、启动、部署说明
+│   └── ...                            # 现有文档保留
+├── .env.example                       # 已有：补充服务配置示例
+├── .gitignore                         # 已有：补充数据库、前端构建产物
+├── pyproject.toml                     # 已有：补充 Web 依赖和启动入口
+└── README.md                          # 已有：补充页面服务使用方式

@@ -1,0 +1,31 @@
+{
+  "qwen_model": "/data2/data-cp/zcl/models/Qwen3-ASR-1___7B",
+  "qwen_template": "/data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja",
+  "sensevoice_model": "/data2/data-cp/xijujun/models/SenseVoiceSmall",
+  "glm_env": "/data2/data-cp/lizi/env_hub/glm_asr_vllm",
+  "glm_model": "/data2/data-cp/models/GLM-ASR-Nano-2512",
+  "qwen_port": 5555,
+  "glm_port": 5570,
+  "ready_timeout": 900,
+  "cleanup_timeout": 120,
+  "gpu_idle_memory_mb": 1024,
+  "heartbeat": 30,
+  "dnsmos_parallel": true,
+  "existing_tasks": {
+    "20260813-1-n/qwen": {"run_dir": "auto"},
+    "20260813-1-n/dnsmos": {"run_dir": "auto"},
+    "20260814-1-n/dnsmos": {"run_dir": "auto"}
+  },
+  "batches": [
+    {
+      "name": "20260813-1-n",
+      "gpu": 5,
+      "source_dir": "/data2/data-cp/datasets/asr_datasets/fenshen/20260813/1"
+    },
+    {
+      "name": "20260814-1-n",
+      "gpu": 5,
+      "source_dir": "/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1"
+    }
+  ]
+}

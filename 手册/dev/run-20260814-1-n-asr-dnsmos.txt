@@ -1,0 +1,81 @@
+# batch 20260814-1-n · 单卡交替：起服→批跑→停干净→再下一任务
+# 规则：每条前台跑完再执行下一条；停服后必须 nvidia-smi 确认显存释放
+# SenseVoice 无 vLLM，本地占卡；三路 ASR 均 --no-sharding（单进程单卡）
+
+# ---------- 0) 工程环境 ----------
+cd /data2/data-cp/lizi/audio-data-engine
+conda activate asr
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+export BATCH=20260814-1-n
+export SOURCE_DIR=/data2/data-cp/datasets/asr_datasets/fenshen/20260814/1
+export QWEN_ASR_API_BASE=http://127.0.0.1:5555
+export QWEN_ASR_API_KEY=dummy
+export GLM_ASR_API_BASE=http://127.0.0.1:5570
+export GLM_ASR_MODEL=glm-asr
+export SENSEVOICE_MODEL_PATH=/data2/data-cp/xijujun/models/SenseVoiceSmall
+export GPU_ID=0
+
+# ========== A) Qwen ==========
+# A1) 起 Qwen vLLM（tmux new -s vllm5555；起来后 Ctrl+b d）
+CUDA_VISIBLE_DEVICES=$GPU_ID vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
+  --gpu-memory-utilization 0.5 \
+  --host 127.0.0.1 \
+  --port 5555 \
+  --tensor-parallel-size 1 \
+  --served-model-name qwen3-asr \
+  --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+
+# A2) 就绪检查（批跑终端）
+curl -fsS http://127.0.0.1:5555/v1/models | python -m json.tool
+
+# A3) Qwen 全量（前台；退出码非 0 不要往下走）
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH" --asr-run qwen1 --no-sharding
+
+# A4) 停 Qwen 并等到进程彻底没了（先进 tmux Ctrl+C；或下面强杀）
+pkill -f "vllm serve.*--port 5555" || true
+while pgrep -af "vllm serve.*--port 5555" >/dev/null; do echo "等待 Qwen vLLM 退出..."; sleep 2; done
+nvidia-smi
+# 确认 GPU 无 vLLM / 显存已回落，再继续
+
+# ========== B) SenseVoice（本地占卡，无起服；须 A4 已干净）==========
+# B1) 再确认空卡
+nvidia-smi
+
+# B2) SenseVoice 全量（前台；单进程用物理卡 $GPU_ID）
+CUDA_VISIBLE_DEVICES=$GPU_ID audio-data pipeline run pipelines/sensevoice_asr_batch.yaml \
+  --source-name "$BATCH" --asr-run sensevoice1 --no-sharding
+
+# B3) 确认本任务结束（前台返回即结束；再看显存）
+nvidia-smi
+# 若仍有残留 python 占卡：pgrep -af sensevoice；确认无本批进程后再继续
+
+# ========== C) GLM ==========
+# C1) 起 GLM vLLM（tmux new -s vllm5570；用 glm 环境，不要 asr）
+export DST_ENV=/data2/data-cp/lizi/env_hub/glm_asr_vllm
+export PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export FLASHINFER_DISABLE_VERSION_CHECK=1
+export VLLM_USE_FLASHINFER_SAMPLER=0
+unset VLLM_ATTENTION_BACKEND VLLM_USE_FLASHINFER_SAMPLE VLLM_ATTENTIOIN_BACKEND
+CUDA_VISIBLE_DEVICES=$GPU_ID \
+"$DST_ENV/bin/python" "$DST_ENV/bin/vllm" serve \
+  /data2/data-cp/models/GLM-ASR-Nano-2512 \
+  --host 0.0.0.0 --port 5570 --served-model-name glm-asr \
+  --tensor-parallel-size 1 --trust-remote-code --dtype bfloat16 \
+  --max-model-len 4096 --max-num-seqs 8 --gpu-memory-utilization 0.90 \
+  --limit-mm-per-prompt '{"audio":1}' \
+  --no-enable-flashinfer-autotune \
+  --kernel-config '{"enable_jit_warmup":false,"enable_cutedsl_warmup":false}'
+
+# C2) 就绪检查（回到 asr 环境的批跑终端）
+curl -fsS http://127.0.0.1:5570/v1/models | python -m json.tool
+
+# C3) GLM 全量（前台）
+audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm1 --no-sharding
+
+# C4) 停 GLM 并等到彻底退出
+pkill -f "vllm serve.*--port 5570" || true
+while pgrep -af "vllm serve.*--port 5570" >/dev/null; do echo "等待 GLM vLLM 退出..."; sleep 2; done
+nvidia-smi
+
+# ========== D) DNSMOS（CPU；须前面任务都前台跑完）==========
+audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"

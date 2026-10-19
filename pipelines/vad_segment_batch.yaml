@@ -2,7 +2,7 @@
 # 输入：父源 ingested_*（含 resampled_16k）
 # 输出：片段 segments_*；源结果写在 runs/.../vad_source_results/
 #
-# 切分语义与 041 一致，本文件不改端点 / 675ms 尾部 / 1s 过滤 / EOF 丢弃规则。
+# 切分语义见 049：与分身 fenshen 完全对齐（取代 041/045 中冲突的 675ms/1s/EOF 丢弃）。
 #
 #   audio-data pipeline run pipelines/vad_segment_batch.yaml \
 #     --source-name "$BATCH"
@@ -46,7 +46,8 @@ pipeline:
       input_audio_key: resampled_16k
       output_audio_key: resampled_16k
       channel_index: 0
-      include_eof_fallback: false
+      packet_ms: 100
+      send_end_result: true
       prepare_runtime: false
       verify_fingerprints: true
       source_results_dir: vad_source_results
