@@ -16,7 +16,8 @@
   - docs/ 不同步（本机专属）
 
 白名单目录（与 scripts/sync_to_usb.bat 一致）：
-  src  pipelines  configs  tests  scripts  tasks  手册
+  src  pipelines  configs  tests  scripts  tasks  手册  frontend
+  （frontend 同步源码 + dist；排除 node_modules。内网无 npm 源，本机 build 后带 dist）
 
 白名单根文件：
   pyproject.toml  README.md  .gitignore  .env.example
@@ -28,6 +29,7 @@
 明确不覆盖：
   docs/  data/  datasets/  runs/  数据集/  test*.xlsx  error.txt  zizhun.py  .venv/  .env
   EfficientAT-main/  Qwen3-ASR-main/  GLM-4-Voice/  silero-vad-master/
+  frontend/node_modules/
   （datasets/ 含 stage1|stage3 全部产物；尤其 stage*/asr/ 识别结果本脚本绝不碰）
   （上述 vendored 依赖目录由服务器自行维护，本脚本与 U 盘同步均不碰）
 
@@ -52,6 +54,19 @@ for d in src pipelines configs tests scripts tasks 手册; do
     cp -a "$SRC/$d/." "$DST/$d/"
   fi
 done
+
+# 1b) 前端源码 + dist（不含 node_modules；内网不跑 npm）
+mkdir -p "$DST/frontend"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a \
+    --exclude 'node_modules/' \
+    --exclude '.vite/' --exclude 'coverage/' --exclude '*.tsbuildinfo' \
+    "$SRC/frontend/" "$DST/frontend/"
+else
+  cp -a "$SRC/frontend/." "$DST/frontend/"
+  rm -rf "$DST/frontend/node_modules" "$DST/frontend/.vite" "$DST/frontend/coverage"
+fi
+test -f "$DST/frontend/dist/index.html" || echo "[WARN] frontend/dist/index.html 缺失，请本机 npm run build 后重同步"
 
 # 2) 工程元数据 + 重要手册/台账（显式白名单）
 for f in \
@@ -79,12 +94,16 @@ done
 #   cp -a "$SRC/resources/." "$DST/resources/"
 # fi
 
-cd "$DST" && pip install -e .
+cd "$DST" && pip install -e ".[web]" \
+  --index-url http://maven.paic.com.cn/repository/pypi/simple \
+  --trusted-host maven.paic.com.cn
 
 --------------------------------------------------------------------------------
 流程对照
 --------------------------------------------------------------------------------
-本机 → scripts/sync_to_usb.bat → U 盘 F:\audio-data-engine
+本机 → cd frontend && npm run build
+  → scripts/sync_to_usb.bat → U 盘 F:\audio-data-engine
   → 拷到服务器 tmp → 本脚本 → 正式工程
-  → pip install -e .
-（docs/ 全程不同步，仅本机）
+  → pip install -e ".[web]"（内网 PyPI）
+  → 手册 06 启动 Web/Worker
+（docs/、frontend/node_modules 不同步；dist 随 U 盘同步）

@@ -48,7 +48,7 @@ echo   LOG : %LOG%
 echo ============================================
 echo.
 echo Whitelist dirs:
-echo   src  pipelines  configs  tests  scripts  tasks  handbook-dir
+echo   src  pipelines  configs  tests  scripts  tasks  frontend  handbook-dir
 echo Whitelist root files:
 echo   pyproject.toml  README.md  .gitignore  .env.example
 echo   and local *.txt handbooks at repo root
@@ -56,6 +56,7 @@ echo.
 echo Never synced:
 echo   docs  data  datasets  runs  .venv  .env  resources  *.parquet
 echo   EfficientAT-main  Qwen3-ASR-main  GLM-4-Voice  silero-vad-master
+echo   frontend\node_modules  ^(dist is synced; build on local PC^)
 echo.
 echo Starting...
 echo.
@@ -74,6 +75,7 @@ call :sync_dir "tests"
 call :sync_dir "scripts"
 call :sync_dir "tasks"
 call :sync_dir "手册"
+call :sync_frontend
 
 REM ---------- 2) whitelist root files ----------
 call :sync_file "pyproject.toml"
@@ -125,6 +127,29 @@ robocopy "%SRC%\%REL%" "%DEST%\%REL%" /E /MT:8 /R:2 /W:3 ^
 set "RC=!ERRORLEVEL!"
 if !RC! GEQ 8 (
     echo   [ERROR] dir sync failed: %REL%  robocopy=!RC!
+    set /a FAIL+=1
+)
+exit /b 0
+
+REM frontend: source + dist; exclude node_modules (no npm on intranet server)
+:sync_frontend
+if not exist "%SRC%\frontend" (
+    echo   [skip] dir missing: frontend
+    echo SKIP DIR frontend >> "%LOG%"
+    exit /b 0
+)
+if not exist "%SRC%\frontend\dist\index.html" (
+    echo   [WARN] frontend\dist missing. Run: cd frontend ^&^& npm run build
+)
+echo   [dir] frontend  ^(incl dist, no node_modules^)
+if not exist "%DEST%\frontend" mkdir "%DEST%\frontend"
+robocopy "%SRC%\frontend" "%DEST%\frontend" /E /MT:8 /R:2 /W:3 ^
+    /XD "node_modules" ".vite" "coverage" ^
+    /XF "*.tsbuildinfo" "Thumbs.db" ".DS_Store" ^
+    /NFL /NDL /NP /LOG+:"%LOG%"
+set "RC=!ERRORLEVEL!"
+if !RC! GEQ 8 (
+    echo   [ERROR] dir sync failed: frontend  robocopy=!RC!
     set /a FAIL+=1
 )
 exit /b 0

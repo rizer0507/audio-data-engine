@@ -1,0 +1,207 @@
+audio-data-engine 前端当前展示的流水线：真实执行顺序
+生成依据：configs/plugins.yaml（status=enabled）+ ProductionOrchestrator + PipelineRunner
+说明日期：2026-10-21
+
+一、前端实际展示范围
+插件库、任务页下拉都调用 GET /api/v1/plugins?kind=pipeline。
+目录接口按 (kind, id, version) 排序，所以界面顺序是 id 字母序，不是运行顺序。
+当前登记且启用、会展示的流水线共 16 条。pipelines/ 里其余 YAML 未登记，前端不展示。
+评测页额外过滤 purpose=evaluation，只出现 asr_eval、eval_metric_pipeline、eval_metrics_v3。
+
+界面字母序（仅供对照，不是执行顺序）：
+  1. asr_eval
+  2. audio_ingest
+  3. audio_ingest_vad_asr_dnsmos_tags
+  4. augment_batch_speed
+  5. dnsmos_score_batch
+  6. eval_metric_pipeline
+  7. eval_metrics_v3
+  8. evidence_join
+  9. glm_asr_batch
+  10. qwen_asr_batch
+  11. sensevoice_asr_batch
+  12. tag_dataset_free_tags_v2
+  13. vad_segment_batch
+  14. warehouse_export_annotation
+  15. warehouse_freeze
+  16. web_stage5_ext_demo
+
+二、生产主链的真实调度顺序
+只有 audio_ingest_vad_asr_dnsmos_tags 会把多条子流水线串成一张图。
+调度器：src/audio_engine/core/production/orchestrator.py
+定义：pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml
+规则：每一波只启动“依赖已全部成功”的节点；同一波用线程池同时拉起，完成先后不固定。
+未选中的 ASR 路次不会补跑。默认两路都启用时，波次如下。
+
+波次 1（单节点）
+  ingest
+    子流水线 audio_ingest
+    输入：原始目录（source_dir）
+    输出：datasets/stage1/ingested/ingested_<batch>.parquet
+
+波次 2（单节点，依赖 ingest）
+  vad
+    子流水线 vad_segment_batch
+    输入：ingested
+    输出：datasets/stage1/segments/segments_<batch>.parquet
+
+波次 3（三节点同时启动，都只依赖 vad）
+  启动列表顺序：asr_qwen1、asr_glm1、dnsmos
+  三者并行，谁先结束由各自耗时决定，不代表依赖关系。
+  asr_qwen1
+    子流水线 qwen_asr_batch，--asr-run qwen1
+    输入：segments
+    输出：qwen1 识别清单
+  asr_glm1
+    子流水线 glm_asr_batch，--asr-run glm1
+    输入：segments
+    输出：glm1 识别清单
+  dnsmos
+    子流水线 dnsmos_score_batch
+    输入：segments（全部保留片段，不经 ASR 门控）
+    输出：datasets/stage1/quality/dnsmos_<batch>.parquet
+
+波次 4（单节点，依赖全部已选 ASR 路次 + dnsmos）
+  evidence_join
+    子流水线 evidence_join
+    输入：segments，外加 --join-manifest qwen1=...、glm1=...
+    环境变量 AUDIO_ENGINE_DNSMOS_MANIFEST、AUDIO_ENGINE_SEGMENTS_MANIFEST
+    输出：datasets/stage1/derived/prepared_evidence_<batch>.parquet
+
+波次 5（单节点，依赖 evidence_join）
+  tagging
+    子流水线 tag_dataset_free_tags_v2
+    配置 configs/tagging/zh_asr_free_tags_v2.yaml
+    输入：prepared_evidence
+    输出：tagged_free_tags_v2_<batch>.parquet 与汇总表
+    evidence_mode=existing：消费已有 DNSMOS，不在打标阶段重跑 ASR 或评分。
+
+若任务参数 asr_route_ids 只保留其中一路，波次 3 去掉未选路次，波次 4 只等待留下的 ASR 和 dnsmos。
+
+三、各子流水线内部步骤顺序
+PipelineRunner 按 YAML pipeline 列表严格串行：上一步整批结束后才进入下一步。
+同一步内部可以按 execution.workers 并发处理样本。
+带 sharding 的流水线外层是：父进程预检 -> 切分 -> 多个分片并行（每个分片仍按下面步骤串行）-> 合并。
+
+1. audio_ingest（入库）
+   分片：8 片，hash，最多 16 个分片并行；步内线程。
+   1) ingest                  ingest.scan
+   2) pcm_convert            audio.pcm_to_wav          raw -> pcm_wav，16k / 单声道
+   3) resample               audio.resample            pcm_wav -> resampled_16k，16k
+   4) normalize_report       audio.normalize_report
+   5) probe                  quality.probe             读 resampled_16k
+   6) audio_pass             quality.filter            label_broken != True 且 duration > 0
+   7) select_pass            quality.select            只保留 label_audio_pass == True
+
+2. vad_segment_batch（FSMN-VAD 切段）
+   分片：8 片，按时长均衡，8 路并行。
+   1) fsmn_vad_segment       audio.fsmn_vad_segment    读/写 resampled_16k
+      同一父源的流式块在算子内仍顺序处理。
+
+3. qwen_asr_batch（Qwen 识别）
+   分片：8 片，按时长均衡，8 路并行；GPU 4、5，每卡 4 实例。步内顺序执行。
+   前置：清单里要有 resampled_16k。
+   1) qwen_asr               asr.qwen_batch
+   2) normalize_transcripts  quality.normalize_transcripts
+      模型 qwen；保留 raw_text；zh_asr_v1 + blank_exact_qwen_v1
+
+4. sensevoice_asr_batch（SenseVoice 识别）
+   与 Qwen、GLM 同级，已在插件库和任务下拉中展示。
+   生产主链 audio_ingest_vad_asr_dnsmos_tags 的 asr_routes 仍只有 qwen1、glm1，
+   编排器不会在波次 3 自动启动本流水线；需要时在任务里单独选择运行。
+   分片：8 片，按时长均衡，8 路并行；GPU 4、5，每卡 4 实例。步内顺序执行，fail_fast。
+   前置：清单里要有 resampled_16k。模型路径环境变量 SENSEVOICE_MODEL_PATH。
+   1) sensevoice_asr          asr.sensevoice_batch
+   2) normalize_transcripts  quality.normalize_transcripts
+      模型 sensevoice；保留 raw_text；zh_asr_v1（含去掉 <|...|>）
+      无独立热词整句清空表
+   3) release_after_sensevoice  runtime.release_asr_models
+
+5. glm_asr_batch（GLM 识别）
+   分片：1 片，按时长均衡；步内 4 线程打 vLLM HTTP，客户端不占 GPU。
+   前置：清单里要有 resampled_16k。
+   1) glm_asr                asr.glm_batch
+   2) normalize_transcripts  quality.normalize_transcripts
+      模型 glm；保留 raw_text；zh_asr_v1
+
+6. dnsmos_score_batch（DNSMOS）
+   分片：8 片，按时长均衡，最多 4 路并行；步内 4 线程，每线程独立 ONNX 会话。
+   1) dnsmos                 quality.dnsmos            读 resampled_16k
+      配置 configs/quality/dnsmos_p835.yaml
+
+7. evidence_join（证据合并）
+   无分片，单线程，fail_fast。
+   1) evidence_join          quality.evidence_join
+      按样本 id 精确对齐：片段快照 + 各路 ASR + DNSMOS
+
+8. tag_dataset_free_tags_v2（自由标签 v2）
+   外层单线程；算子内部 workers=8。
+   1) multi_tag              quality.multi_tag_v1
+      规则来自 configs/tagging/zh_asr_free_tags_v2.yaml
+      existing 模式不启动 vad/dnsmos/energy 补算池。
+
+四、主链之外、前端仍可单独运行的流水线
+这些条目会出现在任务下拉里，但生产编排器不会在主链结束后自动调用它们。
+各自内部仍然按 YAML 步骤串行。
+
+9. augment_batch_speed（保音高加速）
+   分片：4 片，hash，最多 2 路并行；步内 4 线程。
+   默认输入：datasets/stage1/segments/segments_<batch>.parquet（须含 resampled_16k）。
+   倍率默认 1.2，写在流水线 YAML 里；Web 任务不另传 --speed-factor。
+   1) tempo_augment           augmentation.tempo
+      FFmpeg atempo，保音高；输出音频键 aug_speed
+
+10. asr_eval（评测页；兼容入口）
+   1) normalize_transcripts  quality.normalize_transcripts
+      blank_exact_eval_v1，保留原文
+   2) evaluation_metrics     quality.text_metrics
+      configs/metrics/model_eval.yaml，缺金标可跳过
+   3) evaluation_report      quality.evaluation_report
+      按 type 分桶，允许缺金标，导出 xlsx，回归失败不中断
+
+11. eval_metric_pipeline（评测页）
+   1) normalize_transcripts  quality.normalize_transcripts
+      blank_exact_eval_interview_v1，保留原文
+   2) evaluation_metrics     quality.text_metrics
+      缺金标可跳过
+   3) evaluation_report      quality.evaluation_report
+      开启 business_metrics_v1；业务门禁失败不中断；导出 xlsx
+
+12. eval_metrics_v3（评测页；正式门禁）
+    外层顺序执行，fail_fast。
+    1) evaluation_metrics     quality.text_metrics
+       缺金标不跳过
+    2) evaluation_report      quality.evaluation_report
+       require_formal_v3；不允许缺金标
+       baseline_prefix=qwen_1，candidate_prefix=qwen_sft
+       业务门禁失败会让本步失败（fail_on_business_gate=true）
+
+13. warehouse_export_annotation（标注包导出）
+    引擎不会把它接到打标后面。YAML 注释里的业务位置是人工听音之前。
+    1) export_pack            quality.warehouse_export_annotation
+       revision=r1，view=blind，format=both
+
+14. warehouse_freeze（仓内冻结发布）
+    引擎不会把它接到导出后面。输入约定是人审回填后的 reviewed_warehouse。
+    1) freeze                 quality.warehouse_freeze
+       校验后写入 datasets/stage1/warehouses/<batch>
+
+15. web_stage5_ext_demo（扩展演示，非正式生产流程）
+    进程池，workers=2。
+    1) duration_policy        script.python
+       scripts/examples/label_from_duration.py，minimum_seconds=1.0
+
+五、对照结论
+真正被编排器串起来的执行顺序只有一条：
+
+  audio_ingest
+    -> vad_segment_batch
+    -> 并行：qwen_asr_batch(qwen1) | glm_asr_batch(glm1) | dnsmos_score_batch
+    -> evidence_join
+    -> tag_dataset_free_tags_v2
+
+sensevoice_asr_batch 已与 qwen_asr_batch、glm_asr_batch 同级出现在插件库和任务下拉，
+但 asr_routes 未包含它，主链波次 3 不会自动跑。
+augment_batch_speed 也已登记，默认吃 VAD 片段清单，主链不会自动跑。
+asr_eval、eval_metric_pipeline、eval_metrics_v3、warehouse_export_annotation、
+warehouse_freeze、web_stage5_ext_demo 同样是独立入口，没有被编进上述波次。

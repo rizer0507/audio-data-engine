@@ -1,27 +1,32 @@
 tag_id: silence_strict_zero
-version: "1"
+version: '1'
 status: enabled
 name: 严格全零静默
-description: 严格全通道采样为零（与低能量不混淆）
-business_definition: |
-  严格全通道采样值为零（capability: strict_all_channels_zero），与「低能量」不等同。
+description: '只有整段录音中每个声道的采样值都为 0，才打这个标签。
+
+  声音很小但不为 0，不算；没有检测结果时，无法判断。'
+business_definition: '严格全通道采样值为零（capability: strict_all_channels_zero），与「低能量」不等同。
+
   依赖能量/静默类声学证据；existing 模式缺证据为 unknown。
+
+  '
 dependencies:
   fragments: []
   lexicons: []
   requires_acoustic: true
 examples:
   hit:
-    - description: 能量分析确认全通道采样严格为零。
-      notes: 规则示例，非真实模型验证记录。
+  - description: 能量分析确认全通道采样严格为零。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: 存在非零采样（即使能量很低）。
+  - description: 存在非零采样（即使能量很低）。
   unknown:
-    - description: 缺少能量/静默证据。
+  - description: 缺少能量/静默证据。
 rules:
-  - rule_id: rule_silence_strict_zero_v1
-    version: "1"
-    tag_id: silence_strict_zero
-    enabled: true
-    condition:
-      capability: strict_all_channels_zero
+- rule_id: rule_silence_strict_zero_v1
+  version: '1'
+  tag_id: silence_strict_zero
+  enabled: true
+  condition:
+    capability: strict_all_channels_zero
+description_updated_at: '2026-10-19T06:39:29Z'

@@ -24,6 +24,11 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Cursor 本地状态；技能定义仍可提交
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
+
 # --- 运行时可删产物（不进 Git）---
 # 算子结果缓存：可随意删除，下次重跑会重建
 data/cache/*
@@ -69,8 +74,13 @@ qwen_vs_sensevoice/
 #resource
 resources/source/*
 
-#error记录
+#error记录与本地日志
 error.log
+error.txt
+*.log
+*.sqlite
+*.sqlite3
+*.db
 
 #tmp
 tmp/*
@@ -96,4 +106,24 @@ silero-vad-master
 EfficientAT-main
 # Local model runtimes / smoke outputs (041)
 var/
+
+# 前端依赖与 TypeScript 增量编译缓存（dist/ 已在上方忽略）
+node_modules/
+*.tsbuildinfo
+
+# 联调时随手留下的验收脚本和结果
+docs/web-service/_stage*
+
+# 资源清单锁文件，本地生成
+resources/*.lock
+
+# 流水线随手落盘的 dataset 快照（文件名带内容哈希，不是手写配置）
+configs/datasets/*demo-batch_*.yaml
+configs/datasets/*fault-batch_*.yaml
+configs/datasets/*cli-demo_*.yaml
+
+# 仓库根目录的本地草稿和个人文件
+question.txt
+Untitled
+9DE693-B8E4BAAEE586_BAE687ADE788.md
 

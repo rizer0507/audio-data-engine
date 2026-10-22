@@ -37,13 +37,25 @@ dnsmos = [
     "onnxruntime>=1.16",
     "librosa>=0.10",
 ]
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
 audio-data = "audio_engine.cli.main:main"
+audio-data-web = "audio_engine.web.app:main"
+audio-data-worker = "audio_engine.web.worker:main"
 
 [build-system]
 requires = ["hatchling"]

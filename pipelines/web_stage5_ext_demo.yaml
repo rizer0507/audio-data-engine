@@ -1,0 +1,21 @@
+# 阶段五插件扩展示例：仅复用已有算子 script.python，不新增算法。
+# 登记见 configs/plugins.yaml → web_stage5_ext_demo。
+# 验证：刷新插件目录后可 describe/plan；无需改 API / Worker / 前端。
+
+name: web_stage5_ext_demo
+
+input:
+  manifest: datasets/stage1/derived/raw_example.parquet
+
+execution:
+  executor: process
+  workers: 2
+  max_in_flight: 4
+  checkpoint_every: 1000
+
+pipeline:
+  - name: duration_policy
+    operator: script.python
+    params:
+      path: scripts/examples/label_from_duration.py
+      minimum_seconds: 1.0

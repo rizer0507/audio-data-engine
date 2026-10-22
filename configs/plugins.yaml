@@ -1,0 +1,305 @@
+api_version: '1'
+extension_modules: []
+pipelines:
+- id: audio_ingest_vad_asr_dnsmos_tags
+  version: '1'
+  adapter: production_pipeline
+  name: 入库、切段、多路识别、质量评分与标签
+  description: 把已登记的原始录音入库并切成片段，用多路模型识别说话内容并做音质评分，再按规则打标签，最后生成可查看和导出的数据清单、报告与标注包。
+  definition: pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - source
+  supports_tag_selection: true
+  output_kinds:
+  - manifest
+  - report
+  - annotation_package
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: audio_ingest
+  version: '1'
+  adapter: yaml_pipeline
+  name: 音频入库
+  definition: pipelines/audio_ingest.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - source
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    title: 入库参数
+    properties: {}
+  description: 扫描已登记的音频数据源，把音频统一转成 16k 单声道 WAV，生成入库后的数据清单。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: vad_segment_batch
+  version: '1'
+  adapter: yaml_pipeline
+  name: FSMN-VAD 切段
+  definition: pipelines/vad_segment_batch.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - source
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description: 对已入库的音频按语音活动检测切成片段，生成片段清单和切段结果。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: qwen_asr_batch
+  version: '1'
+  adapter: yaml_pipeline
+  name: Qwen ASR 批处理
+  description: 对已有 16k 重采样资产的数据清单，用 Qwen 做批量语音识别并规范化结果，写出识别清单。不直接接受原始目录。
+  definition: pipelines/qwen_asr_batch.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    title: Qwen ASR 参数
+    properties:
+      language:
+        type: string
+        title: 语言
+        description: 传给 Qwen chat ASR 的语言提示（若算子支持）
+        default: zh
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: glm_asr_batch
+  version: '1'
+  adapter: yaml_pipeline
+  name: GLM ASR 批处理
+  description: 对已有 16k 重采样资产的数据清单，用 GLM 做批量语音识别并规范化结果，写出识别清单。不直接接受原始目录。
+  definition: pipelines/glm_asr_batch.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: sensevoice_asr_batch
+  version: '1'
+  adapter: yaml_pipeline
+  name: SenseVoice ASR 批处理
+  description: 对已有 16k 重采样资产的数据清单，用 SenseVoice 做批量语音识别并规范化结果，写出识别清单。不直接接受原始目录。
+  definition: pipelines/sensevoice_asr_batch.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description_updated_at: '2026-10-21T08:47:00Z'
+- id: augment_batch_speed
+  version: '1'
+  adapter: yaml_pipeline
+  name: 保音高加速增强
+  description: 对已有 16k 重采样资产的片段清单做保音高加速（默认 1.2 倍，FFmpeg atempo），写出增强后的数据清单。不直接接受原始目录。
+  definition: pipelines/augment_batch_speed.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description_updated_at: '2026-10-21T08:57:00Z'
+- id: dnsmos_score_batch
+  version: '1'
+  adapter: yaml_pipeline
+  name: DNSMOS 质量评分
+  definition: pipelines/dnsmos_score_batch.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description: 对片段清单计算 DNSMOS 音质分数，写出带质量评分的结果清单。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: evidence_join
+  version: '1'
+  adapter: yaml_pipeline
+  name: 证据合并
+  definition: pipelines/evidence_join.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description: 把片段、多路识别结果和 DNSMOS 评分对齐合并成一份证据清单，供后续打标使用。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: tag_dataset_free_tags_v2
+  version: '1'
+  adapter: yaml_pipeline
+  name: 自由标签 v2 打标流水线
+  description: 对已准备好的证据清单按所选规则打标签，生成带标签的数据清单和汇总表。也可在打标任务里直接选标签运行。
+  definition: pipelines/tag_dataset_free_tags_v2.yaml
+  status: enabled
+  purpose: tagging
+  input_kinds:
+  - dataset
+  supports_tag_selection: true
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties:
+      evidence_mode:
+        type: string
+        title: 证据模式
+        enum:
+        - existing
+        - compute_acoustic
+        default: existing
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: asr_eval
+  version: '1'
+  adapter: yaml_pipeline
+  name: ASR 评测（兼容入口）
+  definition: pipelines/asr_eval.yaml
+  status: enabled
+  purpose: evaluation
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description: 对评测用的识别结果做规范化并计算字准等指标，生成评测报告。兼容入口。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: eval_metric_pipeline
+  version: '1'
+  adapter: yaml_pipeline
+  name: 评测指标流水线
+  definition: pipelines/eval_metric_pipeline.yaml
+  status: enabled
+  purpose: evaluation
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description: 汇总评测清单上各模型相对标准答案的字准等指标，生成指标清单和表格。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: eval_metrics_v3
+  version: '1'
+  adapter: yaml_pipeline
+  name: 评测指标 v3
+  definition: pipelines/eval_metrics_v3.yaml
+  status: enabled
+  purpose: evaluation
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description: 按 v3 评测门禁计算字准与业务指标，并可在不达标时失败，写出正式评测结果。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: warehouse_export_annotation
+  version: '1'
+  adapter: yaml_pipeline
+  name: 标注包导出
+  definition: pipelines/warehouse_export_annotation.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties:
+      filters:
+        type: object
+        description: 冻结的样本筛选条件（与列表查询同口径）
+      frozen_dataset_id:
+        type: string
+        description: 导出时冻结的数据集版本路径
+      source_dataset_id:
+        type: string
+        description: 原始已发布数据集 ID
+      use_work_copy:
+        type: boolean
+        description: 是否优先使用 annotation_work 工作副本
+      revision:
+        type: string
+      view:
+        type: string
+      format:
+        type: string
+      annotation_config:
+        type: string
+      batch:
+        type: string
+  description: 按冻结的筛选条件，把数据集导出为可下载的标注包（表格或 jsonl 等）。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: warehouse_freeze
+  version: '1'
+  adapter: yaml_pipeline
+  name: 仓内冻结发布
+  definition: pipelines/warehouse_freeze.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    properties: {}
+  description: 校验人审回填后的数据清单，并冻结发布到仓库目录。
+  description_updated_at: '2026-10-19T06:31:59Z'
+- id: web_stage5_ext_demo
+  version: '1'
+  adapter: yaml_pipeline
+  name: 阶段五扩展演示流水线
+  description: 演示流水线：对数据集清单用脚本按时长打简单标签，用于证明只改定义和登记即可规划运行。非正式生产流程。
+  definition: pipelines/web_stage5_ext_demo.yaml
+  status: enabled
+  purpose: processing
+  input_kinds:
+  - dataset
+  supports_tag_selection: false
+  parameters_schema:
+    type: object
+    additionalProperties: false
+    title: 扩展演示参数
+    properties:
+      note:
+        type: string
+        title: 备注
+        description: 动态表单字段示例（不参与算子逻辑）
+        default: stage5
+  description_updated_at: '2026-10-19T06:31:59Z'
+tag_libraries:
+- path: configs/tagging/library
+  runtime_config: configs/tagging/zh_asr_free_tags_v2.yaml

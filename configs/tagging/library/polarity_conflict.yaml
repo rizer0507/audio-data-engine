@@ -1,27 +1,34 @@
 tag_id: polarity_conflict
-version: "1"
+version: '1'
 status: enabled
 name: 极性冲突
-description: 现行极性冲突语义（模板）
-business_definition: |
-  沿用 selection_v3 / 五类分拣中的极性冲突判定（capability: polarity_conflict），
+description: '按现行极性冲突规则判定：识别文字里同时出现互相冲突的肯定与否定倾向时，打这个标签。
+
+  证据不足以完成极性判定时，无法判断。
+
+  '
+description_updated_at: '2026-10-19T06:31:59Z'
+business_definition: '沿用 selection_v3 / 五类分拣中的极性冲突判定（capability: polarity_conflict），
+
   阈值与极性词表出处见运行配置引用的 selection_config。
+
+  '
 dependencies:
   fragments: []
   lexicons: []
   requires_acoustic: false
 examples:
   hit:
-    - description: 文本满足现行 polarity_conflict 能力条件。
-      notes: 规则示例，非真实模型验证记录。
+  - description: 文本满足现行 polarity_conflict 能力条件。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: 无极性冲突。
+  - description: 无极性冲突。
   unknown:
-    - description: 证据不足以完成极性判定。
+  - description: 证据不足以完成极性判定。
 rules:
-  - rule_id: rule_polarity_conflict_v1
-    version: "1"
-    tag_id: polarity_conflict
-    enabled: true
-    condition:
-      capability: polarity_conflict
+- rule_id: rule_polarity_conflict_v1
+  version: '1'
+  tag_id: polarity_conflict
+  enabled: true
+  condition:
+    capability: polarity_conflict

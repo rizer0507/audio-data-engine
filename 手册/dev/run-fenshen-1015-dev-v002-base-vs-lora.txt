@@ -1,0 +1,54 @@
+fenshen_1015 train_v002 · 基座 vs LoRA 评测（精简）
+================================================================================
+# 先改 LORA_CKPT；基座 GPU4:5555，LoRA GPU5:5564（可改）
+# 金标含 speech + non_speech（空金标）；标签扁平备份见 train 仓 eval/eval_dev_with_labels.parquet
+
+cd /data2/data-cp/lizi/audio-data-engine
+source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
+
+export TRAIN=/data2/data-cp/lizi/audio-qwen3-asr-train
+export BASE_MODEL=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
+export CHAT_TEMPLATE=/data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+export LORA_CKPT=/path/to/your/lora/checkpoint-XXXX
+export EVAL_NAME=eval_fenshen_1015_dev_v002
+export EVAL_SOURCE=datasets/stage1/derived/gold_fenshen_1015_dev_v002.parquet
+export VLLM020_PY=/data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/python
+export VLLM020_BIN=/data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/vllm
+export QWEN_ASR_API_KEY=dummy
+
+# 1) 从 train_v002 的 dev 生成引擎金标
+python scripts/build_eval_from_qwen3_dev_split.py --train-repo "$TRAIN" --dataset-rel training_sets/exploratory/fenshen_1015/train_v002 --name fenshen_1015_dev_v002 --force
+
+# 2) 注册评测集
+audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME" --force
+
+# 3) tmux 起基座 vLLM（另开会话）
+# tmux new -s vllm5555
+CUDA_VISIBLE_DEVICES=4 vllm serve "$BASE_MODEL" --gpu-memory-utilization 0.5 --host 127.0.0.1 --port 5555 --tensor-parallel-size 1 --served-model-name qwen3-asr --chat-template "$CHAT_TEMPLATE"
+
+# 4) tmux 起 LoRA vLLM（另开会话；rank 按 adapter_config.json 的 r）
+# tmux new -s vllm5564
+CUDA_VISIBLE_DEVICES=5 "$VLLM020_PY" "$VLLM020_BIN" serve "$BASE_MODEL" --gpu-memory-utilization 0.5 --host 127.0.0.1 --port 5564 --tensor-parallel-size 1 --served-model-name qwen3-asr-base --enable-lora --enable-tower-connector-lora --max-loras 1 --max-lora-rank 16 --lora-modules "qwen3-asr=${LORA_CKPT}" --chat-template "$CHAT_TEMPLATE"
+
+# 5) 确认两端口 model 列表
+curl -fsS http://127.0.0.1:5555/v1/models | python -m json.tool
+curl -fsS http://127.0.0.1:5564/v1/models | python -m json.tool
+
+# 6) 基座跑批（必须先 unset 再建 base）
+unset QWEN_ASR_API_BASE QWEN_ASR_API_BASES
+export QWEN_ASR_API_BASE=http://127.0.0.1:5555
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run qwen-base
+
+# 7) LoRA 跑批
+unset QWEN_ASR_API_BASE QWEN_ASR_API_BASES
+export QWEN_ASR_API_BASE=http://127.0.0.1:5564
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run qwen-lora
+
+# 8) 对齐
+audio-data pipeline run pipelines/eval_aggregate.yaml --eval-name "$EVAL_NAME" --join-manifest qwen-base --join-manifest qwen-lora --force
+
+# 9) 算字准对比
+audio-data pipeline run pipelines/eval_metric_pipeline.yaml --eval-name "$EVAL_NAME" --eval-model qwen-base --eval-model qwen-lora --force
+
+# 10) 看报告
+ls datasets/stage3/reports/${EVAL_NAME}/

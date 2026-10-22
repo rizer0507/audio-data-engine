@@ -28,6 +28,13 @@ BLOCKED_UNVERIFIED_TYPES = frozenset(
         "short_utterance_risk",
     }
 )
+# Confirmed empty reference (no speech / noise) may register without gold_text.
+_EMPTY_GOLD_ALLOWLIST = frozenset(EMPTY_GOLD_TYPES) | {
+    "true_silence",
+    "invalid_audio",
+    "noise",
+    "non_speech",
+}
 
 
 def gold_text_of(sample: Sample, gold_field: str = "gold_text") -> str:
@@ -216,8 +223,7 @@ def inspect_eval_manifest(
         # Empty-gold allowed types: track but do not treat as missing-gold error here.
         if (
             not gold_text_of(sample, gold_field)
-            and bucket not in EMPTY_GOLD_TYPES
-            and bucket not in {"noise", "invalid_audio", "true_silence"}
+            and bucket not in _EMPTY_GOLD_ALLOWLIST
         ):
             pass
 
@@ -267,7 +273,6 @@ def inspect_eval_manifest(
             )
         # Every sample with gold_text must be formal; empty gold only for allowlisted types.
         informal: list[str] = []
-        empty_ok = EMPTY_GOLD_TYPES | {"true_silence", "invalid_audio", "noise"}
         for sample in samples:
             if _is_v3(sample):
                 if not is_formal_gold_sample(sample):
@@ -277,7 +282,7 @@ def inspect_eval_manifest(
             has_gold = bool(gold_text_of(sample, gold_field))
             if has_gold and not is_formal_gold_sample(sample):
                 informal.append(sample.id)
-            elif not has_gold and bucket not in empty_ok:
+            elif not has_gold and bucket not in _EMPTY_GOLD_ALLOWLIST:
                 informal.append(sample.id)
         seen_inf: set[str] = set()
         informal_unique: list[str] = []

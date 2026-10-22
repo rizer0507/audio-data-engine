@@ -1,28 +1,35 @@
 tag_id: voicemail_raw
-version: "1"
+version: '1'
 status: enabled
 name: 语音信箱原文命中
-description: 任一路成功原始文本命中语音信箱词表（不阻断其他规则）
-business_definition: |
-  任一路成功 ASR 原始文本命中语音信箱词表（capability: voicemail_raw_hit）。
+description: '只要任意一路成功识别的原文命中语音信箱词表，就打这个标签。
+
+  不影响其他标签的判定。没有可用的成功识别文字时，无法判断。
+
+  '
+business_definition: '任一路成功 ASR 原始文本命中语音信箱词表（capability: voicemail_raw_hit）。
+
   词表路径由运行配置 acoustic.voicemail_patterns_path 或 selection 配置提供；不阻断其他规则。
+
+  '
 dependencies:
   fragments: []
   lexicons:
-    - voicemail
+  - voicemail
   requires_acoustic: false
 examples:
   hit:
-    - description: 某路成功 raw_text 命中语音信箱正则。
-      notes: 规则示例，非真实模型验证记录。
+  - description: 某路成功 raw_text 命中语音信箱正则。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: 全部成功路次均未命中语音信箱词表。
+  - description: 全部成功路次均未命中语音信箱词表。
   unknown:
-    - description: 无可用成功文本时由引擎按既有语义判定。
+  - description: 无可用成功文本时由引擎按既有语义判定。
 rules:
-  - rule_id: rule_voicemail_raw_v1
-    version: "1"
-    tag_id: voicemail_raw
-    enabled: true
-    condition:
-      capability: voicemail_raw_hit
+- rule_id: rule_voicemail_raw_v1
+  version: '1'
+  tag_id: voicemail_raw
+  enabled: true
+  condition:
+    capability: voicemail_raw_hit
+description_updated_at: '2026-10-19T06:31:59Z'

@@ -1,50 +1,51 @@
 tag_id: qwen_unclear_speech_candidate
-version: "2"
+version: '2'
 status: enabled
 name: 疑似含糊人声（Qwen有字、跨模型分歧且SIG低）
-description: |
-  DNSMOS SIG 低档；Qwen 至少一次成功运行产生原始非空转写；SenseVoice/GLM/Qwen 的成功结果存在跨模型分歧。
-  允许双跑不稳定以及成功空输出；不依赖 Silero VAD；缺 DNSMOS 时 compute_acoustic 仅补算 DNSMOS。
-business_definition: |
-  用于寻找说话含糊、可能难以听清的候选，供人工听音确认，不代表已确认发音含糊。
-  必须同时满足：
-  1. DNSMOS SIG 低档（evidence 配置阈值 dnsmos_weak_sig=2.8，capability dnsmos_sig_low，比较为 SIG<=阈值）。
-  2. Qwen 至少一条成功路次的清洗前原始转写去除首尾空白后非空；即使清洗后为空，仍算发生过转写。
-  3. SenseVoice、GLM、Qwen 各至少有一条可用于比较的成功路次；比较全部跨家族成功路次的
-     清洗后 comparison_text，任意一对按现行无害等价判定不一致即构成分歧。
-  不要求任何家族双跑稳定，也不要求全部六路成功。成功空输出参与比较，有字与空构成分歧；
-  失败、缺失和排除路次不参与比较，不能伪装为空输出。某家族没有可比较成功结果时，分歧为 unknown。
-  不依赖 Silero VAD；VAD 缺失、absent 或失败均不参与本 tag 判定，也不因本 tag 补算 VAD。
-  默认 evidence_mode=existing；缺少 DNSMOS 证据时为 unknown。compute_acoustic 模式下文本条件可成立时
-  仅补算 DNSMOS，不触发 VAD/energy。
+description: '同时满足以下三项才打（用于找出可能听不清的候选，供人工确认，不代表已确认含糊）：
+
+  1. DNSMOS 的 SIG 分数不高于 2.8；
+
+  2. Qwen 至少有一次成功识别，且清洗前的原文去掉首尾空白后不为空；
+
+  3. SenseVoice、GLM、Qwen 各至少有一条可比较的成功结果，任意两家清洗后的文字按现行规则不一致（成功但为空的结果也参与比较）。
+
+  不要求同一模型两次结果一致，也不看 VAD。缺少 DNSMOS 结果时无法判断；某一家完全没有可比较的成功结果时，也无法判断分歧。
+
+  '
+business_definition: "用于寻找说话含糊、可能难以听清的候选，供人工听音确认，不代表已确认发音含糊。\n必须同时满足：\n1. DNSMOS SIG 低档（evidence 配置阈值 dnsmos_weak_sig=2.8，capability dnsmos_sig_low，比较为 SIG<=阈值）。\n2. Qwen 至少一条成功路次的清洗前原始转写去除首尾空白后非空；即使清洗后为空，仍算发生过转写。\n3. SenseVoice、GLM、Qwen 各至少有一条可用于比较的成功路次；比较全部跨家族成功路次的\n   清洗后 comparison_text，任意一对按现行无害等价判定不一致即构成分歧。\n不要求任何家族双跑稳定，也不要求全部六路成功。成功空输出参与比较，有字与空构成分歧；\n失败、缺失和排除路次不参与比较，不能伪装为空输出。某家族没有可比较成功结果时，分歧为 unknown。\n不依赖 Silero VAD；VAD 缺失、absent 或失败均不参与本 tag 判定，也不因本 tag 补算 VAD。\n默认 evidence_mode=existing；缺少 DNSMOS 证据时为 unknown。compute_acoustic 模式下文本条件可成立时\n仅补算 DNSMOS，不触发 VAD/energy。\n"
 dependencies:
   fragments: []
   lexicons: []
   requires_acoustic: true
 examples:
   hit:
-    - description: SIG=1.5；SV/GLM 成功文本均为「需要」，Qwen 成功文本为「不需要」；无 VAD 仍命中。
-      notes: 规则示例，非真实模型验证记录，也非已确认含糊人声。
-    - description: SIG<=2.8；SV/GLM 成功输出为空，Qwen 至少一次成功原始有字；有字与空构成跨模型分歧。
-    - description: SIG<=2.8；Qwen 一路失败、另一路成功为「不需要」，SV/GLM 各有成功结果「需要」；仍命中。
+  - description: SIG=1.5；SV/GLM 成功文本均为「需要」，Qwen 成功文本为「不需要」；无 VAD 仍命中。
+    notes: 规则示例，非真实模型验证记录，也非已确认含糊人声。
+  - description: SIG<=2.8；SV/GLM 成功输出为空，Qwen 至少一次成功原始有字；有字与空构成跨模型分歧。
+  - description: SIG<=2.8；Qwen 一路失败、另一路成功为「不需要」，SV/GLM 各有成功结果「需要」；仍命中。
   miss:
-    - description: 三家成功结果仅有标点等无害差异，全部等价；即使 SIG 很低也不命中。
-    - description: Qwen 有成功路次，但所有成功原始输出均为空；失败路次残留有字也不能满足 Qwen 有字。
-    - description: SIG>2.8；即使 Qwen 有字且模型分歧，也不命中。
+  - description: 三家成功结果仅有标点等无害差异，全部等价；即使 SIG 很低也不命中。
+  - description: Qwen 有成功路次，但所有成功原始输出均为空；失败路次残留有字也不能满足 Qwen 有字。
+  - description: SIG>2.8；即使 Qwen 有字且模型分歧，也不命中。
   unknown:
-    - description: Qwen 有字且三家分歧，但 existing 模式下缺少 DNSMOS 证据。
-    - description: 某家族全部失败或缺失，没有可比较成功结果；不能把它当作空输出制造分歧。
+  - description: Qwen 有字且三家分歧，但 existing 模式下缺少 DNSMOS 证据。
+  - description: 某家族全部失败或缺失，没有可比较成功结果；不能把它当作空输出制造分歧。
 rules:
-  - rule_id: rule_qwen_unclear_speech_candidate_v1
-    version: "2"
-    tag_id: qwen_unclear_speech_candidate
-    enabled: true
-    description: SIG低档 + Qwen至少一次成功原始有字 + 三家成功结果任意跨家族分歧；不依赖VAD。
-    condition:
-      all:
-        - capability: dnsmos_sig_low
-        - capability: family_has_successful_raw_text
-          family: qwen
-        - capability: cross_family_text_disagreement
-          families: [sensevoice, glm, qwen]
-          include_empty: true
+- rule_id: rule_qwen_unclear_speech_candidate_v1
+  version: '2'
+  tag_id: qwen_unclear_speech_candidate
+  enabled: true
+  description: SIG低档 + Qwen至少一次成功原始有字 + 三家成功结果任意跨家族分歧；不依赖VAD。
+  condition:
+    all:
+    - capability: dnsmos_sig_low
+    - capability: family_has_successful_raw_text
+      family: qwen
+    - capability: cross_family_text_disagreement
+      families:
+      - sensevoice
+      - glm
+      - qwen
+      include_empty: true
+description_updated_at: '2026-10-19T06:31:59Z'

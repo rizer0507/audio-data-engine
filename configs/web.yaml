@@ -1,0 +1,53 @@
+# Web 服务配置（占位示例；部署时填写本机真实路径与模型地址）
+# 相对路径相对于 project_root 解析。project_root 必须由启动参数或环境变量显式指定。
+
+bind_host: "127.0.0.1"
+# 应用监听端口；服务器上由 nginx 反代到本端口，勿直接对外暴露 8080
+bind_port: 5179
+
+# 启动时用 --project-root / AUDIO_ENGINE_PROJECT_ROOT 覆盖；此处可留空。
+project_root: ""
+
+sqlite_path: var/web.sqlite3
+runs_dir: runs/web
+plugins_config: configs/plugins.yaml
+sources_manifest: resources/manifest.yaml
+static_dir: frontend/dist
+
+# 数据源路径必须落在这些根目录之下（解析符号链接后检查）
+allowed_source_roots:
+  - "D:/Work"
+  - "/data"
+
+# 计划默认有效期（秒）
+plan_ttl_seconds: 900
+
+worker:
+  poll_interval_seconds: 2
+  heartbeat_interval_seconds: 5
+  lease_seconds: 30
+  max_concurrent_jobs: 1
+  cancel_grace_seconds: 15
+  log_chunk_max_bytes: 65536
+
+models:
+  - connection_id: glm_main
+    name: GLM ASR
+    provider: glm
+    base_url: http://127.0.0.1:8001/v1
+    model: glm-asr
+    model_revision: deployment_001
+    api_key_env: GLM_ASR_API_KEY
+    timeout_seconds: 120
+    concurrency: 4
+  - connection_id: qwen_main
+    name: Qwen ASR
+    provider: qwen
+    base_url: http://127.0.0.1:8002/v1
+    model: qwen3-asr
+    model_revision: deployment_001
+    api_key_env: QWEN_ASR_API_KEY
+    timeout_seconds: 120
+    concurrency: 4
+
+operator_id: local_operator

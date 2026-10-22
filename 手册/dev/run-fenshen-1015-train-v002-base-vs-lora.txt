@@ -1,0 +1,44 @@
+fenshen_1015 train_v002 · 仅训练集(train) 基座 vs LoRA 覆盖评测
+================================================================================
+# 不含 dev；5929 条；含训练集样本，仅作覆盖评测，非正式独立 eval_core
+# 先改 LORA_CKPT；基座/LoRA 端口按实机改
+
+cd /data2/data-cp/lizi/audio-data-engine
+source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
+
+export TRAIN=/data2/data-cp/lizi/audio-qwen3-asr-train
+export BASE_MODEL=/data2/data-cp/zcl/models/Qwen3-ASR-1___7B
+export CHAT_TEMPLATE=/data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+export LORA_CKPT=/path/to/your/lora/checkpoint-XXXX
+export EVAL_NAME=eval_fenshen_1015_train_v002
+export EVAL_SOURCE=datasets/stage1/derived/gold_fenshen_1015_train_v002.parquet
+export VLLM020_PY=/data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/python
+export VLLM020_BIN=/data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/bin/vllm
+export QWEN_ASR_API_KEY=dummy
+
+# 1) 从 train_v002 的 train 生成引擎金标（本机已生成可跳过；服务器需重跑或同步文件）
+python scripts/build_eval_from_qwen3_dev_split.py --train-repo "$TRAIN" --dataset-rel training_sets/exploratory/fenshen_1015/train_v002 --split train --name fenshen_1015_train_v002 --force
+
+# 2) 注册评测集
+audio-data eval register "$EVAL_SOURCE" --name "$EVAL_NAME" --force
+
+# 3) 起基座 / LoRA vLLM（同 run-fenshen-1015-dev-v002-base-vs-lora.txt）
+# 4) 确认 /v1/models
+# 5) 基座跑批
+unset QWEN_ASR_API_BASE QWEN_ASR_API_BASES
+export QWEN_ASR_API_BASE=http://127.0.0.1:5555
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run qwen-base
+
+# 6) LoRA 跑批
+unset QWEN_ASR_API_BASE QWEN_ASR_API_BASES
+export QWEN_ASR_API_BASE=http://127.0.0.1:5564
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --eval-name "$EVAL_NAME" --asr-run qwen-lora
+
+# 7) 对齐
+audio-data pipeline run pipelines/eval_aggregate.yaml --eval-name "$EVAL_NAME" --join-manifest qwen-base --join-manifest qwen-lora --force
+
+# 8) 算字准对比
+audio-data pipeline run pipelines/eval_metric_pipeline.yaml --eval-name "$EVAL_NAME" --eval-model qwen-base --eval-model qwen-lora --force
+
+# 9) 看报告
+ls datasets/stage3/reports/${EVAL_NAME}/

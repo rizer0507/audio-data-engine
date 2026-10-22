@@ -1,33 +1,42 @@
 tag_id: critical_short
-version: "1"
+version: '1'
 status: enabled
 name: 关键短应答
-description: SenseVoice 稳定代表文本属于关键短应答目录（可与 tag_1 同时命中）
-business_definition: |
-  SenseVoice 家族状态为 stable_text，且其代表文本属于现行 selection 配置中的关键短应答目录
+description: '同时满足以下条件才打：SenseVoice 两次识别出的文字一致且不为空；这段文字落在关键短应答目录里。
+
+  SenseVoice 没有稳定一致的有字结果时，无法判断。可与其他标签同时命中。
+
+  '
+description_updated_at: '2026-10-19T06:31:59Z'
+business_definition: 'SenseVoice 家族状态为 stable_text，且其代表文本属于现行 selection 配置中的关键短应答目录
+
   （capability: is_critical_short_response，阈值与目录出处见 selection_config）。
+
+  '
 dependencies:
   fragments: []
   lexicons: []
   requires_acoustic: false
 examples:
   hit:
-    - description: SenseVoice 稳定文本为「好」且属于关键短应答目录。
-      notes: 规则示例，非真实模型验证记录。
+  - description: SenseVoice 稳定文本为「好」且属于关键短应答目录。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: SenseVoice 稳定文本为较长句子，不在关键短应答目录。
+  - description: SenseVoice 稳定文本为较长句子，不在关键短应答目录。
   unknown:
-    - description: SenseVoice 无稳定代表文本（非 stable_text）。
+  - description: SenseVoice 无稳定代表文本（非 stable_text）。
 rules:
-  - rule_id: rule_critical_short_v1
-    version: "1"
-    tag_id: critical_short
-    enabled: true
-    description: 与 tag_1 可重叠的纯文本规则：SenseVoice 关键短应答
-    condition:
-      all:
-        - capability: family_state
-          family: sensevoice
-          state: stable_text
-        - capability: is_critical_short_response
-          text: {source: family_representative, family: sensevoice}
+- rule_id: rule_critical_short_v1
+  version: '1'
+  tag_id: critical_short
+  enabled: true
+  description: 与 tag_1 可重叠的纯文本规则：SenseVoice 关键短应答
+  condition:
+    all:
+    - capability: family_state
+      family: sensevoice
+      state: stable_text
+    - capability: is_critical_short_response
+      text:
+        source: family_representative
+        family: sensevoice

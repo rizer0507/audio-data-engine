@@ -1,0 +1,35 @@
+tag_id: web_stage5_ext_text_tag
+version: '1'
+status: archived
+name: 阶段五扩展文本Tag
+description: '当 SenseVoice 两次识别结果一致且有字时，打这个标签。
+
+  用于阶段五插件扩展验收，非正式业务标签。SenseVoice 状态无法判定时，无法判断。
+
+  '
+business_definition: '当 SenseVoice 家族状态为 stable_text 时命中。用于阶段五插件扩展验收，非正式业务标签。
+
+  '
+dependencies:
+  fragments: []
+  lexicons: []
+  requires_acoustic: false
+examples:
+  hit:
+  - description: SenseVoice 稳定有字。
+    notes: 规则示例，非真实模型验证记录。
+  miss:
+  - description: SenseVoice 非 stable_text。
+  unknown:
+  - description: 家族状态无法判定。
+rules:
+- rule_id: rule_web_stage5_ext_text_tag_v1
+  version: '1'
+  tag_id: web_stage5_ext_text_tag
+  enabled: true
+  description: 复用 family_state 能力的最小条件
+  condition:
+    capability: family_state
+    family: sensevoice
+    state: stable_text
+description_updated_at: '2026-10-19T06:31:59Z'

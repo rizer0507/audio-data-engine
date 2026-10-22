@@ -1,29 +1,36 @@
 tag_id: qwen_stable_empty_diag
-version: "1"
+version: '1'
 status: enabled
 name: Qwen稳定空诊断
-description: 明文要求 Qwen=stable_empty；不经 not(一致) 间接推断
-business_definition: |
-  Qwen 家族状态明确为 stable_empty（capability: family_state）。
+description: '只有 Qwen 两次识别都成功、且识别出的文字都为空时，才打这个标签。
+
+  Qwen 有字，或某次识别失败导致状态不稳定时，不打。
+
+  '
+business_definition: 'Qwen 家族状态明确为 stable_empty（capability: family_state）。
+
   不得用 not(texts_equivalent) 等间接方式推断「空」而误命中其它分歧类 tag。
+
+  '
 dependencies:
   fragments: []
   lexicons: []
   requires_acoustic: false
 examples:
   hit:
-    - description: Qwen 两路成功且文本均为空 → stable_empty。
-      notes: 规则示例，非真实模型验证记录。
+  - description: Qwen 两路成功且文本均为空 → stable_empty。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: Qwen 为 stable_text。
+  - description: Qwen 为 stable_text。
   unknown:
-    - description: Qwen 路次失败导致家族状态非稳定态。
+  - description: Qwen 路次失败导致家族状态非稳定态。
 rules:
-  - rule_id: rule_qwen_stable_empty_v1
-    version: "1"
-    tag_id: qwen_stable_empty_diag
-    enabled: true
-    condition:
-      capability: family_state
-      family: qwen
-      state: stable_empty
+- rule_id: rule_qwen_stable_empty_v1
+  version: '1'
+  tag_id: qwen_stable_empty_diag
+  enabled: true
+  condition:
+    capability: family_state
+    family: qwen
+    state: stable_empty
+description_updated_at: '2026-10-19T06:31:59Z'

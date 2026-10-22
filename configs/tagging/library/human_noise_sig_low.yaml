@@ -1,30 +1,38 @@
 tag_id: human_noise_sig_low
-version: "1"
+version: '1'
 status: enabled
 name: 人声且SIG低档
-description: VAD present 且 DNSMOS SIG 低档（依赖声学；默认 existing 模式缺证据为 unknown）
-business_definition: |
-  Silero VAD 判定 speech present，且 DNSMOS SIG 低于 selection/acoustic 配置中的低档阈值
+description: '同时满足以下条件才打：检测到有人说话（Silero VAD 判定为有语音）；DNSMOS 的 SIG 分数不高于低档阈值（默认 2.8）。
+
+  缺少 VAD 或 DNSMOS 检测结果时，无法判断。
+
+  '
+business_definition: 'Silero VAD 判定 speech present，且 DNSMOS SIG 低于 selection/acoustic 配置中的低档阈值
+
   （capabilities: vad_speech_present + dnsmos_sig_low）。默认 evidence_mode=existing 时，
+
   缺声学证据为 unknown，不伪造、不自动重跑推理。
+
+  '
 dependencies:
   fragments: []
   lexicons: []
   requires_acoustic: true
 examples:
   hit:
-    - description: 已有 VAD=present 且 DNSMOS SIG 低于阈值。
-      notes: 规则示例，非真实模型验证记录。
+  - description: 已有 VAD=present 且 DNSMOS SIG 低于阈值。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: VAD=absent 或 SIG 不在低档。
+  - description: VAD=absent 或 SIG 不在低档。
   unknown:
-    - description: existing 模式下样本缺少 VAD/DNSMOS 证据。
+  - description: existing 模式下样本缺少 VAD/DNSMOS 证据。
 rules:
-  - rule_id: rule_human_noise_sig_low_v1
-    version: "1"
-    tag_id: human_noise_sig_low
-    enabled: true
-    condition:
-      all:
-        - capability: vad_speech_present
-        - capability: dnsmos_sig_low
+- rule_id: rule_human_noise_sig_low_v1
+  version: '1'
+  tag_id: human_noise_sig_low
+  enabled: true
+  condition:
+    all:
+    - capability: vad_speech_present
+    - capability: dnsmos_sig_low
+description_updated_at: '2026-10-19T06:31:59Z'

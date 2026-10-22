@@ -14,11 +14,15 @@ docs/web-service/02-后端与任务执行.md
 docs/web-service/03-前端操作台.md
 docs/web-service/04-联调验收与部署.md
 
-当前 frontend、src/audio_engine/web、tests/web、configs/web.yaml 是已经生成的空骨架。先检查工作区和适用的 AGENTS.md，保留现有未提交修改；核对现有代码能力，不把历史需求中的“待实现”自动当作当前缺失，也不把函数存在当作已验收。
+frontend、src/audio_engine/web、tests/web、configs/web.yaml 已生成，若当前已有后续实现则在其上增量修改，不重新生成空骨架。先检查工作区和适用的 AGENTS.md，保留现有未提交修改；核对现有代码能力，不把历史需求中的“待实现”自动当作当前缺失，也不把函数存在当作已验收。
 
 核心要求：流水线和 tag 均作为插件，通过统一 describe/validate/plan/execute 契约、注册表、版本与快照接入。复用现有 PipelineRunner、ProductionOrchestrator、OperatorRegistry、TagLibrary 和 TaggingService。新增已有能力组合的流水线或 tag，只新增定义/登记并刷新即可使用，不修改 API、Worker 或前端业务分发。前端按插件 schema 生成表单，不能写死插件列表或每个插件专用分支。
 
 用户负责提供真实服务器数据源，并自行在指定端口启动 GLM 或 Qwen 的 vLLM。你只实现地址、端口、served-model-name、provider 协议和 route 绑定的检查与准确传递，不管理外部 vLLM 生命周期，不调用历史模型启动/杀进程脚本，不回退加载本地 ASR 权重。
+
+用户不手填 source_id 或 connection_id：数据源通过 batch 和路径登记，模型通过 provider、地址/端口和模型名保存，后端自动生成并持久化稳定内部 ID；重复登记复用原项，编辑不重新生成。任务页面按 batch/路径或模型名称选择并自动绑定 ID。batch 要作为实际引擎 source_name，模型连接跨 batch 复用。
+
+流水线插件与 tag 列表/详情均必须有“归档”和“启用”按钮，通过统一状态 API 写回原配置，重启后保留。页面提供在用(enabled)、归档(archived)筛选。归档项不能用于新提交，但旧任务和历史标签/产物保留，恢复启用不改规则版本、不触发推理。状态管理不是完整规则编辑器，不能因为本期不做在线代码编辑而省略状态按钮。
 
 实现 FastAPI、独立 Worker、SQLite 和 React/TypeScript 页面；长任务持久化、按任务隔离模型参数与输出、冻结完整递归配置，支持真实进度/增量日志、取消、兼容断点恢复和实际产物。取消只停止本服务创建的任务进程树，不能停止用户 vLLM。保持 tag 三态、重叠、证据去重、人工状态、片段血缘及正式 Gold 门禁。
 
@@ -46,6 +50,8 @@ docs/web-service/04-联调验收与部署.md
 
 实现数据源唯一登记、模型连接配置与两级检查、插件 API、服务端计划、幂等入队、SQLite 状态机、attempt/lease、独立任务子进程、进度与增量日志、取消、兼容恢复、输出隔离和发布对账。处理当前 resources/manifest.yaml 重复 sources 键，先保留备份，冲突要报告，不静默丢数据。
 
+登记 API 不要求用户填写 source_id/connection_id；根据源 batch/路径或模型业务连接字段完成登记并自动分配稳定 ID，同一业务登记重试不重复创建，编辑不换 ID。实现 pipeline/tag 共用的状态 PATCH，将 enabled/archived 持久化回唯一配置来源，包含 revision 冲突、幂等、目录刷新与新提交归档拦截。
+
 GLM/Qwen 复用仓库现有的不同 HTTP 协议。冻结每个 route 的连接地址、端口、model 和 model_revision；不能让继承环境变量或另一任务覆盖连接。用户已启动的 vLLM 不由本服务启动或停止。API/Worker 共享进程不修改全局 os.environ。
 
 通过本地 HTTP 测试服务验证实际请求端口、协议、多 route 隔离和错误处理；通过小型测试插件覆盖幂等、双领取、取消、崩溃、失租迟到发布、恢复不兼容和 API 重启。生产编排验证要深入子节点。更新验收记录及启动方式，明确哪些是协议测试，哪些尚待真实服务器验证。不要只完成 CRUD 后结束。
@@ -59,6 +65,8 @@ GLM/Qwen 复用仓库现有的不同 HTTP 协议。冻结每个 route 的连接�
 实现 Sources、Models、Plugins、Jobs、JobDetail、Datasets、DatasetDetail、Evaluations，复用已有骨架和必要公共组件。全部接真实 API，具备加载/空/错误状态、字段错误、分页、计划过期和目录漂移处理；不得用固定样本、随机指标或假进度冒充实际功能。
 
 任务表单从插件目录和 JSON Schema 生成，模型绑定按动态 route 配置，tag 显式选择版本；新增插件后只刷新目录就可见，不能增加按插件 ID 的专用前端分支。规划不执行推理，修改字段后旧计划失效，提交使用幂等键。任务详情按 cursor 增量读取日志，刷新页面后能恢复真实任务状态。
+
+数据源表单只填 batch/路径等业务字段，模型表单不要求手填 connection_id；ID 从后端响应自动取得。任务选择器用 batch/路径与模型名称呈现。Plugins 的流水线与 tag 列表/详情都实现“归档/启用”按钮和在用/归档筛选，直接调用统一状态 API；状态要在刷新/重启后保留，失败不假成功，不能只做浏览器本地分类。
 
 本阶段接通基础结果浏览与音频接口；审核/导出/评测若属于下一阶段，明确实际可用范围，不生成假数据。完成类型检查、生产构建和核心浏览器验证，更新验收记录。保持目录精简，不引入额外 Node 后端或多个 UI 框架。
 ```
@@ -85,4 +93,16 @@ GLM/Qwen 复用仓库现有的不同 HTTP 协议。冻结每个 route 的连接�
 若当前环境可访问用户提供的真实服务器源和已启动 vLLM，在明确受限的约 10 条真实音频上完成实际小批次，记录 source/job/attempt/plugin/model_revision/artifact 等 ID、实际端口和结果。整条主链的 VAD/DNSMOS 等依赖不齐时，列明未验证节点，不能将 ASR 成功宣称整链完成。不要启动或停止用户模型，也不要未经限定直接运行全量真实数据。
 
 交付两个实际验证的 Web/Worker 启动入口、同源前端托管、配置示例、插件接入说明、服务重启与任务恢复/导出操作步骤。完善 docs/web-service/验收记录.md，区分离线、协议、浏览器和真实环境结果。真实环境不可达时完成可独立验证部分并给出精确待验收步骤，不编造全部通过。不自动 commit、push 或部署到未指定服务器。
+```
+
+## 已开始实现时的增量修正提示词
+
+```text
+请保留当前实现和已有工作区修改，按最新 docs/web-service.md 及 00～04 文档增量修正以下两项，不要重新创建空骨架或推倒重写：
+
+1. source_id、connection_id 改为后端首次登记自动生成并持久化的内部字段，普通创建表单不再要求填写。数据源填 batch 和服务器路径，任务展示 batch/路径并自动绑定 source_id；batch 映射引擎 source_name。模型填 provider、地址/端口、model 等业务字段，自动取得 connection_id，可跨 batch 复用。重复登记去重，修改和重启保留原 ID，兼容已有手写 ID 和旧任务引用。
+
+2. 流水线插件和 tag 都增加“归档/启用”按钮和在用(enabled)/归档(archived)分类。经统一 PATCH /api/v1/plugins/{kind}/{plugin_id}/status 写回原配置，带 revision、原子持久化和目录刷新。归档不删除规则、样本标签、人工记录或历史产物，不终止已提交任务，不执行推理；归档项阻止新提交/新 rerun，重新启用后可重新规划。兼容旧 disabled，不自动启用。
+
+同步修正前后端类型、API、选择器、数据兼容及测试，完成无需手填 ID、重复登记/重启、两类插件状态持久化、归档新任务拦截和旧任务保留的验收。更新验收记录，如实报告结果，不自动 commit 或 push。
 ```

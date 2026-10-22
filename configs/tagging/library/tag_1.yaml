@@ -1,51 +1,63 @@
-# Tag 定义库：tag_1（一 tag 一文件）
 tag_id: tag_1
-version: "1"
+version: '1'
 status: enabled
 name: SenseVoice/GLM单字且与Qwen分歧
-description: |
-  全族双跑成功；三族稳定有字；SenseVoice/GLM 无害等价且共同代表文本命中 tag_1 词表并恰为一汉字；
-  Qwen 与 SenseVoice 按无害等价不一致。
-business_definition: |
-  在全部 ASR 家族双跑成功、三族均有稳定代表文本的前提下：SenseVoice 与 GLM 代表文本无害等价，
+description: '同时满足以下条件才打：SenseVoice、GLM、Qwen 全部两次识别都成功，且三家都有稳定一致的有字结果；SenseVoice 与 GLM 文字一致，这段共同文字在 tag_1 词表中且恰好是一个汉字；Qwen 与 SenseVoice 的文字不一致。
+
+  可与其他标签同时命中。任一家识别不完整导致条件无法核实时，无法判断。
+
+  '
+business_definition: '在全部 ASR 家族双跑成功、三族均有稳定代表文本的前提下：SenseVoice 与 GLM 代表文本无害等价，
+
   且该共同代表文本命中 tag_1 词表并恰好为一个汉字；同时 Qwen 代表文本与 SenseVoice 代表文本
+
   按无害等价判定为不一致。可与 critical_short 等其它 tag 同时命中。
+
+  '
 dependencies:
   fragments:
-    - all_families_dual_success
-    - three_families_stable_text
-    - sensevoice_glm_equivalent
+  - all_families_dual_success
+  - three_families_stable_text
+  - sensevoice_glm_equivalent
   lexicons:
-    - tag_1
+  - tag_1
   requires_acoustic: false
 examples:
   hit:
-    - description: SenseVoice/GLM 均为「好」，Qwen 为「要」；词表命中且单汉字。
-      notes: 规则示例，非真实模型验证记录。
+  - description: SenseVoice/GLM 均为「好」，Qwen 为「要」；词表命中且单汉字。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: SenseVoice/GLM/Qwen 均为「好」——无分歧，不命中。
-    - description: SenseVoice/GLM 为「好啊」——非整段单汉字，不命中。
+  - description: SenseVoice/GLM/Qwen 均为「好」——无分歧，不命中。
+  - description: SenseVoice/GLM 为「好啊」——非整段单汉字，不命中。
   unknown:
-    - description: Qwen 某一路失败导致家族非 dual_success——前置片段不满足或整规则 unknown。
+  - description: Qwen 某一路失败导致家族非 dual_success——前置片段不满足或整规则 unknown。
 rules:
-  - rule_id: rule_tag_1_v1
-    version: "1"
-    tag_id: tag_1
-    enabled: true
-    description: 文档 §4.2 tag_1 完整条件
-    text_binding:
-      sg_text: {source: family_representative, family: sensevoice}
-    condition:
-      all:
-        - fragment: all_families_dual_success
-        - fragment: three_families_stable_text
-        - fragment: sensevoice_glm_equivalent
-        - capability: lexicon_match
-          lexicon: tag_1
-          text: {binding: sg_text}
-        - capability: single_han_char
-          text: {binding: sg_text}
-        - not:
-            capability: texts_equivalent
-            left: {source: family_representative, family: qwen}
-            right: {binding: sg_text}
+- rule_id: rule_tag_1_v1
+  version: '1'
+  tag_id: tag_1
+  enabled: true
+  description: 文档 §4.2 tag_1 完整条件
+  text_binding:
+    sg_text:
+      source: family_representative
+      family: sensevoice
+  condition:
+    all:
+    - fragment: all_families_dual_success
+    - fragment: three_families_stable_text
+    - fragment: sensevoice_glm_equivalent
+    - capability: lexicon_match
+      lexicon: tag_1
+      text:
+        binding: sg_text
+    - capability: single_han_char
+      text:
+        binding: sg_text
+    - not:
+        capability: texts_equivalent
+        left:
+          source: family_representative
+          family: qwen
+        right:
+          binding: sg_text
+description_updated_at: '2026-10-19T06:31:59Z'

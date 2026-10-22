@@ -1,118 +1,177 @@
-# Tag 定义库：semantic_risk_text_disagreement（043）
-# 业务公式：Qwen未命中排除词且((①且②)或③)；两个分支均要求全部配置家族双跑成功 + 三族 stable_text。
 tag_id: semantic_risk_text_disagreement
-version: "5"
+version: '5'
 status: enabled
 name: 语义风险词分歧或Qwen短字分歧
-description: 全族双跑成功且三族稳定有字、Qwen未命中排除词；语义准入词命中并SG同文Qwen异文，或Qwen稳定代表文本为1~3个汉字且三族两两不等价。
-business_definition: |
-  在全部配置家族双跑成功、SenseVoice/GLM/Qwen均为stable_text，且Qwen稳定代表文本未命中semantic_risk_qwen_exclusions的前提下：
+description: '在 SenseVoice、GLM、Qwen 全部两次识别都成功，三家都有稳定一致的有字结果，且 Qwen 稳定文字未命中排除词（如「不需要、不用、不要、不可用、没有」）的前提下，满足下面任一分支就打：
+
+
+  分支一：六路原始识别文字中，任一路命中语义准入词表；同时 SenseVoice 与 GLM 文字一致，但 Qwen 与 SenseVoice 不一致。
+
+
+  分支二：Qwen 的稳定文字恰好是 1、2 或 3 个汉字（整段长度也等于汉字数），且三家文字两两都不一致。SenseVoice、GLM 不限字数，也不要求命中准入词。
+
+
+  排除词只检查 Qwen。缺少稳定文字时，相关比较无法判断。
+
+  '
+business_definition: '在全部配置家族双跑成功、SenseVoice/GLM/Qwen均为stable_text，且Qwen稳定代表文本未命中semantic_risk_qwen_exclusions的前提下：
+
   A：任一六路原文命中semantic_risk_keywords中的多字需求、意愿、接受、明确拒绝或指定准入表达，且SV与GLM无害等价、Qwen与SV不等价；
+
   或B：Qwen的稳定代表文本恰好为1个、2个或3个汉字（整段文本长度等于汉字数），且三族代表文本两两不等价；SV和GLM不限文本长度。
+
   准入词表不含单字；指定准入表达包括“对呀、谢谢、我有、有啊、可以、确实、对啊、是啊、行啊”等。
+
   B要求SV≉GLM、SV≉Qwen、GLM≉Qwen三对均成立；不要求准入词表命中；一致性与字数判断沿用现行引擎。
+
   排除词表对两个分支均生效：Qwen清洗后的稳定代表文本包含“不需要、不用、不要、不可用、没有”任一项即不检出本tag；“沒有”同样排除。
+
   排除只检查Qwen，不因SV/GLM中出现排除词而剔除Qwen肯定的样本。B不依赖准入词表，但仍执行排除词表。
+
+  '
 dependencies:
   fragments:
-    - all_families_dual_success
-    - three_families_stable_text
-    - sensevoice_glm_equivalent
+  - all_families_dual_success
+  - three_families_stable_text
+  - sensevoice_glm_equivalent
   lexicons:
-    - semantic_risk_keywords
-    - semantic_risk_qwen_exclusions
+  - semantic_risk_keywords
+  - semantic_risk_qwen_exclusions
   requires_acoustic: false
 examples:
   hit:
-    - description: SV/GLM各双跑稳定为“需要贷款”，Qwen双跑稳定为“天气晴朗”，原文关键词命中，分支A成立。
-    - description: SV/GLM/Qwen各双跑稳定为“甲/乙/丙”；Qwen为单字且三族两两不等价，分支B成立。
-    - description: SV/GLM/Qwen稳定为“甲乙/丙丁/戊己”；Qwen为双字且三族两两不等价，分支B成立。
-    - description: SV/GLM稳定为“甲乙丙/丁戊己”，Qwen稳定为“庚辛壬”；Qwen为三字且三族两两不等价，分支B成立。
+  - description: SV/GLM各双跑稳定为“需要贷款”，Qwen双跑稳定为“天气晴朗”，原文关键词命中，分支A成立。
+  - description: SV/GLM/Qwen各双跑稳定为“甲/乙/丙”；Qwen为单字且三族两两不等价，分支B成立。
+  - description: SV/GLM/Qwen稳定为“甲乙/丙丁/戊己”；Qwen为双字且三族两两不等价，分支B成立。
+  - description: SV/GLM稳定为“甲乙丙/丁戊己”，Qwen稳定为“庚辛壬”；Qwen为三字且三族两两不等价，分支B成立。
   miss:
-    - description: 三族均稳定为“需要贷款”；仅有关键词命中，没有分歧，且Qwen不是1~3字。
-    - description: SV/GLM/Qwen稳定为“甲/甲/甲”；Qwen虽为单字，但三族无分歧。
-    - description: SV/GLM稳定为“甲乙”，Qwen稳定为“甲丙”；无关键词且虽有分歧，但Qwen不是恰好1~3个汉字整段。
-    - description: SV/GLM稳定为“甲/乙”，Qwen稳定为“甲”；Qwen与SV等价，不满足三族两两不等价。
-    - description: SV/GLM稳定为“需要”，Qwen稳定为“不需要了谢谢”；虽满足原分支A，仍因Qwen命中排除词“不需要”而不检出。
+  - description: 三族均稳定为“需要贷款”；仅有关键词命中，没有分歧，且Qwen不是1~3字。
+  - description: SV/GLM/Qwen稳定为“甲/甲/甲”；Qwen虽为单字，但三族无分歧。
+  - description: SV/GLM稳定为“甲乙”，Qwen稳定为“甲丙”；无关键词且虽有分歧，但Qwen不是恰好1~3个汉字整段。
+  - description: SV/GLM稳定为“甲/乙”，Qwen稳定为“甲”；Qwen与SV等价，不满足三族两两不等价。
+  - description: SV/GLM稳定为“需要”，Qwen稳定为“不需要了谢谢”；虽满足原分支A，仍因Qwen命中排除词“不需要”而不检出。
   unknown:
-    - description: 比较所需的家族代表文本无法取得时，该比较为unknown；整条规则仍按前置条件及三态AND合成。
+  - description: 比较所需的家族代表文本无法取得时，该比较为unknown；整条规则仍按前置条件及三态AND合成。
 rules:
-  - rule_id: rule_semantic_risk_keyword_sg_qwen_v1
-    version: "2"
-    tag_id: semantic_risk_text_disagreement
-    enabled: true
-    description: 分支A：Qwen未命中排除词，多字强倾向语义词命中且SV/GLM同文、Qwen异文。
-    condition:
-      all:
-        - fragment: all_families_dual_success
-        - fragment: three_families_stable_text
-        - not:
-            capability: lexicon_match
-            lexicon: semantic_risk_qwen_exclusions
-            text: {source: family_representative, family: qwen}
-        - fragment: sensevoice_glm_equivalent
-        - capability: texts_not_equivalent
-          left: {source: family_representative, family: qwen}
-          right: {source: family_representative, family: sensevoice}
-        - any:
-            - capability: lexicon_match
-              lexicon: semantic_risk_keywords
-              text: {source: route_raw, run_id: sensevoice_1}
-            - capability: lexicon_match
-              lexicon: semantic_risk_keywords
-              text: {source: route_raw, run_id: sensevoice_2}
-            - capability: lexicon_match
-              lexicon: semantic_risk_keywords
-              text: {source: route_raw, run_id: glm_1}
-            - capability: lexicon_match
-              lexicon: semantic_risk_keywords
-              text: {source: route_raw, run_id: glm_2}
-            - capability: lexicon_match
-              lexicon: semantic_risk_keywords
-              text: {source: route_raw, run_id: qwen_1}
-            - capability: lexicon_match
-              lexicon: semantic_risk_keywords
-              text: {source: route_raw, run_id: qwen_2}
-  - rule_id: rule_semantic_risk_single_char_pairwise_v1
-    version: "5"
-    tag_id: semantic_risk_text_disagreement
-    enabled: true
-    description: 分支B：Qwen未命中排除词、稳定代表文本为1~3个汉字，且三族两两不等价；SV/GLM不限长度，无需准入关键词。
-    condition:
-      all:
-        - fragment: all_families_dual_success
-        - fragment: three_families_stable_text
-        - not:
-            capability: lexicon_match
-            lexicon: semantic_risk_qwen_exclusions
-            text: {source: family_representative, family: qwen}
-        - any:
-            - capability: single_han_char
-              text: {source: family_representative, family: qwen}
-            - all:
-                - capability: han_char_count
-                  text: {source: family_representative, family: qwen}
-                  op: eq
-                  n: 2
-                - capability: text_length
-                  text: {source: family_representative, family: qwen}
-                  op: eq
-                  n: 2
-            - all:
-                - capability: han_char_count
-                  text: {source: family_representative, family: qwen}
-                  op: eq
-                  n: 3
-                - capability: text_length
-                  text: {source: family_representative, family: qwen}
-                  op: eq
-                  n: 3
-        - capability: texts_not_equivalent
-          left: {source: family_representative, family: sensevoice}
-          right: {source: family_representative, family: glm}
-        - capability: texts_not_equivalent
-          left: {source: family_representative, family: sensevoice}
-          right: {source: family_representative, family: qwen}
-        - capability: texts_not_equivalent
-          left: {source: family_representative, family: glm}
-          right: {source: family_representative, family: qwen}
+- rule_id: rule_semantic_risk_keyword_sg_qwen_v1
+  version: '2'
+  tag_id: semantic_risk_text_disagreement
+  enabled: true
+  description: 分支A：Qwen未命中排除词，多字强倾向语义词命中且SV/GLM同文、Qwen异文。
+  condition:
+    all:
+    - fragment: all_families_dual_success
+    - fragment: three_families_stable_text
+    - not:
+        capability: lexicon_match
+        lexicon: semantic_risk_qwen_exclusions
+        text:
+          source: family_representative
+          family: qwen
+    - fragment: sensevoice_glm_equivalent
+    - capability: texts_not_equivalent
+      left:
+        source: family_representative
+        family: qwen
+      right:
+        source: family_representative
+        family: sensevoice
+    - any:
+      - capability: lexicon_match
+        lexicon: semantic_risk_keywords
+        text:
+          source: route_raw
+          run_id: sensevoice_1
+      - capability: lexicon_match
+        lexicon: semantic_risk_keywords
+        text:
+          source: route_raw
+          run_id: sensevoice_2
+      - capability: lexicon_match
+        lexicon: semantic_risk_keywords
+        text:
+          source: route_raw
+          run_id: glm_1
+      - capability: lexicon_match
+        lexicon: semantic_risk_keywords
+        text:
+          source: route_raw
+          run_id: glm_2
+      - capability: lexicon_match
+        lexicon: semantic_risk_keywords
+        text:
+          source: route_raw
+          run_id: qwen_1
+      - capability: lexicon_match
+        lexicon: semantic_risk_keywords
+        text:
+          source: route_raw
+          run_id: qwen_2
+- rule_id: rule_semantic_risk_single_char_pairwise_v1
+  version: '5'
+  tag_id: semantic_risk_text_disagreement
+  enabled: true
+  description: 分支B：Qwen未命中排除词、稳定代表文本为1~3个汉字，且三族两两不等价；SV/GLM不限长度，无需准入关键词。
+  condition:
+    all:
+    - fragment: all_families_dual_success
+    - fragment: three_families_stable_text
+    - not:
+        capability: lexicon_match
+        lexicon: semantic_risk_qwen_exclusions
+        text:
+          source: family_representative
+          family: qwen
+    - any:
+      - capability: single_han_char
+        text:
+          source: family_representative
+          family: qwen
+      - all:
+        - capability: han_char_count
+          text:
+            source: family_representative
+            family: qwen
+          op: eq
+          n: 2
+        - capability: text_length
+          text:
+            source: family_representative
+            family: qwen
+          op: eq
+          n: 2
+      - all:
+        - capability: han_char_count
+          text:
+            source: family_representative
+            family: qwen
+          op: eq
+          n: 3
+        - capability: text_length
+          text:
+            source: family_representative
+            family: qwen
+          op: eq
+          n: 3
+    - capability: texts_not_equivalent
+      left:
+        source: family_representative
+        family: sensevoice
+      right:
+        source: family_representative
+        family: glm
+    - capability: texts_not_equivalent
+      left:
+        source: family_representative
+        family: sensevoice
+      right:
+        source: family_representative
+        family: qwen
+    - capability: texts_not_equivalent
+      left:
+        source: family_representative
+        family: glm
+      right:
+        source: family_representative
+        family: qwen
+description_updated_at: '2026-10-19T06:31:59Z'

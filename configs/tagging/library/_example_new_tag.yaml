@@ -1,32 +1,35 @@
-# 新增 tag 最小示例（文件名以 _ 开头，不会被库加载器自动收录）。
-# 用法：复制为本目录下 <tag_id>.yaml，删掉文件名开头的 _，写入真实 tag_id，
-# 再在运行配置 select_tags 中显式选入对应 tag_id + version。
 tag_id: example_new_tag
-version: "1"
+version: '1'
 status: enabled
 name: 新增Tag最小示例
-description: 演示如何仅新增定义文件并选入运行配置（无需改 Python / 复制流水线）。
-business_definition: |
-  示例：当 SenseVoice 为 stable_text 时命中。请替换为真实业务定义后再启用。
+description: '示例：当 SenseVoice 两次识别结果一致且有字时打这个标签。
+
+  请换成真实业务说明后再启用。
+
+  '
+business_definition: '示例：当 SenseVoice 为 stable_text 时命中。请替换为真实业务定义后再启用。
+
+  '
 dependencies:
   fragments: []
   lexicons: []
   requires_acoustic: false
 examples:
   hit:
-    - description: SenseVoice 稳定有字。
-      notes: 规则示例，非真实模型验证记录。
+  - description: SenseVoice 稳定有字。
+    notes: 规则示例，非真实模型验证记录。
   miss:
-    - description: SenseVoice 非 stable_text。
+  - description: SenseVoice 非 stable_text。
   unknown:
-    - description: 家族状态无法判定。
+  - description: 家族状态无法判定。
 rules:
-  - rule_id: rule_example_new_tag_v1
-    version: "1"
-    tag_id: example_new_tag
-    enabled: true
-    description: 最小可运行条件
-    condition:
-      capability: family_state
-      family: sensevoice
-      state: stable_text
+- rule_id: rule_example_new_tag_v1
+  version: '1'
+  tag_id: example_new_tag
+  enabled: true
+  description: 最小可运行条件
+  condition:
+    capability: family_state
+    family: sensevoice
+    state: stable_text
+description_updated_at: '2026-10-19T06:31:59Z'

@@ -691,6 +691,7 @@ class TaggingService:
         reason: str,
         op: str,
         work_root: str | Path | None = None,
+        expected_version: int | None = None,
     ) -> dict[str, Any]:
         ws = self.workspace(batch_id, work_root=work_root)
         # Reuse existing run folder root; ensure dirs.
@@ -699,6 +700,13 @@ class TaggingService:
         try:
             state = store.get(sample_id)
             before = state.as_dict()
+            if expected_version is not None and int(state.version) != int(expected_version):
+                from audio_engine.core.tagging.state import ConcurrentModificationError
+
+                raise ConcurrentModificationError(
+                    f"sample {sample_id} version conflict: "
+                    f"expected {expected_version}, got {state.version}"
+                )
             expected = state.version
             if op == "add":
                 state = apply_manual_add(state, tag_id=tag_id, audio_sha256=audio_sha256)
@@ -735,6 +743,11 @@ class TaggingService:
                 "effective_tags": effective_tags(state, enabled_tag_ids=enabled),
                 "sources": [s.as_dict() for s in state.sources],
                 "op_id": record.op_id,
+                "revision": str(state.version),
+                "version": state.version,
+                "work_root": str(ws.root.as_posix()),
+                "published": False,
+                "state_kind": "working",
             }
         finally:
             store.close()

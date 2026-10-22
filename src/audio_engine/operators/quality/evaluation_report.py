@@ -28,6 +28,7 @@ _EMPTY_REF_TYPES = frozenset(EMPTY_GOLD_TYPES) | {
     "noise",
     "true_silence",
     "invalid_audio",
+    "non_speech",
 }
 
 
