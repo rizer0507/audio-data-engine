@@ -1,5 +1,7 @@
 # Audio Data Engine
 
+跨电脑 / Codex 接续入口：[项目上下文](docs/PROJECT_CONTEXT.md) · [同步操作流程](docs/CROSS_MACHINE_WORKFLOW.md)。
+
 Manifest 驱动的音频数据处理引擎 — 将 WAV/PCM 原始文件通过可组合的 Operator 流水线处理，最终以 Manifest（JSONL / Parquet）作为数据集的唯一真相源。
 
 ## 架构

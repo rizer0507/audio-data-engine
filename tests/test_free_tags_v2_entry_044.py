@@ -51,10 +51,10 @@ def test_free_tags_source_naming_rejects_classified_only(tmp_path: Path, monkeyp
     Manifest([Sample(id="a", source_path="/tmp/a.wav", duration=1.0)]).save(classified)
 
     prepared = staged_manifest_path(f"prepared_asr_v3_{batch}")
-    assert prepared.parent == STAGE1_DERIVED_DIR
+    assert prepared.parent == STAGE1_DERIVED_DIR / batch
     assert not prepared.is_file()
 
-    with pytest.raises(FileNotFoundError, match="Classified_\\* fallback is disabled"):
+    with pytest.raises(FileNotFoundError, match="auto-discovery is disabled"):
         apply_source_name_to_single_pipeline(
             pipeline_name="tag_dataset_free_tags_v2",
             steps=[_Step()],

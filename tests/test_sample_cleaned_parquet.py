@@ -188,5 +188,5 @@ def test_dry_run_does_not_write(mod, tmp_path: Path):
 
 def test_default_output_follows_source_name(mod):
     assert mod.default_output_path("mix10k").as_posix() == (
-        "datasets/stage1/cleaned/cleaned_mix10k.parquet"
+        "datasets/stage1/cleaned/mix10k/cleaned_mix10k.parquet"
     )

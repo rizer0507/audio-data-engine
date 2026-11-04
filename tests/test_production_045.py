@@ -27,12 +27,16 @@ from audio_engine.operators.quality.evidence_join import EvidenceJoinOperator
 
 def test_production_paths_and_stems() -> None:
     paths = ProductionPaths("demo_batch")
-    assert paths.ingested.as_posix().endswith("ingested/ingested_demo_batch.parquet")
-    assert paths.segments.as_posix().endswith("segments/segments_demo_batch.parquet")
-    assert paths.dnsmos.as_posix().endswith("quality/dnsmos_demo_batch.parquet")
+    assert paths.ingested.as_posix().endswith(
+        "ingested/demo_batch/ingested_demo_batch.parquet"
+    )
+    assert paths.segments.as_posix().endswith(
+        "segments/demo_batch/segments_demo_batch.parquet"
+    )
+    assert paths.dnsmos.as_posix().endswith("quality/demo_batch/dnsmos_demo_batch.parquet")
     assert "quality_sidecar" not in paths.dnsmos.as_posix()
     assert paths.prepared_evidence.as_posix().endswith(
-        "derived/prepared_evidence_demo_batch.parquet"
+        "derived/demo_batch/prepared_evidence_demo_batch.parquet"
     )
     assert manifest_dir_for_stem("dnsmos_demo_batch").as_posix().endswith("stage1/quality")
     assert manifest_dir_for_stem("segments_demo_batch").as_posix().endswith("stage1/segments")

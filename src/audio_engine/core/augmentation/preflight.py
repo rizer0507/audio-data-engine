@@ -116,7 +116,7 @@ def preflight_tempo(
     if not manifest_path.is_file():
         raise AugmentPreflightError(
             f"default/input Manifest not found: {manifest_path}. "
-            f"Expected datasets/stage1/segments/segments_{batch}.parquet "
+            f"Expected datasets/stage1/segments/{batch}/segments_{batch}.parquet "
             "or pass --input-manifest for this batch's other snapshot."
         )
 

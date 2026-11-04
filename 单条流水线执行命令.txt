@@ -479,8 +479,6 @@ audio-data pipeline run pipelines/classify_dataset_v3.yaml \
   --force
 
 # legacy 复现 only（勿作新批次正式分拣）：pipelines/classify_dataset.yaml（v1）
-
-
 -------------------------------------------------------
 2f-v3-027. 五类 v1 历史对照（selection_five_class_v1）
 -------------------------------------------------------
@@ -514,8 +512,6 @@ audio-data pipeline run pipelines/classify_dataset_five_class_v1.yaml `
 #     --config configs/selection/zh_asr_v3_0914_mixed_30000.yaml
 # 规则测试：pytest tests/test_selection_five_class_v1.py -q
 # 汇总 xlsx：可用 export-summary，或含 outcome/category 的五类汇总脚本
-
-
 -------------------------------------------------------
 2f-v3-028. 五类自动噪声分拣（selection_five_class_v2_auto_noise）
 -------------------------------------------------------

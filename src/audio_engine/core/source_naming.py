@@ -1,16 +1,18 @@
 """Unified dataset naming driven by CLI ``--source-name`` / ``--eval-name``.
 
-Stem convention is unchanged; directory roots are staged by process (009 Phase A):
+Stem convention is unchanged. Each staged directory stores one batch per
+subdirectory (the ``--source-name`` / ``--eval-name``). Flat files from the
+previous layout stay readable.
 
-  datasets/stage1/cleaned/cleaned_{source}.parquet
-  datasets/stage1/asr/{alias}_asr_{source}.parquet          # expensive
-  datasets/stage1/derived/multi_asr_aggregate_{source}.parquet
-  datasets/stage1/derived/multi_asr_metrics_{source}.parquet
-  datasets/stage1/derived/classified_{source}.parquet
-  datasets/stage3/eval_sets/eval_{batch}.parquet
-  datasets/stage3/asr/{alias}_asr_eval_{batch}.parquet      # expensive
-  datasets/stage3/derived/eval_aggregate_eval_{batch}.parquet
-  datasets/stage3/derived/eval_metrics_eval_{batch}.parquet
+  datasets/stage1/cleaned/{source}/cleaned_{source}.parquet
+  datasets/stage1/asr/{source}/{alias}_asr_{source}.parquet          # expensive
+  datasets/stage1/derived/{source}/multi_asr_aggregate_{source}.parquet
+  datasets/stage1/derived/{source}/multi_asr_metrics_{source}.parquet
+  datasets/stage1/derived/{source}/classified_{source}.parquet
+  datasets/stage3/eval_sets/{eval_name}/{eval_name}.parquet
+  datasets/stage3/asr/{eval_name}/{alias}_asr_{eval_name}.parquet    # expensive
+  datasets/stage3/derived/{eval_name}/eval_aggregate_{eval_name}.parquet
+  datasets/stage3/derived/{eval_name}/eval_metrics_{eval_name}.parquet
   datasets/stage3/reports/{eval_name}/evaluation.{json,xlsx}
 
 Legacy flat ``datasets/manifests/`` remains readable via ``resolve_existing_manifest``.
@@ -137,13 +139,149 @@ def manifest_dir_for_stem(stem: str) -> Path:
     return STAGE1_DERIVED_DIR
 
 
-def staged_manifest_path(stem: str, *, ext: str = ".parquet") -> Path:
-    """Canonical write path for a full stem under the staged layout."""
+# Longest-prefix match. The remainder is the batch (``--source-name`` / eval name),
+# except ``classified_v3_{batch}_{tail}`` where a known tail is stripped.
+_BATCH_PREFIXES: tuple[str, ...] = tuple(
+    sorted(
+        (
+            "multi_asr_aggregate_",
+            "multi_asr_metrics_",
+            "eval_aggregate_",
+            "eval_metrics_",
+            "prepared_evidence_",
+            "prepared_asr_v3_",
+            "prepared_asr_",
+            "prepared_v3_",
+            "quality_sidecar_",
+            "tagged_multi_tag_v1_",
+            "tagged_free_tags_v2_",
+            "ingested_",
+            "segments_",
+            "cleaned_",
+            "dnsmos_",
+            "built_v3_",
+            "reviewed_warehouse_",
+            "reviewed_v3_",
+            "warehouse_export_",
+            "warehouse_frozen_",
+            "semantic_conflict_",
+            "gold_",
+            "classified_five_class_v2_4_on_demand_acoustic_",
+            "classified_five_class_v2_3_min_acoustic_",
+            "classified_five_class_v2_2_auto_noise_",
+            "classified_five_class_v2_auto_noise_",
+            "classified_five_class_v3_",
+            "classified_five_class_v1_",
+            "classified_v3_",
+            "classified_",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+_CLASSIFIED_V3_TAILS: tuple[str, ...] = (
+    "_semantic_tolerant_20260911_asr_anomaly_noise_v1",
+    "_semantic_tolerant_20260911",
+    "_asr_anomaly_noise_v1",
+    "_business_semantic_v4",
+    "_zh_only_v1",
+    "_shadow_020",
+)
+
+
+def infer_batch_name(stem: str) -> str | None:
+    """Return the batch directory name embedded in a manifest stem.
+
+    Unknown stems stay flat (``None``) so ad-hoc files are not pushed into a
+    guessed folder. Augmented products already live under ``{batch}/tempo_*``.
+    """
+    text = str(stem or "").strip()
+    if text.lower().endswith((".parquet", ".jsonl")):
+        text = Path(text).stem
+    if not text:
+        return None
+    for prefix in _BATCH_PREFIXES:
+        if text.startswith(prefix) and len(text) > len(prefix):
+            rest = text[len(prefix) :]
+            if prefix == "classified_v3_":
+                for tail in _CLASSIFIED_V3_TAILS:
+                    if rest.endswith(tail) and len(rest) > len(tail):
+                        rest = rest[: -len(tail)]
+                        break
+            return rest or None
+    if "_asr_" in text and not text.startswith("multi_asr_"):
+        _alias, _, batch = text.partition("_asr_")
+        return batch or None
+    # Registered eval-set stem is the eval name itself (``eval_mt3000``).
+    if text.startswith("eval_"):
+        return text
+    return None
+
+
+def _uses_batch_folder(directory: Path) -> bool:
+    return directory != STAGE1_AUGMENTED_DIR
+
+
+def locate_batch_manifest(directory: Path, batch: str, filename: str) -> Path:
+    """Return ``directory/batch/filename``, or the old flat file if that is the one on disk.
+
+    Callers that are about to write should keep this path: a missing file resolves
+    to the batch subdirectory. A finished flat file is returned unchanged so resume
+    and status still see it.
+    """
+    nested = Path(directory) / batch / filename
+    flat = Path(directory) / filename
+    if nested.is_file() or not flat.is_file():
+        return nested
+    return flat
+
+
+def batch_folder_hits(stem: str) -> list[Path]:
+    """Existing ``{stage}/{batch}/{stem}.parquet|jsonl`` copies, canonical batch first."""
+    text = str(stem or "").strip()
+    if text.lower().endswith((".parquet", ".jsonl")):
+        text = Path(text).stem
+    base = manifest_dir_for_stem(text)
+    if not _uses_batch_folder(base) or not base.is_dir():
+        return []
+    inferred = infer_batch_name(text)
+    hits: list[Path] = []
+    for ext in (".parquet", ".jsonl"):
+        hits.extend(path for path in base.glob(f"*/{text}{ext}") if path.is_file())
+
+    def _rank(path: Path) -> tuple[int, int, str]:
+        return (
+            0 if inferred and path.parent.name == inferred else 1,
+            0 if path.suffix.lower() == ".parquet" else 1,
+            path.as_posix(),
+        )
+
+    return sorted(hits, key=_rank)
+
+
+def staged_manifest_path(
+    stem: str,
+    *,
+    ext: str = ".parquet",
+    batch: str | None = None,
+) -> Path:
+    """Canonical write path: ``{stage_dir}/{batch}/{stem}.parquet``.
+
+    ``batch`` overrides inference. Stems with no recognizable batch stay in the
+    stage directory (previous flat layout). Augmented tempo products keep their
+    own ``{batch}/tempo_*`` tree.
+    """
     name = str(stem).strip()
     if name.lower().endswith((".parquet", ".jsonl")):
         ext = Path(name).suffix.lower()
         name = Path(name).stem
-    return manifest_dir_for_stem(name) / f"{name}{ext}"
+    directory = manifest_dir_for_stem(name)
+    if _uses_batch_folder(directory):
+        folder = batch if batch is not None else infer_batch_name(name)
+        folder = str(folder or "").strip()
+        if folder:
+            directory = directory / folder
+    return directory / f"{name}{ext}"
 
 
 def evaluation_report_dir(eval_name: str) -> Path:
@@ -167,7 +305,7 @@ def manifest_path(
     stem = manifest_stem(kind, source_name)
     if manifests_dir is not None:
         return Path(manifests_dir) / f"{stem}{ext}"
-    return staged_manifest_path(stem, ext=ext)
+    return staged_manifest_path(stem, ext=ext, batch=source_name)
 
 
 def model_asr_kind(model: str) -> str:
@@ -181,9 +319,15 @@ def model_asr_kind(model: str) -> str:
 
 
 def _candidate_bases_for_stem(stem: str, manifests_dir: Path) -> list[Path]:
-    """Search order: staged root → legacy manifests → explicit manifests_dir."""
+    """Search order: batch subdir → flat staged root → legacy manifests → explicit dir."""
     staged = manifest_dir_for_stem(stem)
-    bases: list[Path] = [staged, LEGACY_MANIFESTS_DIR]
+    bases: list[Path] = []
+    if _uses_batch_folder(staged):
+        folder = infer_batch_name(stem)
+        if folder:
+            bases.append(staged / folder)
+    bases.append(staged)
+    bases.append(LEGACY_MANIFESTS_DIR)
     manifests_dir = Path(manifests_dir)
     if manifests_dir.resolve() != LEGACY_MANIFESTS_DIR.resolve():
         bases.append(manifests_dir)
@@ -214,8 +358,9 @@ def resolve_existing_manifest(
       - cleaned_mt3000
       - datasets/manifests/cleaned_mt3000
       - datasets/stage1/cleaned/cleaned_mt3000.parquet
-    Prefers staged locations over legacy ``datasets/manifests/``, and
-    ``.parquet`` over ``.jsonl`` when both exist in the same root.
+    Prefers ``{stage}/{batch}/`` over the previous flat staged file, then
+    legacy ``datasets/manifests/``. ``.parquet`` wins over ``.jsonl`` in the
+    same directory. An explicit path that already exists is returned as-is.
     """
     text = str(stem_or_path).strip()
     if not text:
@@ -230,6 +375,7 @@ def resolve_existing_manifest(
         candidates.append(raw)
         if not raw.is_absolute():
             candidates.append(Path.cwd() / raw)
+        candidates.extend(batch_folder_hits(stem))
         for base in _candidate_bases_for_stem(stem, manifests_dir):
             candidates.append(base / raw.name)
             # Prefer parquet sibling when caller pointed at missing jsonl path.
@@ -239,6 +385,7 @@ def resolve_existing_manifest(
                 candidates.append(base / f"{stem}.jsonl")
     else:
         stem = raw.name
+        candidates.extend(batch_folder_hits(stem))
         for base in (
             *_candidate_bases_for_stem(stem, manifests_dir),
             Path.cwd(),
@@ -439,6 +586,7 @@ def apply_source_name_to_single_pipeline(
     join_manifests: list[dict[str, Any]] | None = None,
     asr_run: str | None = None,
     aggregate_base: str | None = None,
+    input_manifest: str | Path | None = None,
 ) -> dict[str, Any]:
     """Derive input/output (and aggregate join) overrides for a non-staged pipeline.
 
@@ -530,15 +678,22 @@ def apply_source_name_to_single_pipeline(
             raise ValueError(
                 "--aggregate-base is only valid for multi_asr_aggregate pipelines"
             )
-        try:
-            resolved = resolve_existing_manifest(manifest_stem("segments", name))
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(
-                f"default input Manifest not found for batch {name!r}: "
-                f"datasets/stage1/segments/segments_{name}.parquet. "
-                "Pass --input-manifest for this batch's other snapshot "
-                "(e.g. warehouses/<batch>/manifest.parquet)."
-            ) from exc
+        # 显式 --input-manifest 是这次要加速的清单。合并后的准入 parquet
+        # 没有对应的 segments_<batch>，不能再按 batch 名去找默认切片清单。
+        if input_manifest is not None and str(input_manifest).strip():
+            resolved = Path(input_manifest)
+            if not resolved.is_file():
+                raise FileNotFoundError(f"--input-manifest not found: {input_manifest}")
+        else:
+            try:
+                resolved = resolve_existing_manifest(manifest_stem("segments", name))
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"default input Manifest not found for batch {name!r}: "
+                    f"datasets/stage1/segments/{name}/segments_{name}.parquet. "
+                    "Pass --input-manifest for this batch's other snapshot "
+                    "(e.g. warehouses/<batch>/manifest.parquet)."
+                ) from exc
         # Output path is finalized by CLI after speed_factor / FFmpeg recipe digest.
         return {
             "source_dir": None,

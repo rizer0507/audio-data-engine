@@ -15,7 +15,12 @@ from typing import Any
 from audio_engine.core.stage1.cache_policy import FAMILY_RUN_ALIASES, REQUIRED_FAMILIES, all_run_aliases
 from audio_engine.core.stage1.job import Stage1JobState, load_job_state
 from audio_engine.core.stage1.process import pid_is_alive
-from audio_engine.core.source_naming import STAGE1_ASR_DIR, STAGE1_CLEANED_DIR, STAGE1_DERIVED_DIR
+from audio_engine.core.source_naming import (
+    STAGE1_ASR_DIR,
+    STAGE1_CLEANED_DIR,
+    STAGE1_DERIVED_DIR,
+    locate_batch_manifest,
+)
 
 
 # Capability flags — claim step 4 after dual-GPU lease scheduler lands.
@@ -143,7 +148,7 @@ def _stage_success(state: Stage1JobState, name: str) -> bool:
 
 
 def _family_coverage(state: Stage1JobState, batch: str) -> dict[str, Any]:
-    cleaned = STAGE1_CLEANED_DIR / f"cleaned_{batch}.parquet"
+    cleaned = locate_batch_manifest(STAGE1_CLEANED_DIR, batch, f"cleaned_{batch}.parquet")
     cleaned_n = _parquet_rows(cleaned)
     out: dict[str, Any] = {}
     for family in REQUIRED_FAMILIES:
@@ -152,7 +157,9 @@ def _family_coverage(state: Stage1JobState, batch: str) -> dict[str, Any]:
         for alias in FAMILY_RUN_ALIASES[family]:
             asr_stage = f"asr_{alias}"
             reg_stage = f"register_{alias}"
-            asr_path = STAGE1_ASR_DIR / f"{alias}_asr_{batch}.parquet"
+            asr_path = locate_batch_manifest(
+                STAGE1_ASR_DIR, batch, f"{alias}_asr_{batch}.parquet"
+            )
             rows = _parquet_rows(asr_path)
             stage_ok = _stage_success(state, asr_stage) and _stage_success(state, reg_stage)
             # Real coverage: parquet exists with rows; do not count retries twice.
@@ -537,7 +544,9 @@ def build_status_view(
     elif state.updated_at:
         last_progress = f"updated_at={state.updated_at}"
 
-    classified = STAGE1_DERIVED_DIR / f"classified_five_class_v3_{batch}.parquet"
+    classified = locate_batch_manifest(
+        STAGE1_DERIVED_DIR, batch, f"classified_five_class_v3_{batch}.parquet"
+    )
     gaps = {
         "implementation": IMPLEMENTATION_GAPS,
         "notes": [

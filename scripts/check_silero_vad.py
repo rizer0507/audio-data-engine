@@ -336,7 +336,11 @@ def load_manifest_samples(
     if cleaned is None:
         if not batch:
             raise ValueError("须提供 --batch 或 --cleaned")
-        cleaned = ROOT / f"datasets/stage1/cleaned/cleaned_{batch}.parquet"
+        from audio_engine.core.source_naming import locate_batch_manifest
+
+        cleaned = locate_batch_manifest(
+            ROOT / "datasets/stage1/cleaned", batch, f"cleaned_{batch}.parquet"
+        )
     if not cleaned.is_file():
         raise FileNotFoundError(f"cleaned 底表不存在: {cleaned}")
 

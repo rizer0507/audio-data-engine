@@ -43,6 +43,7 @@ from audio_engine.core.source_naming import (
     apply_source_name_to_single_pipeline,
     parse_join_manifest_arg,
     pipeline_run_name,
+    manifest_path,
     resolve_existing_manifest,
     staged_manifest_path,
     validate_asr_run,
@@ -928,6 +929,7 @@ def pipeline_run(
                 join_manifests=cli_joins,
                 asr_run=asr_run,
                 aggregate_base=aggregate_base,
+                input_manifest=input_manifest,
             )
         except (ValueError, FileNotFoundError) as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -2641,7 +2643,7 @@ def eval_register(
         ...,
         "--name",
         help=(
-            "评测集 stem，写入 datasets/stage3/eval_sets/<name>.parquet"
+            "评测集 stem，写入 datasets/stage3/eval_sets/<name>/<name>.parquet"
             "（兼容读取 datasets/manifests/；如 eval_core_v001）"
         ),
     ),
@@ -2674,7 +2676,7 @@ def eval_register(
     output: Optional[Path] = typer.Option(
         None,
         "--output",
-        help="覆盖默认输出路径 datasets/stage3/eval_sets/<name>.parquet",
+        help="覆盖默认输出路径 datasets/stage3/eval_sets/<name>/<name>.parquet",
     ),
     catalog_dir: Path = typer.Option(CATALOG_DIR, "--catalog-dir"),
 ) -> None:
@@ -3886,7 +3888,7 @@ def stage1_classify(
     classified_output: Optional[Path] = typer.Option(
         None,
         "--classified-output",
-        help="默认 datasets/stage1/derived/classified_five_class_v3_<batch>.parquet",
+        help="默认 datasets/stage1/derived/<batch>/classified_five_class_v3_<batch>.parquet",
     ),
     no_classified_parquet: bool = typer.Option(
         False, "--no-classified-parquet", help="仅交付 XLSX，不写正式 classified parquet"
@@ -4696,7 +4698,7 @@ def tags_run(
             preview=False,
             publish=True,
             summary_xlsx=Path(f"data/exports/summary_multi_tag_v1_{batch}.xlsx"),
-            output_manifest=Path(f"datasets/stage1/derived/tagged_multi_tag_v1_{batch}.parquet"),
+            output_manifest=manifest_path("tagged_multi_tag_v1", batch),
         )
     )
     console.print_json(

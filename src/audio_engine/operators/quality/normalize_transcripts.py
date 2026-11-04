@@ -47,13 +47,14 @@ class NormalizeTranscriptsOperator(BaseOperator):
       keep_raw: if true, stash original text under ``extra.raw_text`` when missing
       normalization_path: zh_asr profile path (fingerprint; cleaning uses the same
         profile as ``plain_transcript_text`` / Metric Engine)
-      blank_exact_hotwords: phrases / vocabulary that blank a model when the whole
-        plain text equals one entry (same stage as punctuation stripping)
+      blank_exact_hotwords: phrases that blank a transcript. Default is whole-text
+        equality. ``embedded: true`` deletes each phrase wherever it occurs as a
+        contiguous span and keeps the surrounding characters.
       blank_exact_hotwords_path: optional YAML containing ``blank_exact_hotwords``
     """
 
     name = "normalize_transcripts"
-    version = "1.2.0"
+    version = "1.3.0"
     category = "quality"
 
     def dependency_fingerprint(self, config: OperatorConfig) -> dict[str, Any] | None:
@@ -119,9 +120,9 @@ class NormalizeTranscriptsOperator(BaseOperator):
         else:
             model_keys = [str(item) for item in models]
         keep_raw = bool(params.get("keep_raw", True))
-        blank_hotwords, blank_models = resolve_blank_exact_hotwords(
-            params.get("blank_exact_hotwords")
-        )
+        blank_cfg = params.get("blank_exact_hotwords")
+        blank_hotwords, blank_models = resolve_blank_exact_hotwords(blank_cfg)
+        blank_embedded = bool(blank_cfg.get("embedded")) if isinstance(blank_cfg, dict) else False
 
         updated: dict[str, Any] = {}
         for model in model_keys:
@@ -133,6 +134,7 @@ class NormalizeTranscriptsOperator(BaseOperator):
                 keep_raw=keep_raw,
                 blank_hotwords=blank_hotwords,
                 blank_model=blank_applies_to_model(model, blank_models),
+                blank_embedded=blank_embedded,
             )
 
         return {
@@ -147,6 +149,7 @@ class NormalizeTranscriptsOperator(BaseOperator):
                         "normalization_path", _DEFAULT_NORMALIZATION_PATH
                     ),
                     "blank_exact_hotwords": sorted(blank_hotwords),
+                    "blank_embedded": blank_embedded,
                     "blank_models": sorted(blank_models),
                 },
             },

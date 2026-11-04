@@ -251,15 +251,20 @@ def find_existing_service(
 
 
 def task_output(batch: str, stage: str) -> tuple[str, Path]:
+    """Formal product path. New runs use ``{stage_dir}/{batch}/``; old flat files still count."""
+    from audio_engine.core.source_naming import locate_batch_manifest
+
     if stage == "dnsmos":
-        return (
-            f"dnsmos_score_batch_{batch}",
-            ROOT / f"datasets/stage1/quality/dnsmos_{batch}.parquet",
+        pipeline = f"dnsmos_score_batch_{batch}"
+        path = locate_batch_manifest(
+            ROOT / "datasets/stage1/quality", batch, f"dnsmos_{batch}.parquet"
         )
-    return (
-        f"{stage}_asr_batch_{stage}1_{batch}",
-        ROOT / f"datasets/stage1/asr/{stage}1_asr_{batch}.parquet",
-    )
+    else:
+        pipeline = f"{stage}_asr_batch_{stage}1_{batch}"
+        path = locate_batch_manifest(
+            ROOT / "datasets/stage1/asr", batch, f"{stage}1_asr_{batch}.parquet"
+        )
+    return pipeline, path
 
 
 def verify_completed_run(root: Path, batch: str, stage: str) -> None:
