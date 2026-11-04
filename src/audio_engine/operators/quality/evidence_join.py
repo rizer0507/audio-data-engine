@@ -186,7 +186,7 @@ class EvidenceJoinOperator(ManifestOperator):
         if "quality_sidecar" in dnsmos_file.name:
             raise ValueError(
                 "evidence_join refuses quality_sidecar_* inputs; "
-                "use datasets/stage1/quality/dnsmos_<batch>.parquet"
+                "use datasets/stage1/quality/<batch>/dnsmos_<batch>.parquet"
             )
         dnsmos_samples = Manifest.load(dnsmos_file).samples
         dnsmos_index = _index_by_id(dnsmos_samples, label="dnsmos")

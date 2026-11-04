@@ -250,7 +250,7 @@ def test_external_gold_e2e_to_eval_metric(tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert overrides["input_manifest"].endswith("qwen3-asr_asr_mt3000.parquet")
     assert Path(overrides["output_manifest"]).as_posix() == (
-        "datasets/stage1/derived/classified_mt3000.parquet"
+        "datasets/stage1/derived/mt3000/classified_mt3000.parquet"
     )
     assert overrides["aggregate_base"] == "qwen3-asr"
 
@@ -332,7 +332,7 @@ def test_external_gold_e2e_to_eval_metric(tmp_path: Path, monkeypatch: pytest.Mo
     ).save(sft_path)
 
     eval_samples = list(
-        Manifest.load(tmp_path / "datasets/stage3/eval_sets/eval_mt3000.parquet")
+        Manifest.load(tmp_path / "datasets/stage3/eval_sets/eval_mt3000/eval_mt3000.parquet")
     )
     aggregated = OperatorRegistry.get("quality.aggregate_manifests").run(
         eval_samples,

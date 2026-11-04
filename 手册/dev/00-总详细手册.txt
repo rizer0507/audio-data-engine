@@ -319,16 +319,13 @@ CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
 
 # B) SFT checkpoint-290 · GPU5 · port 5560
-# CUDA_VISIBLE_DEVICES=5 vllm serve /data2/data-cp/lizi/Qwen-ASR-main/data/outputs/0831/checkpoint-290 \
-#   --gpu-memory-utilization 0.5 --host 127.0.0.1 --port 5560 \
-#   --tensor-parallel-size 1 --served-model-name qwen3-asr \
-#   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+/
 
-# C) SFT checkpoint-1500 · GPU4 · port 5563
-# CUDA_VISIBLE_DEVICES=4 vllm serve /home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500 \
-#   --gpu-memory-utilization 0.5 --host 127.0.0.1 --port 5563 \
-#   --tensor-parallel-size 1 --served-model-name qwen3-asr \
-#   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
+ C) SFT checkpoint-1500 · GPU4 · port 5563
+ CUDA_VISIBLE_DEVICES=6 vllm serve /home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500 \
+   --gpu-memory-utilization 0.5 --host 127.0.0.1 --port 5560 \
+   --tensor-parallel-size 1 --served-model-name qwen3-asr \
+   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
 
 # D) 文档.txt 早期写法（GPU6 · port 5559 基座）
 # CUDA_VISIBLE_DEVICES=6 vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \

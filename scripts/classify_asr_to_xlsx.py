@@ -317,10 +317,12 @@ def build_asr_missing_error(batch: str, routes: list[RouteCheck]) -> PreflightEr
 
 
 def check_asr_routes(batch: str, families: dict[str, list[str]], asr_dir: Path) -> list[RouteCheck]:
+    from audio_engine.core.source_naming import locate_batch_manifest
+
     routes: list[RouteCheck] = []
     for family, aliases in families.items():
         for alias in aliases:
-            path = asr_dir / f"{alias}_asr_{batch}.parquet"
+            path = locate_batch_manifest(asr_dir, batch, f"{alias}_asr_{batch}.parquet")
             routes.append(RouteCheck(family=family, alias=alias, path=path, exists=path.is_file()))
     return routes
 
@@ -616,7 +618,11 @@ def run_v24_engine(
     )
     samples = attach_audio_energy(samples, energy_cfg, workers=energy_workers)
     print("[5/7] DNSMOS 按需候选评分", flush=True)
-    sidecar = ROOT / f"datasets/stage1/derived/quality_sidecar_{batch}.parquet"
+    from audio_engine.core.source_naming import locate_batch_manifest
+
+    sidecar = locate_batch_manifest(
+        ROOT / "datasets/stage1/derived", batch, f"quality_sidecar_{batch}.parquet"
+    )
     samples = DnsmosV24CandidatesOperator().run(
         samples,
         cfg(
@@ -679,7 +685,11 @@ def run_v23_engine(samples, *, cfg, cfg_path: Path, batch: str):
 
 def run_v22_engine(samples, *, cfg, cfg_path: Path, batch: str, dnsmos_config: Path):
     print("[3/4] DNSMOS 候选评分和 v2.2 五分类", flush=True)
-    sidecar = ROOT / f"datasets/stage1/derived/quality_sidecar_{batch}.parquet"
+    from audio_engine.core.source_naming import locate_batch_manifest
+
+    sidecar = locate_batch_manifest(
+        ROOT / "datasets/stage1/derived", batch, f"quality_sidecar_{batch}.parquet"
+    )
     samples = DnsmosV22CandidatesOperator().run(
         samples,
         cfg(
@@ -701,7 +711,11 @@ def run(args):
         assert_v23_dependencies_ready()
 
     families, family_source = resolve_families(args)
-    cleaned = args.cleaned or ROOT / f"datasets/stage1/cleaned/cleaned_{args.batch}.parquet"
+    from audio_engine.core.source_naming import locate_batch_manifest
+
+    cleaned = args.cleaned or locate_batch_manifest(
+        ROOT / "datasets/stage1/cleaned", args.batch, f"cleaned_{args.batch}.parquet"
+    )
     base, routes = preflight(
         batch=args.batch,
         cleaned=cleaned,

@@ -66,15 +66,15 @@ README_STUB = """# datasets — 可复用业务产物目录
 ```text
 datasets/
   stage1/
-    cleaned/     cleaned_{BATCH}.parquet
-    asr/         {alias}_asr_{BATCH}.parquet
-    derived/     multi_asr_* / classified_* / summary_* / …
+    cleaned/{BATCH}/cleaned_{BATCH}.parquet
+    asr/{BATCH}/{alias}_asr_{BATCH}.parquet
+    derived/{BATCH}/multi_asr_* / classified_* / summary_* / …
   stage3/
-    eval_sets/   eval_{BATCH}.parquet
-    asr/         {alias}_asr_eval_{BATCH}.parquet
-    derived/     eval_aggregate_* / eval_metrics_*
-    reports/     {eval_name}/evaluation.{json,xlsx}
-  manifests/     兼容层：旧文件可读；新写入默认落 stage*
+    eval_sets/{eval_name}/{eval_name}.parquet
+    asr/{eval_name}/{alias}_asr_{eval_name}.parquet
+    derived/{eval_name}/eval_aggregate_* / eval_metrics_*
+    reports/{eval_name}/evaluation.{json,xlsx}
+  manifests/     兼容层：旧平铺文件可读；新写入默认落 {BATCH}/
 ```
 
 命名权威：``src/audio_engine/core/source_naming.py``。

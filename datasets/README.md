@@ -10,19 +10,21 @@
 ```text
 datasets/
   stage1/
-    cleaned/     cleaned_{BATCH}.parquet
-    asr/         {alias}_asr_{BATCH}.parquet          # ★ 昂贵
-    derived/     multi_asr_* / classified_* / summary_* / gold_* / reviewed_*
+    cleaned/{BATCH}/cleaned_{BATCH}.parquet
+    asr/{BATCH}/{alias}_asr_{BATCH}.parquet          # ★ 昂贵
+    derived/{BATCH}/multi_asr_* / classified_* / summary_* / gold_* / reviewed_*
   stage3/
-    eval_sets/   eval_{BATCH}.parquet
-    asr/         {alias}_asr_eval_{BATCH}.parquet     # ★ 昂贵
-    derived/     eval_aggregate_* / eval_metrics_*
-    reports/     {eval_name}/evaluation.{json,xlsx}   # 权威评测报告
+    eval_sets/{eval_name}/{eval_name}.parquet
+    asr/{eval_name}/{alias}_asr_{eval_name}.parquet  # ★ 昂贵
+    derived/{eval_name}/eval_aggregate_* / eval_metrics_*
+    reports/{eval_name}/evaluation.{json,xlsx}       # 权威评测报告
   manifests/     兼容层：旧文件仍可读；新写入不再默认落此
 ```
 
+同一 stage 目录里以前的平铺文件（`cleaned_{BATCH}.parquet` 直接放在 `cleaned/` 下）仍然能被 `resolve_existing_manifest` 读到。新写入一律进 `{BATCH}/` 子目录。
+
 命名 stem 不变，代码权威：`src/audio_engine/core/source_naming.py`。  
-`resolve_existing_manifest`：**先搜 stage 目录，再回退 `manifests/`**。
+`resolve_existing_manifest`：**先搜 `{stage}/{batch}/`，再搜 stage 目录里的平铺文件，最后回退 `manifests/`**。
 
 评测报告：权威路径为 `stage3/reports/{eval_name}/`；`runs/.../reports/` 仍写副本。  
 未传 `eval_name` 时（旧调用）仍只写 `runs/.../reports/`。

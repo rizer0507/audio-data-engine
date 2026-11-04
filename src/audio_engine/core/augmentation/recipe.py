@@ -115,7 +115,7 @@ def resolve_product_layout(
     if not manifest_path.is_file():
         raise FileNotFoundError(
             f"input manifest not found: {manifest_path}. "
-            f"Default expects datasets/stage1/segments/segments_{source_batch}.parquet "
+            f"Default expects datasets/stage1/segments/{source_batch}/segments_{source_batch}.parquet "
             "or pass --input-manifest explicitly."
         )
     digest = recipe_digest(

@@ -71,6 +71,71 @@ def test_qwen_on_write_strips_punct_blanks_dump_keeps_short(tmp_path):
     assert kept.transcripts["qwen1"]["text"] == "不需要"
     assert kept.transcripts["qwen1"]["extra"]["raw_text"] == "不需要！"
 
+    prefixed_raw = "嗯没有，暂时不用，不需要谢谢，不可以啊，不用，我不需要，不要，不用，不需要"
+    prefixed = _normalize(
+        Sample(
+            id="prefixed",
+            source_path="/tmp/p.wav",
+            sha256="1" * 64,
+            transcripts={"qwen1": {"text": prefixed_raw}},
+        ),
+        params,
+        cache_dir=tmp_path / "c3",
+    )
+    assert prefixed.transcripts["qwen1"]["text"] == "嗯"
+    assert prefixed.transcripts["qwen1"]["extra"]["raw_text"] == prefixed_raw
+    assert prefixed.transcripts["qwen1"]["extra"]["blanked_exact_hotword"] is True
+
+    wrapped_raw = "客户没有，暂时不用，不需要谢谢，不可以，啊不用，我不需要，不要，不用，不需要。谢谢"
+    wrapped = _normalize(
+        Sample(
+            id="wrapped",
+            source_path="/tmp/w.wav",
+            sha256="2" * 64,
+            transcripts={"qwen1": {"text": wrapped_raw}},
+        ),
+        params,
+        cache_dir=tmp_path / "c4",
+    )
+    assert wrapped.transcripts["qwen1"]["text"] == "客户谢谢"
+
+
+def test_short_hotword_stays_exact_match_without_embedded(tmp_path):
+    """Interview-style short phrases must not be cut out of a real sentence."""
+    params = {
+        "models": ["qwen"],
+        "keep_raw": True,
+        "blank_exact_hotwords": {
+            "models": ["qwen"],
+            "hotwords": ["住址"],
+        },
+    }
+    kept = _normalize(
+        Sample(
+            id="addr",
+            source_path="/tmp/addr.wav",
+            sha256="3" * 64,
+            transcripts={"qwen": {"text": "我的住址在北京"}},
+        ),
+        params,
+        cache_dir=tmp_path / "c1",
+    )
+    assert kept.transcripts["qwen"]["text"] == "我的住址在北京"
+    assert "blanked_exact_hotword" not in kept.transcripts["qwen"].get("extra", {})
+
+    blanked = _normalize(
+        Sample(
+            id="only",
+            source_path="/tmp/only.wav",
+            sha256="4" * 64,
+            transcripts={"qwen": {"text": "住址"}},
+        ),
+        params,
+        cache_dir=tmp_path / "c2",
+    )
+    assert blanked.transcripts["qwen"]["text"] == ""
+    assert blanked.transcripts["qwen"]["extra"]["blanked_exact_hotword"] is True
+
 
 def test_sensevoice_on_write_strips_all_control_tags(tmp_path):
     sample = Sample(

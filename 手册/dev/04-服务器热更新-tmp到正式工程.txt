@@ -2,8 +2,9 @@
 ================================================================================
 用途：
   U 盘内容已拷到服务器 tmp 后，用本脚本把代码/配置/手册热更新进正式工程。
-  不碰资产与运行产物，保证服务器环境「只增加/覆盖，不减少」。
+  不碰资产与运行产物，保证正式工程「只增加/覆盖，不减少」。
   docs/ 仅本机保留，本脚本不同步 docs。
+  pip 安装成功后删除 tmp 中的 audio-data-engine，正式工程不动。
 
 路径：
   tmp 打包目录：  /data2/data-cp/lizi/tmp/audio-data-engine
@@ -94,9 +95,18 @@ done
 #   cp -a "$SRC/resources/." "$DST/resources/"
 # fi
 
+# 4) 安装成功后删除 tmp 中的 audio-data-engine（只删 SRC，不动正式工程；pip 失败则保留）
 cd "$DST" && pip install -e ".[web]" \
   --index-url http://maven.paic.com.cn/repository/pypi/simple \
-  --trusted-host maven.paic.com.cn
+  --trusted-host maven.paic.com.cn \
+&& {
+  if [ "$SRC" = "/data2/data-cp/lizi/tmp/audio-data-engine" ] && [ -d "$SRC" ]; then
+    rm -rf "$SRC"
+    echo "[OK] 已删除 $SRC"
+  else
+    echo "[WARN] 未删除 tmp：SRC 不是预期路径或目录不存在: $SRC"
+  fi
+}
 
 --------------------------------------------------------------------------------
 流程对照
@@ -105,5 +115,6 @@ cd "$DST" && pip install -e ".[web]" \
   → scripts/sync_to_usb.bat → U 盘 F:\audio-data-engine
   → 拷到服务器 tmp → 本脚本 → 正式工程
   → pip install -e ".[web]"（内网 PyPI）
+  → 删除 /data2/data-cp/lizi/tmp/audio-data-engine
   → 手册 06 启动 Web/Worker
 （docs/、frontend/node_modules 不同步；dist 随 U 盘同步）

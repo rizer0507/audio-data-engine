@@ -70,18 +70,26 @@ def test_manifest_dir_for_stem_mapping():
 
 
 def test_manifest_paths():
-    assert cleaned_output_path("mt3000") == "datasets/stage1/cleaned/cleaned_mt3000.parquet"
+    assert cleaned_output_path("mt3000") == (
+        "datasets/stage1/cleaned/mt3000/cleaned_mt3000.parquet"
+    )
     assert manifest_path("qwen_asr", "mt3000").as_posix() == (
-        "datasets/stage1/asr/qwen_asr_mt3000.parquet"
+        "datasets/stage1/asr/mt3000/qwen_asr_mt3000.parquet"
+    )
+    assert manifest_path("segments", "mt3000").as_posix() == (
+        "datasets/stage1/segments/mt3000/segments_mt3000.parquet"
     )
     assert manifest_path("multi_asr_aggregate", "mt3000").as_posix() == (
-        "datasets/stage1/derived/multi_asr_aggregate_mt3000.parquet"
+        "datasets/stage1/derived/mt3000/multi_asr_aggregate_mt3000.parquet"
     )
     assert manifest_path("qwen_asr", "eval_mt3000").as_posix() == (
-        "datasets/stage3/asr/qwen_asr_eval_mt3000.parquet"
+        "datasets/stage3/asr/eval_mt3000/qwen_asr_eval_mt3000.parquet"
     )
     assert staged_manifest_path("eval_mt3000").as_posix() == (
-        "datasets/stage3/eval_sets/eval_mt3000.parquet"
+        "datasets/stage3/eval_sets/eval_mt3000/eval_mt3000.parquet"
+    )
+    assert staged_manifest_path("classified_v3_mt3000_zh_only_v1").as_posix() == (
+        "datasets/stage1/derived/mt3000/classified_v3_mt3000_zh_only_v1.parquet"
     )
     assert model_asr_kind("sensevoice") == "sensevoice_asr"
     assert model_asr_kind("kimi_asr") == "kimi_asr"
@@ -117,6 +125,37 @@ def test_resolve_prefers_staged_over_legacy(tmp_path: Path, monkeypatch: pytest.
     assert Manifest.load(resolved).samples[0].id == "staged"
 
 
+def test_resolve_prefers_batch_folder_over_flat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    flat = tmp_path / "datasets" / "stage1" / "segments"
+    nested = flat / "mt3000"
+    flat.mkdir(parents=True)
+    nested.mkdir()
+    Manifest([Sample(id="flat", source_path="/tmp/f.wav", duration=1.0)]).save(
+        flat / "segments_mt3000.parquet"
+    )
+    Manifest([Sample(id="batch", source_path="/tmp/b.wav", duration=1.0)]).save(
+        nested / "segments_mt3000.parquet"
+    )
+    resolved = resolve_existing_manifest("segments_mt3000")
+    assert resolved == (nested / "segments_mt3000.parquet").resolve()
+    assert Manifest.load(resolved).samples[0].id == "batch"
+
+
+def test_resolve_flat_segments_when_batch_folder_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    flat = tmp_path / "datasets" / "stage1" / "asr"
+    flat.mkdir(parents=True)
+    target = flat / "qwen1_asr_mt3000.parquet"
+    Manifest([Sample(id="legacy-flat", source_path="/tmp/l.wav", duration=1.0)]).save(target)
+    resolved = resolve_existing_manifest("qwen1_asr_mt3000")
+    assert resolved == target.resolve()
+
+
 def test_resolve_legacy_path_falls_back_to_staged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -135,8 +174,8 @@ def test_resolve_legacy_path_falls_back_to_staged(
 def test_expand_layout_templates():
     pairs = expand_layout_templates(None, "mt3000")
     assert pairs == [
-        ("cleaned_mt3000", "datasets/stage1/asr/qwen_asr_mt3000.parquet"),
-        ("cleaned_mt3000", "datasets/stage1/asr/sensevoice_asr_mt3000.parquet"),
+        ("cleaned_mt3000", "datasets/stage1/asr/mt3000/qwen_asr_mt3000.parquet"),
+        ("cleaned_mt3000", "datasets/stage1/asr/mt3000/sensevoice_asr_mt3000.parquet"),
     ]
 
 
@@ -179,7 +218,7 @@ def test_apply_asr_run_and_aggregate_base(tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert qwen1["input_manifest"].endswith("cleaned_mt3000.parquet")
     assert Path(qwen1["output_manifest"]).as_posix() == (
-        "datasets/stage1/asr/qwen1_asr_mt3000.parquet"
+        "datasets/stage1/asr/mt3000/qwen1_asr_mt3000.parquet"
     )
     assert qwen1["asr_run"] == "qwen1"
 
@@ -198,7 +237,7 @@ def test_apply_asr_run_and_aggregate_base(tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert aggregate["input_manifest"].endswith("qwen1_asr_mt3000.parquet")
     assert Path(aggregate["output_manifest"]).as_posix() == (
-        "datasets/stage1/derived/multi_asr_aggregate_mt3000.parquet"
+        "datasets/stage1/derived/mt3000/multi_asr_aggregate_mt3000.parquet"
     )
     assert aggregate["aggregate_base"] == "qwen1"
     assert [item["model"] for item in aggregate["aggregate_manifests"]] == [
@@ -255,7 +294,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
         source_dir=wav_dir,
     )
     assert Path(cleaning["output_manifest"]).as_posix() == (
-        "datasets/stage1/cleaned/cleaned_mt3000.parquet"
+        "datasets/stage1/cleaned/mt3000/cleaned_mt3000.parquet"
     )
     assert Path(cleaning["source_dir"]) == wav_dir.resolve()
 
@@ -266,7 +305,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
     )
     assert qwen["input_manifest"].endswith("cleaned_mt3000.parquet")
     assert Path(qwen["output_manifest"]).as_posix() == (
-        "datasets/stage1/asr/qwen_asr_mt3000.parquet"
+        "datasets/stage1/asr/mt3000/qwen_asr_mt3000.parquet"
     )
 
     sense = apply_source_name_to_single_pipeline(
@@ -276,7 +315,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
     )
     assert sense["input_manifest"].endswith("cleaned_mt3000.parquet")
     assert Path(sense["output_manifest"]).as_posix() == (
-        "datasets/stage1/asr/sensevoice_asr_mt3000.parquet"
+        "datasets/stage1/asr/mt3000/sensevoice_asr_mt3000.parquet"
     )
 
     kimi = apply_source_name_to_single_pipeline(
@@ -285,7 +324,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
         source_name="mt3000",
     )
     assert Path(kimi["output_manifest"]).as_posix() == (
-        "datasets/stage1/asr/kimi_asr_mt3000.parquet"
+        "datasets/stage1/asr/mt3000/kimi_asr_mt3000.parquet"
     )
 
     glm = apply_source_name_to_single_pipeline(
@@ -295,7 +334,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
     )
     assert glm["input_manifest"].endswith("cleaned_mt3000.parquet")
     assert Path(glm["output_manifest"]).as_posix() == (
-        "datasets/stage1/asr/glm_asr_mt3000.parquet"
+        "datasets/stage1/asr/mt3000/glm_asr_mt3000.parquet"
     )
 
     kimi_local = apply_source_name_to_single_pipeline(
@@ -304,7 +343,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
         source_name="mt3000",
     )
     assert Path(kimi_local["output_manifest"]).as_posix() == (
-        "datasets/stage1/asr/kimi_audio_asr_mt3000.parquet"
+        "datasets/stage1/asr/mt3000/kimi_audio_asr_mt3000.parquet"
     )
 
     aggregate = apply_source_name_to_single_pipeline(
@@ -326,7 +365,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
     )
     assert aggregate["input_manifest"].endswith("qwen_asr_mt3000.parquet")
     assert Path(aggregate["output_manifest"]).as_posix() == (
-        "datasets/stage1/derived/multi_asr_aggregate_mt3000.parquet"
+        "datasets/stage1/derived/mt3000/multi_asr_aggregate_mt3000.parquet"
     )
     assert aggregate["aggregate_manifests"][0]["model"] == "sensevoice"
     assert aggregate["aggregate_manifests"][0]["path"].endswith(
@@ -340,7 +379,7 @@ def test_apply_cleaning_qwen_sensevoice_metric(tmp_path: Path, monkeypatch: pyte
     )
     assert metric["input_manifest"].endswith("multi_asr_aggregate_mt3000.parquet")
     assert Path(metric["output_manifest"]).as_posix() == (
-        "datasets/stage1/derived/multi_asr_metrics_mt3000.parquet"
+        "datasets/stage1/derived/mt3000/multi_asr_metrics_mt3000.parquet"
     )
 
 
@@ -372,13 +411,13 @@ def test_classify_v3_shadow_outputs_stay_beside_production(tmp_path: Path, monke
         source_name="mt3000",
     )
     assert Path(production["output_manifest"]).as_posix() == (
-        "datasets/stage1/derived/classified_v3_mt3000.parquet"
+        "datasets/stage1/derived/mt3000/classified_v3_mt3000.parquet"
     )
     assert Path(zh_only["output_manifest"]).as_posix() == (
-        "datasets/stage1/derived/classified_v3_mt3000_zh_only_v1.parquet"
+        "datasets/stage1/derived/mt3000/classified_v3_mt3000_zh_only_v1.parquet"
     )
     assert Path(v4["output_manifest"]).as_posix() == (
-        "datasets/stage1/derived/classified_v3_mt3000_business_semantic_v4.parquet"
+        "datasets/stage1/derived/mt3000/classified_v3_mt3000_business_semantic_v4.parquet"
     )
     assert zh_only["output_manifest"] != production["output_manifest"]
 
@@ -396,7 +435,7 @@ def test_parse_and_rewrite_join_manifest(tmp_path: Path, monkeypatch: pytest.Mon
 
     bare = parse_join_manifest_arg("sensevoice", "mt3000")
     assert bare["model"] == "sensevoice"
-    assert bare["path"] == "datasets/stage1/asr/sensevoice_asr_mt3000.parquet"
+    assert bare["path"] == "datasets/stage1/asr/mt3000/sensevoice_asr_mt3000.parquet"
 
     rewritten = rewrite_join_manifests_for_source(
         [{"model": "sensevoice", "path": "ignored.parquet"}], "mt3000"
@@ -523,9 +562,31 @@ def test_run_staged_with_source_name(tmp_path: Path, monkeypatch: pytest.MonkeyP
             },
         ],
     )
-    assert result.final_manifest == "datasets/stage1/asr/sensevoice_asr_mt3000.parquet"
+    assert result.final_manifest == "datasets/stage1/asr/mt3000/sensevoice_asr_mt3000.parquet"
     assert Path(result.final_manifest).exists()
-    assert (tmp_path / "datasets/stage1/asr/qwen_asr_mt3000.parquet").exists()
+    assert (tmp_path / "datasets/stage1/asr/mt3000/qwen_asr_mt3000.parquet").exists()
     loaded = Manifest.load(result.final_manifest)
     assert len(loaded) == 2
     assert all(s.labels.get("staged_ok") is True for s in loaded.samples)
+
+
+def test_augment_explicit_input_skips_missing_segments(tmp_path: Path):
+    admitted = tmp_path / "admitted.parquet"
+    admitted.write_bytes(b"")
+    overrides = apply_source_name_to_single_pipeline(
+        pipeline_name="augment_batch_speed",
+        steps=[],
+        source_name="exact_negative_20260813_20260814",
+        input_manifest=admitted,
+    )
+    assert Path(overrides["input_manifest"]) == admitted.resolve()
+    assert overrides["augment_batch"] == "exact_negative_20260813_20260814"
+
+
+def test_augment_without_input_still_requires_segments_manifest():
+    with pytest.raises(FileNotFoundError, match="segments_missing_batch"):
+        apply_source_name_to_single_pipeline(
+            pipeline_name="augment_batch_speed",
+            steps=[],
+            source_name="missing_batch",
+        )

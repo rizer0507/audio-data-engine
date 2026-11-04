@@ -53,7 +53,12 @@ from audio_engine.core.stage1.runtime_config import (
     Stage1RuntimeConfig,
     load_runtime_config,
 )
-from audio_engine.core.source_naming import STAGE1_ASR_DIR, STAGE1_CLEANED_DIR, STAGE1_DERIVED_DIR
+from audio_engine.core.source_naming import (
+    STAGE1_ASR_DIR,
+    STAGE1_CLEANED_DIR,
+    STAGE1_DERIVED_DIR,
+    locate_batch_manifest,
+)
 
 
 CommandRunner = Callable[[list[str], dict[str, str], Path], int]
@@ -113,16 +118,25 @@ class Stage1Orchestrator:
     def _product_paths(self) -> dict[str, Path]:
         batch = self.request.batch
         asr = {
-            alias: STAGE1_ASR_DIR / f"{alias}_asr_{batch}.parquet"
+            alias: locate_batch_manifest(
+                STAGE1_ASR_DIR, batch, f"{alias}_asr_{batch}.parquet"
+            )
             for family in REQUIRED_FAMILIES
             for alias in FAMILY_RUN_ALIASES[family]
         }
         return {
-            "cleaned": STAGE1_CLEANED_DIR / f"cleaned_{batch}.parquet",
-            "prepared": STAGE1_DERIVED_DIR / f"prepared_v3_{batch}.parquet",
-            "prepared_asr": STAGE1_DERIVED_DIR / f"prepared_asr_v3_{batch}.parquet",
-            "classified": STAGE1_DERIVED_DIR
-            / f"classified_five_class_v3_{batch}.parquet",
+            "cleaned": locate_batch_manifest(
+                STAGE1_CLEANED_DIR, batch, f"cleaned_{batch}.parquet"
+            ),
+            "prepared": locate_batch_manifest(
+                STAGE1_DERIVED_DIR, batch, f"prepared_v3_{batch}.parquet"
+            ),
+            "prepared_asr": locate_batch_manifest(
+                STAGE1_DERIVED_DIR, batch, f"prepared_asr_v3_{batch}.parquet"
+            ),
+            "classified": locate_batch_manifest(
+                STAGE1_DERIVED_DIR, batch, f"classified_five_class_v3_{batch}.parquet"
+            ),
             "export": Path("data/exports")
             / f"summary_five_class_v3_{batch}.xlsx",
             "dataset": self.job_root / "dataset.yaml",

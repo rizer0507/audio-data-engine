@@ -1,0 +1,358 @@
+"""fenshen_1015 字准 xlsx：type、non_speech 整数总字准、表结构。"""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import pandas as pd
+
+from audio_engine.core.manifest import Manifest
+from audio_engine.core.sample import Sample
+
+
+def _load_script():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "eval_fenshen_1015_xlsx.py"
+    spec = importlib.util.spec_from_file_location("eval_fenshen_1015_xlsx", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_score_drops_listed_tokens_from_label_and_hypothesis():
+    mod = _load_script()
+    assert mod.score_pair("喂，哎。", "唉喂")[:2] == (1.0, 1)
+    assert mod.score_pair("不需要了", "不需要啦")[:2] == (1.0, 1)
+    assert mod.score_pair("什么事儿", "啥事")[:2] == (1.0, 1)
+    assert mod.score_pair("你好啊", "您好")[:2] == (1.0, 1)
+    assert mod.score_pair("泥马", "你妈")[:2] == (1.0, 1)
+    assert mod.score_pair("我的卡", "我地卡")[:2] == (1.0, 1)
+    assert mod.score_pair("好吧", "好")[:2] == (1.0, 1)
+    assert mod.score_pair("嗯好", "好")[1] == 0
+    assert mod.score_pair("好哦", "好")[1] == 0
+    accuracy, exact, edits, _ref_len = mod.score_pair("不需要谢谢", "不需要了谢")
+    assert exact == 0
+    assert edits > 0
+    assert accuracy < 1
+    assert mod.score_pair("不需要", "我不要")[1] == 0
+    assert mod.collapse_abnormal_loops("不用不用") == "不用不用"
+    assert mod.collapse_abnormal_loops("不用不用不用") == "不用"
+    assert mod.collapse_abnormal_loops("不用" * 10000) == "不用"
+    assert mod.score_pair("不用", "不用不用不用不用")[:2] == (1.0, 1)
+    assert mod.score_pair("不用不用", "不用不用")[1] == 1
+    assert mod.score_pair("不用不用", "不用不用不用")[1] == 0
+
+
+def test_ckpt_keeps_base_as_comparison():
+    mod = _load_script()
+    assert mod.asr_jobs("full", "dev", "best") == [
+        ("qwen-base", "qwen-base-dev"),
+        ("qwen-full-best", "qwen-full-dev-best"),
+    ]
+    assert mod.asr_jobs("full", "train", "over") == [
+        ("qwen-base", "qwen-base-full"),
+        ("qwen-full-over", "qwen-full-train-over"),
+    ]
+    assert [name for name, _run in mod.asr_jobs("full", "dev", "best-over")] == [
+        "qwen-base",
+        "qwen-full-best",
+        "qwen-full-over",
+    ]
+    assert mod.output_path(Path("."), "v015", "dev", "best").name == "evaluation_final_dev_v015_base_vs_best.xlsx"
+    assert mod.output_path(Path("."), "v015", "dev", "over").name == "evaluation_final_dev_v015_base_vs_over.xlsx"
+
+    gold_rows = [
+        {
+            "id": "a",
+            "type": "auto_gold",
+            "label": "不需要",
+            "candidate_text": "不需要",
+            "gold_text_ann": "不需要",
+            "gold_vs_candidate_mismatch": 0,
+            "category": "",
+            "decision": "accept",
+            "gold_kind": "speech",
+            "noise_kind": "",
+            "exclude_from_training": False,
+            "uncertain": "",
+            "label_source": "human",
+            "wav_path": "a.wav",
+            "reference": "不需要",
+        }
+    ]
+    frames = mod.build_frames(
+        gold_rows,
+        [
+            ("qwen-base", {"a": "不需要"}),
+            ("qwen-full-best", {"a": "不用"}),
+        ],
+        gold_path=Path("gold.parquet"),
+        model_paths={
+            "qwen-base": Path("base.parquet"),
+            "qwen-full-best": Path("best.parquet"),
+        },
+    )
+    accuracy = frames[0]
+    assert list(accuracy.columns)[5] == "相对 qwen-base"
+    base = accuracy.loc[accuracy["模型"] == "qwen-base"].iloc[0]
+    assert base["相对 qwen-base"] == "baseline"
+    best = accuracy.loc[accuracy["模型"] == "qwen-full-best"].iloc[0]
+    assert best["正确率"] == "0.00%"
+    assert str(best["相对 qwen-base"]).startswith("-")
+
+
+def test_filler_tokens_come_from_yaml():
+    mod = _load_script()
+    tokens = mod.load_score_drop_tokens()
+    assert tokens == mod._SCORE_DROP_TOKENS
+    assert "你妈" in tokens and "什么" in tokens and "吧" in tokens
+    assert "嗯" not in tokens and "哦" not in tokens
+    assert mod.SCORE_DROP_YAML.name == "fenshen_1015_filler_tokens.yaml"
+
+
+def test_eval_type_overrides_plain_match(tmp_path: Path):
+    mod = _load_script()
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    gold = tmp_path / "gold.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "id": "kept-hardcase",
+                    "source_path": "a.wav",
+                    "audio": '{"resampled_16k": "a.wav"}',
+                    "qwen_1_text": "不需要。",
+                    "label_gold_text": "不需要。",
+                    "label_source_gold_kind": "speech",
+                    "label_decision": "accept",
+                    "label_eval_type": "hardcase",
+                    "label_noise_kind": "",
+                },
+                {
+                    "id": "noise",
+                    "source_path": "b.wav",
+                    "audio": '{"resampled_16k": "b.wav"}',
+                    "qwen_1_text": "没有",
+                    "label_gold_text": "",
+                    "label_source_gold_kind": "non_speech",
+                    "label_decision": "empty",
+                    "label_eval_type": "non_speech",
+                    "label_noise_kind": "background_suspected",
+                },
+            ]
+        ),
+        gold,
+    )
+    rows = mod.load_gold_rows(gold)
+    by_id = {row["id"]: row for row in rows}
+    assert by_id["kept-hardcase"]["type"] == "hardcase"
+    assert by_id["kept-hardcase"]["reference"] == "不需要。"
+    assert by_id["noise"]["type"] == "non_speech"
+    assert by_id["noise"]["reference"] == ""
+    assert by_id["noise"]["noise_kind"] == "background_suspected"
+
+
+def test_classify_ignores_punctuation_and_prefers_non_speech():
+    mod = _load_script()
+    assert mod.classify_type("speech", "accept", "喂，哎。", "喂？哎。") == "auto_gold"
+    assert mod.classify_type("speech", "accept", "是啊", "不需要") == "hardcase"
+    assert mod.classify_type("speech", "empty", "是啊", "不需要") == "non_speech"
+    assert mod.classify_type("non_speech", "accept", "", "噪声") == "non_speech"
+
+
+def test_unclassified_gold_reports_only_overall(tmp_path: Path):
+    mod = _load_script()
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    gold = tmp_path / "gold.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "id": "speech",
+                    "source_path": "a.wav",
+                    "audio": '{"resampled_16k": "a.wav"}',
+                    "qwen_1_text": "是啊",
+                    "label_gold_text": "不需要",
+                    "label_source_gold_kind": "speech",
+                    "label_decision": "accept",
+                    "label_eval_type_split": False,
+                },
+                {
+                    "id": "empty",
+                    "source_path": "b.wav",
+                    "audio": '{"resampled_16k": "b.wav"}',
+                    "qwen_1_text": "噪声",
+                    "label_gold_text": "",
+                    "label_source_gold_kind": "non_speech",
+                    "label_decision": "empty",
+                    "label_eval_type_split": False,
+                },
+            ]
+        ),
+        gold,
+    )
+    rows = mod.load_gold_rows(gold)
+    assert [row["type"] for row in rows] == ["", ""]
+    assert rows[1]["reference"] == ""
+    frames = mod.build_frames(
+        rows,
+        [("qwen-base", {"speech": "不需要", "empty": ""})],
+        gold_path=gold,
+        model_paths={"qwen-base": Path("base.parquet")},
+    )
+    accuracy = frames[0]
+    assert list(accuracy["scope"]) == ["overall"]
+    assert "不做分类" in frames[3].loc[frames[3]["字段/口径"] == "条数", "说明"].item()
+
+
+def test_workbook_matches_char_acc_layout(tmp_path: Path):
+    mod = _load_script()
+    gold_rows = [
+        {
+            "id": "a",
+            "type": "auto_gold",
+            "label": "喂。",
+            "candidate_text": "喂",
+            "gold_text_ann": "喂。",
+            "gold_vs_candidate_mismatch": 0,
+            "category": "semantic_risk",
+            "decision": "accept",
+            "gold_kind": "speech",
+            "noise_kind": "",
+            "exclude_from_training": False,
+            "uncertain": "",
+            "label_source": "human",
+            "wav_path": "a.wav",
+            "reference": "喂。",
+        },
+        {
+            "id": "b",
+            "type": "hardcase",
+            "label": "不需要",
+            "candidate_text": "是啊",
+            "gold_text_ann": "不需要",
+            "gold_vs_candidate_mismatch": 1,
+            "category": "semantic_risk",
+            "decision": "accept",
+            "gold_kind": "speech",
+            "noise_kind": "",
+            "exclude_from_training": False,
+            "uncertain": "",
+            "label_source": "human",
+            "wav_path": "b.wav",
+            "reference": "不需要",
+        },
+        {
+            "id": "c",
+            "type": "non_speech",
+            "label": "",
+            "candidate_text": "",
+            "gold_text_ann": "",
+            "gold_vs_candidate_mismatch": 0,
+            "category": "",
+            "decision": "empty",
+            "gold_kind": "non_speech",
+            "noise_kind": "",
+            "exclude_from_training": True,
+            "uncertain": "",
+            "label_source": "human",
+            "wav_path": "c.wav",
+            "reference": "",
+        },
+    ]
+    models = [
+        ("qwen-base", {"a": "喂", "b": "是啊", "c": "噪声"}),
+        ("qwen-full-best", {"a": "喂", "b": "不需要", "c": ""}),
+        ("qwen-full-over", {"a": "喂。", "b": "不需要", "c": "有人"}),
+    ]
+    frames = mod.build_frames(
+        gold_rows,
+        models,
+        gold_path=Path("gold.parquet"),
+        model_paths={name: Path(f"{name}.parquet") for name, _ in models},
+    )
+    accuracy, pivot, detail, notes = frames
+    assert list(accuracy.columns) == [
+        "scope",
+        "模型",
+        "样本数",
+        "正确数(字准=1)",
+        "正确率",
+        "相对 qwen-base",
+        "总编辑距离",
+        "总基准字数",
+        "总字准",
+        "相对 qwen-base总字准",
+    ]
+    non_speech = accuracy[accuracy["scope"] == "non_speech"].set_index("模型")
+    assert non_speech.loc["qwen-base", "总基准字数"] == 0
+    assert non_speech.loc["qwen-base", "总字准"] == non_speech.loc["qwen-base", "总编辑距离"]
+    assert non_speech.loc["qwen-base", "相对 qwen-base"] == "baseline"
+    assert non_speech.loc["qwen-base", "相对 qwen-base总字准"] == "baseline"
+    assert non_speech.loc["qwen-full-best", "总字准"] == 0
+    assert str(non_speech.loc["qwen-full-best", "相对 qwen-base总字准"]).startswith("-")
+    assert non_speech.loc["qwen-full-best", "正确率"] == "100.00%"
+    assert "qwen-base_正确率%" in pivot.columns
+    assert pivot.loc[pivot["scope"] == "overall", "标注总条数"].item() == 3
+    assert list(detail["id"]) == ["a", "b", "c"]
+    assert detail.loc[detail["id"] == "b", "qwen-base_exact_correct"].item() == 0
+    assert detail.loc[detail["id"] == "b", "qwen-full-best_exact_correct"].item() == 1
+    assert detail.loc[detail["id"] == "a", "qwen-full-over_exact_correct"].item() == 1
+    assert bool(detail.loc[detail["id"] == "a", "eval_scored"].item()) is True
+    assert list(notes.columns) == ["字段/口径", "说明"]
+
+    out = tmp_path / "evaluation_final_dev_v015_base_vs_best_vs_over.xlsx"
+    mod.write_xlsx(out, frames)
+    book = pd.ExcelFile(out)
+    assert book.sheet_names == ["正确率", "透视对比", "明细", "说明"]
+
+
+def test_evaluate_split_reads_manifest_alias(tmp_path: Path):
+    mod = _load_script()
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    gold = mod.gold_path(tmp_path, "dev", "v015")
+    gold.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "id": "a",
+                    "source_path": "a.wav",
+                    "audio": '{"resampled_16k": "vad/a.wav"}',
+                    "qwen_1_text": "喂。",
+                    "label_gold_text": "喂",
+                    "label_source_gold_kind": "speech",
+                    "label_decision": "accept",
+                    "label_label_source": "human",
+                    "label_exclude_from_training": False,
+                }
+            ]
+        ),
+        gold,
+    )
+    for _name, run in mod.asr_jobs("full", "dev"):
+        path = mod.asr_parquet(tmp_path, "v015", "dev", run)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Manifest(
+            [
+                Sample(
+                    id="a",
+                    source_path="a.wav",
+                    sha256="a" * 64,
+                    transcripts={run: {"text": "喂"}},
+                )
+            ]
+        ).save(path)
+    out = mod.evaluate_split(tmp_path, "full", "v015", "dev")
+    assert out.name == "evaluation_final_dev_v015_base_vs_best_vs_over.xlsx"
+    detail = pd.read_excel(out, sheet_name="明细")
+    assert detail.loc[0, "type"] == "auto_gold"
+    assert detail.loc[0, "qwen-full-best_exact_correct"] == 1
+    assert detail.loc[0, "wav_path"] == "vad/a.wav"

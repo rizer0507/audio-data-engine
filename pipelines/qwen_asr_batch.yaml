@@ -4,7 +4,7 @@
 #   → cleaned_mt3000 → qwen_asr_mt3000.parquet
 #
 # 落盘即清洗（048）：识别后同进程跑 quality.normalize_transcripts
-#   （zh_asr_v1 去标点/空白 + blank_exact_qwen_v1 整句清空；raw_text 保留原串）。
+#   （zh_asr_v1 去标点/空白 + blank_exact_qwen_v1 整段热词删除，前后残余保留；raw_text 保留原串）。
 #   --asr-run 别名会同步把 normalize 的 models 指到该 alias。
 # 字准/补洗仍可用 pipelines/asr_metric_pipeline.yaml（对已清洗数据幂等）。
 #

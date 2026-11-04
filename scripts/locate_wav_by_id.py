@@ -318,20 +318,26 @@ def pick_best(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
 def discover_manifests(root: Path, *, batch: str | None) -> list[Path]:
     paths: list[Path] = []
     if batch:
-        for rel in (
-            f"datasets/stage1/cleaned/cleaned_{batch}.parquet",
-            f"datasets/stage1/derived/classified_five_class_v3_{batch}.parquet",
+        from audio_engine.core.source_naming import locate_batch_manifest
+
+        for directory, filename in (
+            (root / "datasets/stage1/cleaned", f"cleaned_{batch}.parquet"),
+            (
+                root / "datasets/stage1/derived",
+                f"classified_five_class_v3_{batch}.parquet",
+            ),
         ):
-            p = root / rel
-            if p.is_file():
-                paths.append(p.resolve())
+            found = locate_batch_manifest(directory, batch, filename)
+            if found.is_file():
+                paths.append(found.resolve())
         return paths
 
     for rel in MANIFEST_SCAN_DIRS:
         d = root / rel
         if not d.is_dir():
             continue
-        paths.extend(sorted(d.glob("*.parquet"), key=lambda p: p.stat().st_mtime, reverse=True))
+        found = list(d.glob("*.parquet")) + list(d.glob("*/*.parquet"))
+        paths.extend(sorted(found, key=lambda p: p.stat().st_mtime, reverse=True))
     return paths
 
 

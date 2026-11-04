@@ -6,7 +6,6 @@ from pathlib import Path
 
 from audio_engine.core.source_naming import (
     DATASETS_ROOT,
-    STAGE1_ASR_DIR,
     STAGE1_DERIVED_DIR,
     _posix,
     manifest_path,
@@ -29,27 +28,27 @@ class ProductionPaths:
 
     @property
     def ingested(self) -> Path:
-        return STAGE1_INGESTED_DIR / f"ingested_{self.source_name}.parquet"
+        return manifest_path("ingested", self.source_name)
 
     @property
     def segments(self) -> Path:
-        return STAGE1_SEGMENTS_DIR / f"segments_{self.source_name}.parquet"
+        return manifest_path("segments", self.source_name)
 
     def asr(self, route_id: str) -> Path:
         alias = validate_asr_run(route_id)
-        return STAGE1_ASR_DIR / f"{model_asr_kind(alias)}_{self.source_name}.parquet"
+        return manifest_path(model_asr_kind(alias), self.source_name)
 
     @property
     def dnsmos(self) -> Path:
-        return STAGE1_QUALITY_DIR / f"dnsmos_{self.source_name}.parquet"
+        return manifest_path("dnsmos", self.source_name)
 
     @property
     def prepared_evidence(self) -> Path:
-        return STAGE1_DERIVED_DIR / f"prepared_evidence_{self.source_name}.parquet"
+        return manifest_path("prepared_evidence", self.source_name)
 
     @property
     def tagged_free_tags(self) -> Path:
-        return STAGE1_DERIVED_DIR / f"tagged_free_tags_v2_{self.source_name}.parquet"
+        return manifest_path("tagged_free_tags_v2", self.source_name)
 
     @property
     def summary_xlsx(self) -> Path:

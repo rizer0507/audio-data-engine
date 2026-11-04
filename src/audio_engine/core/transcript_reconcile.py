@@ -141,14 +141,35 @@ def blank_applies_to_model(model: str, blank_models: set[str] | frozenset[str]) 
     return False
 
 
+def remove_exact_hotword_spans(text: str, hotwords: Iterable[str]) -> tuple[str, bool]:
+    """Delete each configured phrase wherever it occurs as one contiguous span.
+
+    Longer phrases go first. A phrase is never split into tokens, so 「不需要」
+    stays unless that full string is itself a configured phrase.
+    """
+    removed = False
+    phrases = sorted({str(phrase) for phrase in hotwords if phrase}, key=len, reverse=True)
+    for phrase in phrases:
+        if phrase in text:
+            text = text.replace(phrase, "")
+            removed = True
+    return text, removed
+
+
 def rewrite_plain_transcript_entry(
     entry: Any,
     *,
     keep_raw: bool = True,
     blank_hotwords: frozenset[str] = frozenset(),
     blank_model: bool = False,
+    blank_embedded: bool = False,
 ) -> dict[str, Any]:
-    """Normalize one transcript entry; optionally blank exact phrase matches."""
+    """Normalize one transcript entry and optionally drop exact hotword phrases.
+
+    ``blank_embedded`` false: the whole plain text must equal one configured phrase.
+    ``blank_embedded`` true: delete that phrase wherever it appears, and keep the
+    surrounding characters (``嗯`` + phrase → ``嗯``).
+    """
     if isinstance(entry, dict):
         original = str(entry.get("text") or "")
         new_entry = dict(entry)
@@ -160,9 +181,14 @@ def rewrite_plain_transcript_entry(
     if keep_raw:
         extra.setdefault("raw_text", original)
     cleaned = plain_transcript_text(original)
-    if blank_model and cleaned and cleaned in blank_hotwords:
-        extra["blanked_exact_hotword"] = True
-        cleaned = ""
+    if blank_model and cleaned and blank_hotwords:
+        if blank_embedded:
+            cleaned, removed = remove_exact_hotword_spans(cleaned, blank_hotwords)
+            if removed:
+                extra["blanked_exact_hotword"] = True
+        elif cleaned in blank_hotwords:
+            extra["blanked_exact_hotword"] = True
+            cleaned = ""
     if keep_raw or extra:
         new_entry["extra"] = extra
     new_entry["text"] = cleaned
