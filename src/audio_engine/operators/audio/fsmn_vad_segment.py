@@ -180,7 +180,8 @@ class FsmnVadSegmentOperator(ManifestOperator):
     prepare_runtime: if True, copy/overlay model into runtime dir
     ncpu: positive integer, default 1; FunASR/PyTorch intra-op threads per invocation
 
-    Semantics (049 / fenshen): 100 ms packets, generate every two packets,
+    Semantics (fenshen / rt_cpu): 100 ms packets, generate every two packets,
+    split-end PCM pad ±100 ms, complete/EOF start −100 ms;
     split-end / complete-endpoint branch filters, no 675 ms tail, no unified 1s gate,
     EOF fallback when pending remains at client end.
     """
@@ -326,10 +327,10 @@ class FsmnVadSegmentOperator(ManifestOperator):
                 "send_end_result": include_eof,
                 "packet_ms": packet_ms,
                 "note": (
-                    "049 fenshen alignment: 100 ms client packets, generate every two packets, "
-                    "split-end drop <=150 ms, complete-endpoint pending drop <=200 ms, "
-                    "complete branch crops to buffer end at event time, no fixed 675 ms tail, "
-                    "no unified 1s gate; send_end_result publishes EOF fallback when pending remains."
+                    "fenshen/rt_cpu alignment (v9): 100 ms packets, generate every two packets, "
+                    "split-end PCM pad pending-100..end+100, complete/EOF start-100, "
+                    "complete crops to buffer end; split-end drop <=150, complete pending drop <=200; "
+                    "send_end_result publishes EOF fallback when pending remains."
                 ),
             },
         )

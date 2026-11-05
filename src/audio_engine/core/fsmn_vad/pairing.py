@@ -10,6 +10,8 @@ from audio_engine.core.fsmn_vad.types import (
     BRANCH_EOF,
     BRANCH_SPLIT_END,
     BYTES_PER_MS,
+    CLIP_END_LOOKAHEAD_MS,
+    CLIP_START_LOOKBACK_MS,
     COMPLETE_PENDING_DROP_MAX_MS,
     END_REASON_EOF,
     END_REASON_VAD,
@@ -155,15 +157,20 @@ class FenshenEventPairer:
             self.pending_start_ms = None
             return
 
-        start_byte = max(0, ms_to_byte_offset(pending, bytes_per_ms=self.bytes_per_ms))
-        end_byte = min(received_bytes, ms_to_byte_offset(end, bytes_per_ms=self.bytes_per_ms))
+        # Match rt_cpu: start_pcm=(pending-100), end_pcm=(end+100).
+        clip_start_ms = max(0.0, pending - CLIP_START_LOOKBACK_MS)
+        clip_end_ms = end + CLIP_END_LOOKAHEAD_MS
+        start_byte = max(0, ms_to_byte_offset(clip_start_ms, bytes_per_ms=self.bytes_per_ms))
+        end_byte = min(
+            received_bytes, ms_to_byte_offset(clip_end_ms, bytes_per_ms=self.bytes_per_ms)
+        )
         key = (reported_start, reported_end)
         if key in self.emitted:
             # Original service continues without clearing pending on duplicate.
             return
 
         self._publish(
-            pcm_start_ms=pending,
+            pcm_start_ms=clip_start_ms,
             model_end_ms=end,
             reported_start_ms=reported_start,
             reported_end_ms=reported_end,
@@ -174,7 +181,7 @@ class FenshenEventPairer:
             end_reason=END_REASON_VAD,
             clip_branch=BRANCH_SPLIT_END,
             inferred_end_ms=None,
-            extra_padding_ms=0.0,
+            extra_padding_ms=float(CLIP_START_LOOKBACK_MS + CLIP_END_LOOKAHEAD_MS),
         )
         self.emitted.add(key)
         self.pending_start_ms = None
@@ -202,15 +209,17 @@ class FenshenEventPairer:
             self.pending_start_ms = None
             return
 
-        start_byte = max(0, ms_to_byte_offset(start, bytes_per_ms=self.bytes_per_ms))
-        # Original service computes end_pcm then crops pcm_bytes[start_pcm:] — buffer end.
+        # Match rt_cpu: start_pcm=(start-100); end_pcm=(end+100) is computed but
+        # segment = pcm_bytes[start_pcm:] — crop to received buffer end.
+        clip_start_ms = max(0.0, start - CLIP_START_LOOKBACK_MS)
+        start_byte = max(0, ms_to_byte_offset(clip_start_ms, bytes_per_ms=self.bytes_per_ms))
         end_byte = received_bytes
         key = (reported_start, reported_end)
         if key in self.emitted:
             return
 
         self._publish(
-            pcm_start_ms=start,
+            pcm_start_ms=clip_start_ms,
             model_end_ms=end,
             reported_start_ms=reported_start,
             reported_end_ms=reported_end,
@@ -221,7 +230,7 @@ class FenshenEventPairer:
             end_reason=END_REASON_VAD,
             clip_branch=BRANCH_COMPLETE,
             inferred_end_ms=None,
-            extra_padding_ms=0.0,
+            extra_padding_ms=float(CLIP_START_LOOKBACK_MS),
         )
         self.emitted.add(key)
         self.pending_start_ms = None
@@ -230,11 +239,13 @@ class FenshenEventPairer:
         pending = self.pending_start_ms
         if pending is None:
             return
-        start_byte = max(0, ms_to_byte_offset(pending, bytes_per_ms=self.bytes_per_ms))
+        # Match rt_cpu EOF: start_pcm=(pending-100), then pcm_bytes[start_pcm:].
+        clip_start_ms = max(0.0, pending - CLIP_START_LOOKBACK_MS)
+        start_byte = max(0, ms_to_byte_offset(clip_start_ms, bytes_per_ms=self.bytes_per_ms))
         end_byte = received_bytes
         inferred_end_ms = received_bytes / float(self.bytes_per_ms)
         seg = self._publish(
-            pcm_start_ms=pending,
+            pcm_start_ms=clip_start_ms,
             model_end_ms=None,
             reported_start_ms=pending,
             reported_end_ms=inferred_end_ms,
@@ -245,7 +256,7 @@ class FenshenEventPairer:
             end_reason=END_REASON_EOF,
             clip_branch=BRANCH_EOF,
             inferred_end_ms=inferred_end_ms,
-            extra_padding_ms=0.0,
+            extra_padding_ms=float(CLIP_START_LOOKBACK_MS),
             into_eof_list=True,
         )
         if seg is not None:

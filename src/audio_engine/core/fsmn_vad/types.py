@@ -20,14 +20,18 @@ BYTES_PER_MS = SR * 2 // 1000  # 32 for PCM16LE @ 16 kHz
 # Branch short-utterance thresholds from vad_asr_core_new.process_vad_and_asr.
 SPLIT_END_DROP_MAX_MS = 150  # drop when end - pending <= 150 (inclusive)
 COMPLETE_PENDING_DROP_MAX_MS = 200  # drop when pending exists and end - pending <= 200
-# Reported/dedup start for split-end is pending_start - this offset; PCM start is not shifted.
+# Reported/dedup start for split-end is pending_start - this offset.
 SPLIT_END_REPORT_LOOKBACK_MS = 100
+# Actual PCM crop pads (ph_ai_model_asr_rt_cpu vad_asr_core_new):
+# split-end: start=pending-100, end=end+100; complete/EOF: start-=100, end unused/+buffer.
+CLIP_START_LOOKBACK_MS = 100
+CLIP_END_LOOKAHEAD_MS = 100
 
-# No fixed post-endpoint tail (049 replaces 675 ms keep). Kept for fingerprint clarity.
+# Legacy alias; fixed 675 ms keep removed. Split-end pad is CLIP_* above, not this.
 END_SILENCE_KEEP_MS = 0
 
 # Processing fingerprint version — bump when pairing/clip/filter rules change.
-VAD_PROCESSING_VERSION = "fsmn_vad_segment/v8"
+VAD_PROCESSING_VERSION = "fsmn_vad_segment/v9"
 
 END_REASON_VAD = "vad_endpoint"
 END_REASON_EOF = "eof_fallback"

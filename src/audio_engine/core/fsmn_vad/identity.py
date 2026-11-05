@@ -64,9 +64,10 @@ def build_segment_labels(
     Critical: ``original_audio_sha256`` is the *segment* working identity.
     Parent PCM hash lives in ``source_pcm_sha256`` / ``parent_pcm_sha256`` only.
 
-    ``vad_start_ms`` / ``vad_end_ms`` are model (or EOF-inferred) times used for the
-    actual PCM crop. ``vad_reported_*`` are original-service return/dedup timestamps
-    (split-end reported start is pending-100 ms and must not alter the crop).
+    ``vad_start_ms`` is the actual PCM crop start (model start minus 100 ms pad).
+    ``vad_end_ms`` is the model end (split-end PCM may extend +100 ms beyond it;
+    complete/EOF crop to buffer end). ``vad_reported_*`` are service return/dedup
+    timestamps (split-end reported start is also pending-100 ms).
     """
     labels: dict[str, Any] = {
         "is_vad_segment": True,
