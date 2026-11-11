@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -32,9 +33,13 @@ def normalize_v1_base(base_url: str) -> str:
             "0.0.0.0 is a bind address, not a client target; use 127.0.0.1",
             {"base_url": text},
         )
-    if not parsed.scheme or not parsed.hostname:
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username is not None:
         raise ModelServiceError("BASE_URL_INVALID", "base_url must be absolute http(s) URL")
-    if parsed.port is not None and not (1 <= parsed.port <= 65535):
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ModelServiceError("BASE_URL_PORT_INVALID", "port must be 1..65535") from exc
+    if port == 0:
         raise ModelServiceError("BASE_URL_PORT_INVALID", "port must be 1..65535")
     # Avoid /v1/v1
     if text.endswith("/v1"):
@@ -42,6 +47,13 @@ def normalize_v1_base(base_url: str) -> str:
     if text.endswith("/v1/"):
         return text.rstrip("/")
     return text + "/v1"
+
+
+def probe_model_port(base_url: str) -> int:
+    parsed = urlparse(normalize_v1_base(base_url))
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    with socket.create_connection((parsed.hostname, port), timeout=2.0):
+        return port
 
 
 def new_connection_id() -> str:
@@ -175,6 +187,16 @@ class ModelService:
             "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         try:
+            if level == "port":
+                try:
+                    result["port"] = probe_model_port(base)
+                    result["ok"] = True
+                    result["message"] = "服务器可连接此 TCP 端口"
+                except OSError:
+                    result["code"] = "MODEL_PORT_UNREACHABLE"
+                    result["message"] = "服务器无法连接此 TCP 端口"
+                result["latency_ms"] = int((time.time() - started) * 1000)
+                return result
             models_url = base + "/models"
             req = urllib.request.Request(models_url, method="GET")
             with urllib.request.urlopen(req, timeout=model.timeout_seconds) as resp:

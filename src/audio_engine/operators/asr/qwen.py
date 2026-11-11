@@ -74,6 +74,10 @@ def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
         or settings.get("model")
         or "qwen3-asr"
     )
+    if chat_format := os.environ.get("QWEN_ASR_CHAT_FORMAT"):
+        settings["chat_format"] = chat_format
+    if settings.get("chat_format") == "sophon":
+        settings["model_version"] = settings["model"]
     return settings
 
 
@@ -101,6 +105,7 @@ def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorC
         "prompt",
         "context",
         "chat_template_kwargs",
+        "chat_format",
         "force_language",
     ):
         if key in settings:
@@ -373,11 +378,14 @@ class QwenBatchASROperator(BatchOperator):
         config: OperatorConfig,
         settings: dict[str, Any],
     ) -> dict[str, Any]:
+        extra = {"language": result["language"]} if result.get("language") else {}
+        if "raw_text" in result.get("extra", {}):
+            extra["raw_text"] = result["extra"]["raw_text"]
         transcript = {
             "text": result["text"],
             "model": settings.get("model", "qwen3-asr"),
             "version": settings.get("model_version", settings.get("version", "unknown")),
-            "extra": {"language": result.get("language")} if result.get("language") else {},
+            "extra": extra,
         }
         input_key = config.params.get("input_audio_key", "raw")
         transcript_key = str(config.params.get("transcript_key", "qwen"))

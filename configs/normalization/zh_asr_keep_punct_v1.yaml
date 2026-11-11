@@ -1,0 +1,11 @@
+name: zh_asr_keep_punct_v1
+version: 1
+# Qwen ASR 落盘写盘口径：相对 zh_asr_v1 仅保留标点；blank_exact 仍按 plain（去标点）匹配。
+unicode: {normalize: true, form: NFKC}
+# 人工标注里的【听不清】等整段去掉（含括号内文字），不参与字准
+annotation_brackets: {remove: true}
+punctuation: {remove: false}
+whitespace: {remove: true}
+english: {lowercase: true}
+number: {normalize: false}
+filler: {remove: false}

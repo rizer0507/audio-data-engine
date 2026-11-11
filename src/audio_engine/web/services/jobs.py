@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from codecs import getincrementaldecoder
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from audio_engine.core.progress import PROGRESS_JSON
+from audio_engine.web.services.dataset_catalog import manifest_stage, task_batch
 from audio_engine.web.services.engine import EngineService
 from audio_engine.web.settings import WebSettings
 from audio_engine.web.store import ConflictError, JobStore
@@ -46,8 +50,6 @@ class JobService:
         row = self.store.get_plan(plan_id)
         if not row:
             raise KeyError("plan not found")
-        from datetime import datetime, timezone
-
         expires = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
         if expires < datetime.now(timezone.utc):
             raise ConflictError("PLAN_EXPIRED", "plan expired; re-plan required")
@@ -98,7 +100,7 @@ class JobService:
         job = self.store.get_job(job_id)
         if not job:
             raise KeyError(job_id)
-        return self._job_view(job)
+        return self._job_view(job, live_counts=True)
 
     def list(self, *, status: str | None = None, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
         items, next_cursor = self.store.list_jobs(status=status, cursor=cursor, limit=limit)
@@ -119,7 +121,6 @@ class JobService:
         limit_bytes: int | None = None,
         node_id: str | None = None,
     ) -> dict[str, Any]:
-        _ = node_id  # node-scoped logs reserved; first version reads attempt log file
         job = self.store.get_job(job_id)
         if not job:
             raise KeyError(job_id)
@@ -128,35 +129,55 @@ class JobService:
             return {"chunks": [], "next_cursor": cursor or "", "attempt_id": None}
         attempt = attempts[-1]
         log_path = attempt.get("log_path")
-        max_bytes = limit_bytes or self.settings.worker.log_chunk_max_bytes
+        max_bytes = max(4, min(limit_bytes or self.settings.worker.log_chunk_max_bytes,
+                               self.settings.worker.log_chunk_max_bytes))
         offset = 0
         attempt_id = attempt["attempt_id"]
         if cursor:
             # format: attempt_id:offset
             parts = cursor.split(":")
             if len(parts) == 2 and parts[0]:
-                attempt_id, offset_s = parts
-                offset = int(offset_s)
-                matched = next((a for a in attempts if a["attempt_id"] == attempt_id), None)
-                if matched:
+                requested_id, offset_s = parts
+                matched = next((a for a in attempts if a["attempt_id"] == requested_id), None)
+                if matched and offset_s.isascii() and offset_s.isdecimal() and len(offset_s) <= 20:
                     attempt = matched
+                    attempt_id = requested_id
+                    offset = int(offset_s)
                     log_path = matched.get("log_path")
+        if node_id:
+            log_path = None
+            if attempt.get("work_dir"):
+                work = Path(attempt["work_dir"]).resolve()
+                try:
+                    progress = json.loads((work / "progress.json").read_text(encoding="utf-8"))
+                    run = Path(progress["run_dir"]).resolve()
+                    if (
+                        node_id in progress["nodes"] and Path(node_id).name == node_id
+                        and run.is_relative_to(work.parent)
+                    ):
+                        log_path = run / "nodes" / node_id / "stdout.log"
+                except (OSError, ValueError, KeyError):
+                    pass
         if not log_path or not Path(log_path).is_file():
             return {
                 "chunks": [],
                 "next_cursor": f"{attempt_id}:{offset}",
                 "attempt_id": attempt_id,
             }
-        data = Path(log_path).read_bytes()
-        chunk = data[offset : offset + max_bytes]
-        # UTF-8 boundary trim
-        text = chunk.decode("utf-8", errors="replace")
-        new_offset = offset + len(chunk)
+        with Path(log_path).open("rb") as stream:
+            end = stream.seek(0, 2)
+            if offset > end:
+                offset = 0
+            stream.seek(offset)
+            chunk = stream.read(max_bytes)
+        decoder = getincrementaldecoder("utf-8")(errors="replace")
+        text = decoder.decode(chunk, final=attempt["status"] not in {"running", "cancelling"} and offset + len(chunk) >= end)
+        new_offset = offset + len(chunk) - len(decoder.getstate()[0])
         return {
             "chunks": [{"text": text, "offset": offset}],
             "next_cursor": f"{attempt_id}:{new_offset}",
             "attempt_id": attempt_id,
-            "eof": new_offset >= len(data),
+            "eof": new_offset >= end,
         }
 
     def snapshot(self, job_id: str) -> dict[str, Any]:
@@ -285,7 +306,7 @@ class JobService:
                 )
         return blocked
 
-    def _job_view(self, job: dict[str, Any]) -> dict[str, Any]:
+    def _job_view(self, job: dict[str, Any], *, live_counts: bool = False) -> dict[str, Any]:
         attempts = self.store.list_attempts(job["job_id"])
         plan_row = self.store.get_plan(job["plan_id"])
         plan_json: dict[str, Any] = {}
@@ -294,16 +315,39 @@ class JobService:
                 plan_json = json.loads(plan_row["plan_json"])
             except json.JSONDecodeError:
                 plan_json = {}
+        request = json.loads(job["request_json"])
+        artifacts = json.loads(job["artifacts_json"]) if job.get("artifacts_json") else []
+        if job["status"] == "succeeded":
+            for index, artifact in enumerate(artifacts):
+                artifact["artifact_id"] = f"{job['job_id']}:{index}"
+                if artifact.get("artifact_kind") == "manifest" and artifact.get("path"):
+                    path = self.settings.resolve(artifact["path"])
+                    root = self.settings.project_root
+                    artifact["dataset_id"] = (
+                        path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix()
+                    )
+                    artifact["stage"], artifact["asr_route"] = manifest_stage(path.as_posix(), request)
+        progress = json.loads(job["progress_json"]) if job.get("progress_json") else None
+        if attempts and attempts[-1].get("work_dir"):
+            view = Path(attempts[-1]["work_dir"]) / "progress.json"
+            try:
+                progress = json.loads(view.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
+            if live_counts and job["status"] == "running" and isinstance(progress, dict):
+                self._attach_node_counts(progress, view.parent)
         return {
             "job_id": job["job_id"],
             "task_type": job["task_type"],
+            "batch": task_batch(request),
+            "nodes": plan_json.get("nodes") or [],
             "status": job["status"],
             "plan_id": job["plan_id"],
             "plan_digest": job["plan_digest"],
             "current_attempt": job["current_attempt"],
-            "request": json.loads(job["request_json"]),
-            "progress": json.loads(job["progress_json"]) if job.get("progress_json") else None,
-            "artifacts": json.loads(job["artifacts_json"]) if job.get("artifacts_json") else [],
+            "request": request,
+            "progress": progress,
+            "artifacts": artifacts,
             "error": json.loads(job["error_json"]) if job.get("error_json") else None,
             "snapshot_path": job.get("snapshot_path"),
             "created_at": job["created_at"],
@@ -327,3 +371,33 @@ class JobService:
                 for a in attempts
             ],
         }
+
+    @staticmethod
+    def _attach_node_counts(progress: dict[str, Any], work_dir: Path) -> None:
+        if progress.get("kind") != "production" or not progress.get("run_dir"):
+            return
+        root = Path(progress["run_dir"]).resolve()
+        if not root.is_relative_to(work_dir.resolve().parent):
+            return
+        for node_id, node in (progress.get("nodes") or {}).items():
+            if node.get("status") != "running" or not node.get("started_at") or Path(node_id).name != node_id:
+                continue
+            try:
+                started_at = datetime.fromisoformat(node["started_at"].replace("Z", "+00:00")).timestamp()
+                paths = (root / "nodes" / node_id / "work").glob(f"*/{PROGRESS_JSON}")
+                path = max(paths, key=lambda file: file.stat().st_mtime, default=None)
+                if path is None:
+                    continue
+                snapshot = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(snapshot, dict):
+                    continue
+                done, total = snapshot.get("done"), snapshot.get("total")
+                if (
+                    snapshot.get("updated_at", 0) >= started_at
+                    and type(done) is int and type(total) is int and 0 <= done <= total and total > 0
+                ):
+                    node["processed"] = done
+                    node["total"] = total
+            except (OSError, TypeError, ValueError):
+                # A shard progress file may be between writes or from an older attempt.
+                continue

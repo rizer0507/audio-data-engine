@@ -163,8 +163,13 @@ def rewrite_plain_transcript_entry(
     blank_hotwords: frozenset[str] = frozenset(),
     blank_model: bool = False,
     blank_embedded: bool = False,
+    write_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normalize one transcript entry and optionally drop exact hotword phrases.
+
+    Blank matching always uses ``plain_transcript_text`` (zh_asr_v1: no punct).
+    When ``write_config`` is set and no blank rewrite applies, ``text`` is written
+    with that profile (e.g. keep punctuation). After blanking, residual stays plain.
 
     ``blank_embedded`` false: the whole plain text must equal one configured phrase.
     ``blank_embedded`` true: delete that phrase wherever it appears, and keep the
@@ -180,18 +185,27 @@ def rewrite_plain_transcript_entry(
         extra = {}
     if keep_raw:
         extra.setdefault("raw_text", original)
-    cleaned = plain_transcript_text(original)
+    plain = plain_transcript_text(original)
+    cleaned = plain
+    blanked = False
     if blank_model and cleaned and blank_hotwords:
         if blank_embedded:
             cleaned, removed = remove_exact_hotword_spans(cleaned, blank_hotwords)
             if removed:
                 extra["blanked_exact_hotword"] = True
+                blanked = True
         elif cleaned in blank_hotwords:
             extra["blanked_exact_hotword"] = True
             cleaned = ""
+            blanked = True
     if keep_raw or extra:
         new_entry["extra"] = extra
-    new_entry["text"] = cleaned
+    if blanked:
+        new_entry["text"] = cleaned
+    elif write_config is not None:
+        new_entry["text"] = normalize_text(clean_control_tags(original), write_config)
+    else:
+        new_entry["text"] = cleaned
     return new_entry
 
 

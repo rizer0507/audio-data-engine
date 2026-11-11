@@ -75,7 +75,7 @@ class ModelPatch(APIModel):
 
 
 class ModelCheckRequest(APIModel):
-    level: str = "models"  # models | transcription
+    level: Literal["port", "models", "transcription"] = "port"
     sample_ref: dict[str, str] | None = None
 
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiRequestError, api, formatDateTime } from "../api";
 import ErrorBanner from "../components/ErrorBanner";
-import type { Capabilities, ModelCheckResult, ModelConnection, Source } from "../types";
+import type { Capabilities, ModelCheckResult, ModelConnection } from "../types";
 
 const emptyForm = {
   name: "",
@@ -16,7 +16,6 @@ const emptyForm = {
 
 export default function Models() {
   const [items, setItems] = useState<ModelConnection[]>([]);
-  const [sources, setSources] = useState<Source[]>([]);
   const [providers, setProviders] = useState<string[]>(["glm", "qwen"]);
   const [revision, setRevision] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -25,22 +24,19 @@ export default function Models() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
-  const [samplePath, setSamplePath] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [caps, data, src] = await Promise.all([
+      const [caps, data] = await Promise.all([
         api.get<Capabilities>("/api/v1/capabilities"),
         api.get<{ items: ModelConnection[]; revision?: number }>("/api/v1/models"),
-        api.get<{ items: Source[] }>("/api/v1/sources"),
       ]);
       setProviders(caps.providers || ["glm", "qwen"]);
       setItems(data.items || []);
       setRevision(data.revision ?? null);
-      setSources(src.items || []);
     } catch (e) {
       setError(e);
     } finally {
@@ -89,30 +85,12 @@ export default function Models() {
     }
   }
 
-  async function onCheck(id: string, level: "models" | "transcription") {
+  async function onCheck(id: string) {
     setBusy(true);
     setError(null);
     setCheckOut(null);
     try {
-      if (level === "transcription" && !samplePath.trim()) {
-        setCheckOut({
-          connection_id: id,
-          level,
-          base_url: "",
-          configured_model: "",
-          provider: "",
-          ok: false,
-          checked_at: new Date().toISOString(),
-          code: "SAMPLE_REQUIRED",
-          message: "未提供样本时不能显示转写验证通过。请填写已登记源中的短音频服务器路径。",
-        });
-        return;
-      }
-      const body: Record<string, unknown> = { level };
-      if (level === "transcription") {
-        body.sample_ref = { path: samplePath.trim() };
-      }
-      const data = await api.post<ModelCheckResult>(`/api/v1/models/${id}/check`, body);
+      const data = await api.post<ModelCheckResult>(`/api/v1/models/${id}/check`, { level: "port" });
       setCheckOut(data);
     } catch (err) {
       setError(err);
@@ -125,8 +103,7 @@ export default function Models() {
     <div>
       <h2>模型连接</h2>
       <p className="muted">
-        服务不启动 vLLM。填写 provider、含端口的 base_url 与 served-model-name；connection_id 由后端自动分配，可跨
-        batch 复用。revision={revision ?? "—"}
+        请先在服务器启动 vLLM。连接可跨批次复用，端口由 Web 后端探测。
       </p>
       <ErrorBanner error={error} />
       {lastCreatedId && <p className="help">最近登记内部 ID（只读）：{lastCreatedId}</p>}
@@ -217,29 +194,6 @@ export default function Models() {
       </div>
 
       <div className="panel">
-        <h3>试转写样本（服务器路径）</h3>
-        <div className="form-grid">
-          <label>
-            短音频样本路径
-            <input
-              value={samplePath}
-              onChange={(e) => setSamplePath(e.target.value)}
-              placeholder="D:/data/.../short.wav"
-            />
-            <span className="help">
-              来自已登记数据源目录下的实际文件。未填样本时不能宣称转写验证通过。检查过程不会“启动模型”。
-            </span>
-          </label>
-          {sources.length > 0 && (
-            <p className="help">
-              已登记源：
-              {sources.map((s) => `${s.batch || s.source_id} (${s.path})`).join("； ")}
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="panel">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h3>已配置</h3>
           <button type="button" onClick={() => void load()}>
@@ -278,15 +232,8 @@ export default function Models() {
                     <div className="help">{m.api_key_configured ? "引用可解析" : "未配置/不可解析"}</div>
                   </td>
                   <td className="row">
-                    <button type="button" disabled={busy} onClick={() => void onCheck(m.connection_id, "models")}>
-                      检查模型名
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void onCheck(m.connection_id, "transcription")}
-                    >
-                      试转写
+                    <button type="button" disabled={busy} onClick={() => void onCheck(m.connection_id)}>
+                      检查端口
                     </button>
                     <button type="button" onClick={() => fillEdit(m)}>
                       修改
@@ -300,7 +247,7 @@ export default function Models() {
         {checkOut && (
           <div style={{ marginTop: "1rem" }}>
             <div className={checkOut.ok ? "ok" : "warn"}>
-              {checkOut.ok ? "检查通过" : "检查未通过"} · level={checkOut.level} ·{" "}
+              {checkOut.ok ? "端口可连接" : "端口不可连接"} · {checkOut.base_url} ·{" "}
               {formatDateTime(checkOut.checked_at)}
               {checkOut.latency_ms != null ? ` · ${checkOut.latency_ms}ms` : ""}
             </div>

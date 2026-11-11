@@ -8,6 +8,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
+from audio_engine.web.services.dataset_catalog import manifest_batch, manifest_stage, task_batch
 from audio_engine.web.settings import WebSettings
 from audio_engine.web.store import ConflictError, JobStore
 
@@ -30,7 +31,11 @@ class ResultsService:
     # ------------------------------------------------------------------ path helpers
 
     def _allowed_roots(self) -> list[Path]:
-        return [self.settings.project_root.resolve(), *[r.resolve() for r in self.settings.allowed_source_roots]]
+        return [
+            self.settings.project_root.resolve(),
+            self.settings.runs_dir.resolve(),
+            *[r.resolve() for r in self.settings.allowed_source_roots],
+        ]
 
     def _ensure_allowed(self, path: Path) -> Path:
         path = path.resolve()
@@ -172,35 +177,90 @@ class ResultsService:
 
     # ------------------------------------------------------------------ datasets
 
-    def list_datasets(self) -> dict[str, Any]:
+    def list_datasets(
+        self, *, batch: str | None = None, catalog_only: bool = False,
+        dataset_id: str | None = None,
+    ) -> dict[str, Any]:
         root = self.settings.project_root / "datasets"
         items: list[dict[str, Any]] = []
-        if root.is_dir():
-            for path in sorted(root.rglob("*.parquet")):
-                if path.name.endswith(".annotation_work.parquet"):
-                    continue
-                rel = path.relative_to(self.settings.project_root).as_posix()
-                binding = self.load_binding(path)
-                work = self._work_manifest_path(path)
-                items.append(
-                    {
-                        "dataset_id": rel,
-                        "path": rel,
-                        "format": "parquet",
-                        "registered": True,
-                        "has_work_copy": work.is_file(),
-                        "work_dataset_id": self._rel_id(work) if work.is_file() else None,
-                        "state_kind": "published",
-                        "tagging_binding": {
-                            "batch_id": binding.get("batch_id"),
-                            "work_root": binding.get("work_root"),
-                            "tagging_config": binding.get("tagging_config"),
-                        }
-                        if binding
-                        else None,
+        published = self.store.list_published_manifests() if self.store else []
+        origins = {}
+        for row in published:
+            origins.setdefault(self.settings.resolve(row["path"]), row)
+        if dataset_id:
+            try:
+                paths = [self._resolve_dataset(dataset_id)]
+            except (FileNotFoundError, PermissionError):
+                paths = []
+        else:
+            paths = dict.fromkeys([*origins, *sorted(root.rglob("*.parquet"))])
+        batches: dict[str | None, int] = {}
+        matched = 0
+        known_batches: dict[Path, str | None] = {}
+
+        def get_batch(path: Path, trail: frozenset[Path] = frozenset()) -> str | None:
+            if path in known_batches:
+                return known_batches[path]
+            if path in trail:
+                return None
+            origin = origins.get(path)
+            request = json.loads(origin["request_json"]) if origin else {}
+            binding = self.load_binding(path)
+            name = binding.get("batch_id") or task_batch(request) or manifest_batch(path.as_posix())
+            if not name and (dataset := (request.get("input") or {}).get("dataset_id")):
+                name = get_batch(self.settings.resolve(dataset), trail | {path})
+            known_batches[path] = name
+            return name
+
+        for path in paths:
+            if (not dataset_id and ".annotation_work." in path.name) or not path.is_file():
+                continue
+            try:
+                self._ensure_allowed(path)
+            except PermissionError:
+                continue
+            name = get_batch(path)
+            batches[name] = batches.get(name, 0) + 1
+            if batch is not None and (name or "") != batch:
+                continue
+            matched += 1
+            if catalog_only or (batch is None and len(items) >= 500):
+                continue
+            rel = self._rel_id(path)
+            binding = self.load_binding(path)
+            work = self._work_manifest_path(path)
+            origin = origins.get(path)
+            stage, route = manifest_stage(rel, json.loads(origin["request_json"]) if origin else {})
+            items.append(
+                {
+                    "dataset_id": rel,
+                    "path": rel,
+                    "format": path.suffix.removeprefix("."),
+                    "batch": name,
+                    "stage": stage,
+                    "asr_route": route,
+                    "job_id": origin["job_id"] if origin else None,
+                    "published_at": origin["published_at"] if origin else None,
+                    "registered": True,
+                    "has_work_copy": work.is_file(),
+                    "work_dataset_id": self._rel_id(work) if work.is_file() else None,
+                    "state_kind": "published",
+                    "tagging_binding": {
+                        "batch_id": binding.get("batch_id"),
+                        "work_root": binding.get("work_root"),
+                        "tagging_config": binding.get("tagging_config"),
                     }
-                )
-        return {"items": items[:500], "next_cursor": None, "total": len(items)}
+                    if binding
+                    else None,
+                }
+            )
+        return {
+            "items": items, "next_cursor": None, "total": matched,
+            "batches": [
+                {"batch": name, "count": batches[name]}
+                for name in sorted(batches, key=lambda value: (value is None, value or ""))
+            ],
+        }
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any]:
         path = self._resolve_dataset(dataset_id)

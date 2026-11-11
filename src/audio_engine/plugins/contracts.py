@@ -482,6 +482,7 @@ class PluginContext:
     on_progress: ProgressCallback | None = None
     on_log: LogCallback | None = None
     readonly: bool = False
+    resume_run_dir: Path | None = None
 
     def resolve_secret(self, env_name: str) -> str | None:
         if self.secret_resolver:

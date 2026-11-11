@@ -10,6 +10,25 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_live_node_counts_are_from_the_current_node_start(tmp_path: Path) -> None:
+    from audio_engine.web.services.jobs import JobService
+
+    work = tmp_path / "attempt_2"
+    run = tmp_path / "attempt_1" / "production" / "run"
+    shard_work = run / "nodes" / "asr_qwen1" / "work" / "sharded_run"
+    shard_work.mkdir(parents=True)
+    path = shard_work / "progress.json"
+    node = {"status": "running", "started_at": "2026-01-01T00:00:00+00:00"}
+    progress = {"kind": "production", "run_dir": str(run), "nodes": {"asr_qwen1": node}}
+
+    path.write_text(json.dumps({"done": 80, "total": 100, "updated_at": 1}), encoding="utf-8")
+    JobService._attach_node_counts(progress, work)
+    assert "processed" not in node
+    path.write_text(json.dumps({"done": 30, "total": 100, "updated_at": 1767225601}), encoding="utf-8")
+    JobService._attach_node_counts(progress, work)
+    assert (node["processed"], node["total"]) == (30, 100)
+
+
 def _seed_plan(store, plan_id: str = "plan_x", digest: str = "digest_x", **extra):
     store.save_plan(
         plan_id=plan_id,

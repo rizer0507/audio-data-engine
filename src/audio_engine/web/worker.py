@@ -97,15 +97,35 @@ class Worker:
         if snap and (Path(snap) / "plan.json").is_file():
             plan = json.loads((Path(snap) / "plan.json").read_text(encoding="utf-8"))
 
+        resume_run_dir = None
+        if attempt_no > 1 and "production" in (plan.get("definition_snapshot") or {}):
+            previous = self.store.list_attempts(job_id)[-2]
+            if previous["status"] == "failed" and previous.get("work_dir"):
+                previous_result = Path(previous["work_dir"]) / "result.json"
+                try:
+                    payload = json.loads(previous_result.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    payload = {}
+                if payload.get("run_dir"):
+                    candidate = Path(payload["run_dir"]).resolve()
+                    if (
+                        candidate.is_relative_to(work_dir.parent)
+                        and candidate.parent.name == "production"
+                        and (candidate / "state.json").is_file()
+                    ):
+                        resume_run_dir = str(candidate)
+
         runner_script = work_dir / "execute_plan.py"
         runner_script.write_text(
             _EXECUTOR_TEMPLATE.format(
                 project_root=json.dumps(str(self.settings.project_root)),
+                sources_manifest=json.dumps(str(self.settings.sources_manifest)),
                 plugins_config=json.dumps(str(self.settings.plugins_config)),
                 plan_path=json.dumps(str(work_dir / "plan.json")),
                 work_dir=json.dumps(str(work_dir)),
                 job_id=json.dumps(job_id),
                 attempt_id=json.dumps(attempt_id),
+                resume_run_dir=repr(resume_run_dir),
             ),
             encoding="utf-8",
         )
@@ -113,12 +133,8 @@ class Worker:
             json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        # Task-private env for child only (never mutate API/worker global os.environ).
-        # Clear inherited GLM/Qwen vars so parent shell cannot override frozen bindings.
         child_env = os.environ.copy()
-        for key in list(child_env):
-            if key.startswith(("GLM_ASR_", "QWEN_ASR_")):
-                child_env.pop(key, None)
+        child_env["PYTHONIOENCODING"] = "utf-8"
         # Persist route/model freeze for adapters; multi-route isolation uses
         # per-route env inside production adapter, not a single global base.
         bindings_path = work_dir / "model_bindings.json"
@@ -158,6 +174,8 @@ class Worker:
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
         }
         if os.name != "nt":
             popen_kwargs["start_new_session"] = True
@@ -176,21 +194,19 @@ class Worker:
         )
 
         cancel_requested = False
-        with log_path.open("a", encoding="utf-8") as log_fh:
+        def drain_logs() -> None:
             assert proc.stdout is not None
-            last_beat = 0.0
-            while True:
-                line = proc.stdout.readline()
-                if line:
+            with proc.stdout, log_path.open("a", encoding="utf-8") as log_fh:
+                for line in proc.stdout:
                     log_fh.write(line)
                     log_fh.flush()
-                elif proc.poll() is not None:
-                    # drain remainder
-                    rest = proc.stdout.read() or ""
-                    if rest:
-                        log_fh.write(rest)
-                    break
 
+        reader = threading.Thread(target=drain_logs, daemon=True)
+        reader.start()
+        last_beat = 0.0
+        job_row = self.store.get_job(job_id)
+        try:
+            while proc.poll() is None:
                 now = time.time()
                 if now - last_beat >= self.settings.worker.heartbeat_interval_seconds:
                     self.store.heartbeat(
@@ -204,8 +220,6 @@ class Worker:
                 job_row = self.store.get_job(job_id)
                 if job_row and job_row["status"] == "cancelling" and not cancel_requested:
                     cancel_requested = True
-                    log_fh.write("\n[worker] cancel requested; terminating task process tree\n")
-                    log_fh.flush()
                     _kill_process_tree(proc.pid)
                     # wait grace
                     try:
@@ -213,6 +227,11 @@ class Worker:
                     except subprocess.TimeoutExpired:
                         _kill_process_tree(proc.pid)
                         proc.wait(timeout=5)
+                else:
+                    time.sleep(0.2)
+        finally:
+            reader.join(timeout=5)
+        job_row = self.store.get_job(job_id)
 
         rc = proc.returncode
         result_path = work_dir / "result.json"
@@ -294,7 +313,7 @@ import json, sys
 from pathlib import Path
 sys.path.insert(0, str(Path({project_root}) / "src"))
 from audio_engine.plugins.registry import PluginRegistry
-from audio_engine.web.settings import load_web_settings
+from audio_engine.core.artifacts import atomic_write_json
 from audio_engine.web.services.engine import EngineService
 
 project_root = {project_root}
@@ -310,6 +329,8 @@ class S:
 settings = S()
 settings.project_root = Path(project_root)
 settings.plugins_config = Path(plugins_config)
+settings.sources_manifest = Path({sources_manifest})
+settings.allowed_source_roots = []
 settings.models = []
 settings.runs_dir = work_dir
 settings.plan_ttl_seconds = 900
@@ -321,12 +342,18 @@ engine = EngineService(settings, registry)
 def on_log(msg, details=None):
     print(msg, flush=True)
 
+def on_progress(progress):
+    atomic_write_json(work_dir / "progress.json", progress)
+
+resume_run_dir = {resume_run_dir}
 result = engine.execute_frozen_plan(
     plan,
     work_dir=work_dir,
     job_id=job_id,
     attempt_id=attempt_id,
     on_log=on_log,
+    on_progress=on_progress,
+    resume_run_dir=Path(resume_run_dir) if resume_run_dir else None,
 )
 Path(work_dir, "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 print("OUTCOME", result.get("outcome"), flush=True)

@@ -47,6 +47,40 @@ def app_client(tmp_path: Path):
         yield client, tmp_path, settings
 
 
+def test_dataset_catalog_filters_before_the_legacy_global_limit(app_client) -> None:
+    client, tmp_path, settings = app_client
+    settings.project_root = tmp_path
+    root = tmp_path / "datasets"
+    alpha = root / "stage1" / "asr" / "alpha"
+    alpha.mkdir(parents=True)
+    for index in range(501):
+        (alpha / f"route{index}_asr_alpha.parquet").touch()
+    beta = root / "stage1" / "segments" / "beta"
+    beta.mkdir(parents=True)
+    backup = beta / "segments_beta_vad_all.parquet"
+    backup.touch()
+    (beta / "segments_beta.parquet").touch()
+    (beta / "segments_beta.annotation_work.parquet").touch()
+    (root / "adhoc.parquet").touch()
+
+    all_items = client.get("/api/v1/datasets").json()
+    assert len(all_items["items"]) == 500
+    assert all_items["total"] == 504
+    catalog = client.get("/api/v1/datasets", params={"catalog_only": True}).json()
+    assert not catalog["items"]
+    assert catalog["batches"] == [
+        {"batch": "alpha", "count": 501}, {"batch": "beta", "count": 2},
+        {"batch": None, "count": 1},
+    ]
+    filtered = client.get("/api/v1/datasets", params={"batch": "beta"}).json()
+    assert {item["stage"] for item in filtered["items"]} == {"segments", "segments_all"}
+    assert all(item["batch"] == "beta" for item in filtered["items"])
+    detail = client.get("/api/v1/datasets", params={"dataset_id": backup.relative_to(tmp_path).as_posix()}).json()
+    assert detail["items"][0]["batch"] == "beta"
+    unknown = client.get("/api/v1/datasets", params={"batch": ""}).json()
+    assert [item["path"] for item in unknown["items"]] == ["datasets/adhoc.parquet"]
+
+
 def _make_dataset(tmp_path: Path, settings) -> str:
     from audio_engine.core.manifest import Manifest
     from audio_engine.core.sample import Sample

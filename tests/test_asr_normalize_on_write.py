@@ -37,11 +37,11 @@ def test_blank_applies_to_family_aliases():
     assert not blank_applies_to_model("qwenthing", models)
 
 
-def test_qwen_on_write_strips_punct_blanks_dump_keeps_short(tmp_path):
+def test_qwen_on_write_keeps_punct_blanks_dump_keeps_short(tmp_path):
     params = {
         "models": ["qwen1"],
         "keep_raw": True,
-        "normalization_path": "configs/normalization/zh_asr_v1.yaml",
+        "normalization_path": "configs/normalization/zh_asr_keep_punct_v1.yaml",
         "blank_exact_hotwords_path": "configs/normalization/blank_exact_qwen_v1.yaml",
     }
     blanked = _normalize(
@@ -68,7 +68,8 @@ def test_qwen_on_write_strips_punct_blanks_dump_keeps_short(tmp_path):
         params,
         cache_dir=tmp_path / "c2",
     )
-    assert kept.transcripts["qwen1"]["text"] == "不需要"
+    # NFKC folds fullwidth ！ → !; punctuation is kept for non-blanked rows.
+    assert kept.transcripts["qwen1"]["text"] == "不需要!"
     assert kept.transcripts["qwen1"]["extra"]["raw_text"] == "不需要！"
 
     prefixed_raw = "嗯没有，暂时不用，不需要谢谢，不可以啊，不用，我不需要，不要，不用，不需要"
@@ -234,10 +235,10 @@ def test_normalize_cache_invalidates_when_blank_yaml_changes(tmp_path):
 
 
 def test_asr_batch_yaml_declares_normalize_step():
-    for path, model, blank in (
-        ("pipelines/qwen_asr_batch.yaml", "qwen", True),
-        ("pipelines/sensevoice_asr_batch.yaml", "sensevoice", False),
-        ("pipelines/glm_asr_batch.yaml", "glm", False),
+    for path, model, blank, norm_name in (
+        ("pipelines/qwen_asr_batch.yaml", "qwen", True, "zh_asr_keep_punct_v1.yaml"),
+        ("pipelines/sensevoice_asr_batch.yaml", "sensevoice", False, "zh_asr_v1.yaml"),
+        ("pipelines/glm_asr_batch.yaml", "glm", False, "zh_asr_v1.yaml"),
     ):
         cfg = PipelineConfig.from_yaml(Path(path))
         ops = [step.operator for step in cfg.steps]
@@ -248,7 +249,7 @@ def test_asr_batch_yaml_declares_normalize_step():
         norm = cfg.steps[norm_idx]
         assert norm.params.get("keep_raw") is True
         assert norm.params.get("models") == [model]
-        assert "zh_asr_v1.yaml" in str(norm.params.get("normalization_path", ""))
+        assert norm_name in str(norm.params.get("normalization_path", ""))
         has_blank = bool(norm.params.get("blank_exact_hotwords_path"))
         assert has_blank is blank
 

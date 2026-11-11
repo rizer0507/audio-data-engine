@@ -59,6 +59,202 @@ def test_health_and_capabilities(app_client) -> None:
     assert client.get("/asr_data/health").status_code == 200
 
 
+def test_model_port_probe_does_not_send_http(app_client) -> None:
+    import socket
+
+    client, _, _ = app_client
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        connection = client.post("/api/v1/models", json={
+            "provider": "qwen", "base_url": f"http://127.0.0.1:{port}", "model": "qwen",
+        }).json()
+        endpoint = f"/api/v1/models/{connection['connection_id']}/check"
+        response = client.post(endpoint, json={"level": "port"}).json()
+        assert response["ok"] is True and response["port"] == port
+        listener.settimeout(2)
+        accepted, _ = listener.accept()
+        with accepted:
+            accepted.settimeout(2)
+            assert accepted.recv(1) == b""
+    assert client.post(endpoint, json={"level": "port"}).json()["code"] == "MODEL_PORT_UNREACHABLE"
+
+
+def test_worker_runs_and_publishes_production_with_xlsx(app_client, monkeypatch, request) -> None:
+    from tempfile import TemporaryDirectory
+
+    import numpy as np
+    import soundfile as sf
+    from openpyxl import Workbook
+
+    from audio_engine.core.manifest import Manifest
+    from audio_engine.web.worker import Worker
+
+    client, tmp_path, settings = app_client
+    project = tmp_path / "project"
+    for folder in ("configs", "pipelines"):
+        shutil.copytree(ROOT / folder, project / folder)
+    (project / "src" / "audio_engine").mkdir(parents=True)
+    (project / "scripts").mkdir()
+    for script in ("filter_segments_drop_identity_verify.py", "drop_qwen_en_identity_verify.py"):
+        shutil.copy2(ROOT / "scripts" / script, project / "scripts" / script)
+    fixture_script = project / "scripts" / "dnsmos_fixture.py"
+    fixture_script.write_text(
+        "from pathlib import Path\n\n"
+        "def process(sample, params, context):\n"
+        "    if not Path('dnsmos_ready').is_file():\n"
+        "        raise RuntimeError('fixture DNSMOS unavailable')\n"
+        "    return {'quality': {'dnsmos_status': 'success', 'dnsmos_sig': 3.2}}\n",
+        encoding="utf-8",
+    )
+    settings.project_root = project
+    settings.plugins_config = project / "configs/plugins.yaml"
+    # Leave room for nested checkpoint and atomic-write filenames on Windows.
+    run_storage = TemporaryDirectory(prefix="a45-")
+    request.addfinalizer(run_storage.cleanup)
+    settings.runs_dir = Path(run_storage.name)
+    engine = client.app.state.engine_service
+    engine.registry.project_root = project
+    engine.refresh_plugins()
+    monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    monkeypatch.setenv("MKL_NUM_THREADS", "1")
+
+    for name in (
+        "audio_ingest", "vad_segment_batch", "qwen_asr_batch", "glm_asr_batch",
+        "dnsmos_score_batch", "evidence_join", "tag_dataset_free_tags_v2",
+    ):
+        pipeline = project / "pipelines" / f"{name}.yaml"
+        config = yaml.safe_load(pipeline.read_text(encoding="utf-8"))
+        if "sharding" in config:
+            config["sharding"] = {"shards": 1, "parallel_shards": 1}
+        config.setdefault("execution", {})["checkpoint_every"] = 0
+        if name == "vad_segment_batch":
+            config["pipeline"][0]["params"]["mock_intervals"] = [[100, 800]]
+        if name == "dnsmos_score_batch":
+            # Keep the real branch/manifest contract while avoiding ONNX in this fixture.
+            config["execution"]["fail_fast"] = True
+            config["pipeline"] = [{
+                "operator": "script.python", "params": {"path": str(fixture_script)},
+            }]
+        pipeline.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for name, tone in (("drop", 400), ("keep", 600)):
+        sf.write(raw / f"{name}.wav", 0.2 * np.sin(np.arange(16000) * tone * 2 * np.pi / 16000), 16000)
+    workbook = Workbook()
+    workbook.active.append(["file_id", "AI话术分类标签"])
+    workbook.active.append(["drop", "接洽（身份核实）"])
+    workbook_path = tmp_path / "labels.xlsx"
+    workbook.save(workbook_path)
+
+    source = client.post("/api/v1/sources", json={
+        "batch": "web_045", "path": str(raw),
+    })
+    assert source.status_code == 201, source.text
+    bindings = []
+    for family, port in (("qwen", 5555), ("glm", 5570)):
+        model = client.post("/api/v1/models", json={
+            "provider": family, "base_url": f"http://127.0.0.1:{port}/v1",
+            "model": f"{family}-fixture", "model_revision": "fixture_1",
+        })
+        assert model.status_code == 201, model.text
+        bindings.append({"route_id": f"{family}1", "connection_id": model.json()["connection_id"]})
+    plan = client.post("/api/v1/plugins/plan", json={
+        "task_type": "pipeline",
+        "root_plugin": {"kind": "pipeline", "id": "audio_ingest_vad_asr_dnsmos_tags", "version": "1"},
+        "input": {"kind": "source", "source_id": source.json()["source_id"]},
+        "parameters": {"label_xlsx": str(workbook_path)},
+        "model_bindings": bindings,
+        "execution": {"mock": True},
+    })
+    assert plan.status_code == 200, plan.text
+    nodes = {node["node_id"]: node for node in plan.json()["nodes"]}
+    assert nodes["asr_qwen1"]["depends_on"] == ["filter_identity_verify"]
+    response = client.post("/api/v1/jobs", json={
+        key: plan.json()[key] for key in ("plan_id", "plan_digest")
+    })
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+    worker = Worker(settings)
+    job = worker.store.claim_next_job(worker_id=worker.worker_id, lease_seconds=30)
+    assert job is not None
+    worker._run_attempt(job)
+    failed = client.get(f"/api/v1/jobs/{job_id}").json()
+    assert failed["status"] == "failed"
+    assert failed["progress"]["nodes"]["dnsmos"]["status"] == "failed", failed["error"]
+    assert failed["progress"]["nodes"]["evidence_join"]["status"] == "pending"
+    assert not failed["artifacts"]
+    (project / "dnsmos_ready").touch()
+    assert client.post(f"/api/v1/jobs/{job_id}/retry", json={"mode": "resume"}).status_code == 200
+    retry = worker.store.claim_next_job(worker_id=worker.worker_id, lease_seconds=30)
+    assert retry is not None and retry["attempt_no"] == 2
+    worker._run_attempt(retry)
+
+    detail = client.get(f"/api/v1/jobs/{job_id}").json()
+    assert detail["status"] == "succeeded", detail["error"]
+    assert detail["progress"]["run_dir"] == failed["progress"]["run_dir"]
+    run = Path(detail["progress"]["run_dir"])
+    events = (run / "events.jsonl").read_text(encoding="utf-8")
+    assert '"event": "node_skipped", "node_id": "asr_qwen1"' in events
+    for family, port in (("qwen", 5555), ("glm", 5570)):
+        config_path = run.parent.parent / "effective" / f"asr_{family}1.yaml"
+        params = yaml.safe_load(config_path.read_text(encoding="utf-8"))["pipeline"][0]["params"]
+        assert params["api_base"] == f"http://127.0.0.1:{port}/v1"
+        assert params["model"] == f"{family}-fixture"
+    assert detail["progress"]["nodes"]["filter_identity_verify"]["status"] == "succeeded"
+    logs = client.get(f"/api/v1/jobs/{job_id}/logs", params={"node_id": "filter_identity_verify"})
+    assert "drop_ids_hit=1" in logs.json()["chunks"][0]["text"]
+    tagged = next(a for a in detail["artifacts"] if Path(a["path"]).name.startswith("tagged_free_tags"))
+    rows = Manifest.load(tagged["path"]).samples
+    assert [sample.labels["source_audio_id"] for sample in rows] == ["keep"]
+    assert set(rows[0].transcripts) == {"qwen1", "glm1"}
+    backup = next(a for a in detail["artifacts"] if a["path"].endswith("_vad_all.parquet"))
+    assert len(Manifest.load(backup["path"]).samples) == 2
+    assert any(a["artifact_kind"] == "report" for a in detail["artifacts"])
+    assert client.get(f"/api/v1/artifacts/{tagged['artifact_id']}/download").status_code == 200
+    assert tagged["dataset_id"] in {item["dataset_id"] for item in client.get("/api/v1/datasets").json()["items"]}
+    assert not (project / "datasets").exists()
+
+    def run_step(plugin_id, dataset_id, parameters):
+        planned = client.post("/api/v1/plugins/plan", json={
+            "task_type": "pipeline",
+            "root_plugin": {"kind": "pipeline", "id": plugin_id, "version": "1"},
+            "input": {"kind": "dataset", "dataset_id": dataset_id},
+            "parameters": parameters,
+        })
+        assert planned.status_code == 200, planned.text
+        submitted = client.post("/api/v1/jobs", json={
+            key: planned.json()[key] for key in ("plan_id", "plan_digest")
+        })
+        assert submitted.status_code == 202, submitted.text
+        claimed = worker.store.claim_next_job(worker_id=worker.worker_id, lease_seconds=30)
+        assert claimed is not None
+        worker._run_attempt(claimed)
+        return client.get(f"/api/v1/jobs/{submitted.json()['job_id']}").json()
+
+    manifests = {Path(a["path"]).stem: a for a in detail["artifacts"] if a["artifact_kind"] == "manifest"}
+    joined = run_step("evidence_join", manifests["segments_web_045"]["dataset_id"], {
+        "asr_manifests": [
+            f"{route}={manifests[f'{route}_asr_web_045']['path']}" for route in ("qwen1", "glm1")
+        ],
+        "dnsmos_manifest": manifests["dnsmos_web_045"]["path"],
+    })
+    assert joined["status"] == "succeeded", joined["error"]
+    step_tagged = run_step("tag_dataset_free_tags_v2", joined["artifacts"][0]["dataset_id"], {
+        "batch": "web_045",
+    })
+    assert step_tagged["status"] == "succeeded", step_tagged["error"]
+    assert any(a["artifact_kind"] == "report" for a in step_tagged["artifacts"])
+    scoped = client.get("/api/v1/datasets", params={"batch": "web_045"}).json()
+    by_id = {item["dataset_id"]: item for item in scoped["items"]}
+    assert by_id[joined["artifacts"][0]["dataset_id"]]["stage"] == "evidence"
+    assert by_id[step_tagged["artifacts"][0]["dataset_id"]]["stage"] == "tags"
+    assert {node["node_id"] for node in detail["nodes"]} == set(detail["progress"]["nodes"])
+
+
 def test_plugins_list_and_show(app_client) -> None:
     client, _, _ = app_client
     r = client.post("/api/v1/plugins/refresh")

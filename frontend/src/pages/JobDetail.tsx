@@ -2,340 +2,286 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, copyText, durationBetween, formatDateTime, publicPath } from "../api";
 import ErrorBanner from "../components/ErrorBanner";
+import TaskStages from "../components/TaskStages";
 import TaskStatus from "../components/TaskStatus";
-import type { Job, JobLogsResponse } from "../types";
+import type { Job, JobLogsResponse, NodeProgress, PlanNode } from "../types";
+import { ACTIVE_JOBS, DATASET_STAGE, basename, nodeLabel } from "../workflows";
 
-const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
+type Artifact = { artifact_id?: string; artifact_kind?: string; path?: string; dataset_id?: string; stage?: string };
+type Attempt = { attempt_no: number; status: string; started_at?: string; ended_at?: string };
 
-export default function JobDetail() {
-  const { jobId } = useParams();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [job, setJob] = useState<Job | null>(null);
+function RunLog({ endpoint, nodeId, active }: { endpoint: string; nodeId: string; active: boolean }) {
   const [logs, setLogs] = useState("");
   const [error, setError] = useState<unknown>(null);
-  const [connError, setConnError] = useState("");
-  const [autoScroll, setAutoScroll] = useState(true);
-  const [pollMs, setPollMs] = useState(2000);
-  const [nodeId, setNodeId] = useState(searchParams.get("node_id") || "");
-  const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const logRef = useRef<HTMLPreElement>(null);
-  const cursorRef = useRef("");
-  const attemptRef = useRef<number | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const visibleRef = useRef(!document.hidden);
-
-  async function fetchJob(): Promise<Job | null> {
-    if (!jobId) return null;
-    const data = await api.get<Job>(`/api/v1/jobs/${jobId}`);
-    setJob(data);
-    return data;
-  }
-
-  async function fetchLogs(reset = false) {
-    if (!jobId) return;
-    if (reset) {
-      cursorRef.current = "";
-      setLogs("");
-    }
-    const qs = new URLSearchParams();
-    if (cursorRef.current) qs.set("cursor", cursorRef.current);
-    if (nodeId) qs.set("node_id", nodeId);
-    const log = await api.get<JobLogsResponse>(`/api/v1/jobs/${jobId}/logs?${qs.toString()}`);
-    if (log.chunks?.length) {
-      setLogs((prev) => prev + log.chunks.map((c) => c.text).join(""));
-    }
-    if (log.next_cursor) cursorRef.current = log.next_cursor;
-  }
-
-  async function refresh(opts?: { resetLogs?: boolean }) {
-    setError(null);
-    setConnError("");
-    try {
-      const data = await fetchJob();
-      if (!data) return;
-      if (attemptRef.current !== null && attemptRef.current !== data.current_attempt) {
-        // attempt 切换：重建 cursor，不拼接假连续日志
-        cursorRef.current = "";
-        setLogs("");
+  const [reload, setReload] = useState(0);
+  const [follow, setFollow] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const cursor = useRef("");
+  const logElement = useRef<HTMLPreElement>(null);
+  const maxLog = 160_000;
+  useEffect(() => {
+    const abort = new AbortController();
+    let timer: number | undefined;
+    async function read() {
+      const query = new URLSearchParams();
+      if (cursor.current) query.set("cursor", cursor.current);
+      if (nodeId) query.set("node_id", nodeId);
+      try {
+        const result = await api.get<JobLogsResponse>(`${endpoint}/logs?${query}`, abort.signal);
+        if (abort.signal.aborted) return;
+        setError(null);
+        const previous = cursor.current;
+        cursor.current = result.next_cursor || previous;
+        const chunk = result.chunks.map((line) => line.text).join("");
+        if (chunk) setLogs((current) => (current + chunk).slice(-maxLog));
+        if (!result.eof && cursor.current !== previous && chunk) timer = window.setTimeout(read, 100);
+        else if (active) timer = window.setTimeout(read, document.hidden ? 6500 : 2200);
+      } catch (failure) {
+        if (!abort.signal.aborted) {
+          setError(failure);
+          if (active) timer = window.setTimeout(read, 5000);
+        }
       }
-      attemptRef.current = data.current_attempt;
-      await fetchLogs(Boolean(opts?.resetLogs));
-    } catch (e) {
-      setConnError("连接中断或请求失败；任务状态以服务端为准，未在本地篡改。");
-      setError(e);
     }
-  }
-
-  useEffect(() => {
-    cursorRef.current = "";
-    attemptRef.current = null;
-    setLogs("");
-    setJob(null);
-    void refresh({ resetLogs: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId]);
-
-  useEffect(() => {
-    cursorRef.current = "";
-    setLogs("");
-    void fetchLogs(true).catch((e) => setError(e));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId]);
-
-  useEffect(() => {
-    const onVis = () => {
-      visibleRef.current = !document.hidden;
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
-  }, []);
-
-  useEffect(() => {
-    if (!job) return;
-    if (TERMINAL.has(job.status)) {
-      if (timerRef.current) window.clearInterval(timerRef.current);
-      timerRef.current = null;
-      return;
-    }
-    const tick = () => {
-      const ms = visibleRef.current ? pollMs : Math.max(pollMs * 3, 6000);
-      void refresh().catch(() => undefined);
-      if (timerRef.current) window.clearInterval(timerRef.current);
-      timerRef.current = window.setInterval(() => {
-        void refresh().catch(() => undefined);
-      }, ms);
-    };
-    tick();
+    void read();
     return () => {
-      if (timerRef.current) window.clearInterval(timerRef.current);
+      abort.abort();
+      window.clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.status, jobId, pollMs]);
+  }, [active, endpoint, nodeId, reload]);
 
   useEffect(() => {
-    if (autoScroll && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [logs, autoScroll]);
-
-  async function onCancel() {
-    if (!jobId) return;
-    setBusy(true);
-    try {
-      await api.post(`/api/v1/jobs/${jobId}/cancel`);
-      await refresh();
-    } catch (e) {
-      setError(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onRetry(mode: "resume" | "rerun") {
-    if (!jobId) return;
-    setBusy(true);
-    try {
-      const data = await api.post<{ job?: Job; mode: string }>(`/api/v1/jobs/${jobId}/retry`, { mode });
-      if (mode === "rerun" && data.job?.job_id) {
-        navigate(`/jobs/${data.job.job_id}`);
-        return;
-      }
-      await refresh({ resetLogs: true });
-    } catch (e) {
-      setError(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadSnapshot() {
-    if (!jobId) return;
-    try {
-      const data = await api.get<Record<string, unknown>>(`/api/v1/jobs/${jobId}/snapshot`);
-      setSnapshot(data);
-    } catch (e) {
-      setError(e);
-    }
-  }
-
-  if (!job && !error) {
-    return (
-      <div>
-        <h2>任务详情</h2>
-        <p className="muted">加载中…</p>
-      </div>
-    );
-  }
-
-  if (!job) {
-    return (
-      <div>
-        <h2>任务详情</h2>
-        <ErrorBanner error={error} />
-      </div>
-    );
-  }
-
-  const caps = job.capabilities || {};
-  const cancelSupported = caps.supports_cancel !== false;
-  const resumeSupported = caps.supports_resume !== false;
-  const canCancel = !TERMINAL.has(job.status) && job.status !== "cancelling" && cancelSupported;
-  const canResume =
-    ["failed", "cancelled", "interrupted"].includes(job.status) && resumeSupported;
-
-  const progress = job.progress || {};
-  const req = job.request || {};
+    if (follow && logElement.current) logElement.current.scrollTop = logElement.current.scrollHeight;
+  }, [follow, logs]);
 
   return (
-    <div>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2>任务 {job.job_id}</h2>
-        <Link to="/jobs">返回列表</Link>
+    <div className="form-stack">
+      <div className="row log-controls">
+        <label className="check-row"><input type="checkbox" checked={follow} onChange={(event) => setFollow(event.target.checked)} />自动滚动</label>
+        <button type="button" onClick={() => setReload((value) => value + 1)}>刷新日志</button>
+        <button type="button" disabled={!logs} onClick={() => void copyText(logs).then(setCopied)}>{copied ? "已复制" : "复制日志"}</button>
       </div>
       <ErrorBanner error={error} />
-      {connError && <div className="warn">{connError}</div>}
+      <pre className="logbox run-log" ref={logElement}>{logs || "暂无日志。"}</pre>
+      {logs.length === maxLog && <p className="help">仅显示最近的日志。</p>}
+    </div>
+  );
+}
 
-      <div className="panel">
+function ResultFiles({ files }: { files: Artifact[] }) {
+  return (
+    <ul className="result-files">
+      {files.map((file, index) => (
+        <li key={file.artifact_id || file.path || index}>
+          <div>
+            <strong>{DATASET_STAGE[file.stage || ""] || (file.artifact_kind === "report" ? "汇总报告" : basename(file.path || "产物"))}</strong>
+            <small className="help path-text" title={file.path}>{basename(file.path || "")}</small>
+          </div>
+          <div className="row">
+            {file.dataset_id && <Link to={`/datasets/${encodeURIComponent(file.dataset_id)}`}>打开数据集</Link>}
+            {file.artifact_id && <a href={publicPath(`/api/v1/artifacts/${encodeURIComponent(file.artifact_id)}/download`)}>下载</a>}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function JobRun({ jobId }: { jobId: string }) {
+  const endpoint = `/api/v1/jobs/${encodeURIComponent(jobId)}`;
+  const navigate = useNavigate();
+  const [query, setQuery] = useSearchParams();
+  const nodeId = query.get("node_id") || "";
+  const [job, setJob] = useState<Job>();
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
+  const [reload, setReload] = useState(0);
+  const [action, setAction] = useState<"cancel" | "resume" | "rerun">();
+  const [showLogs, setShowLogs] = useState(Boolean(nodeId));
+  const [snapshot, setSnapshot] = useState<Record<string, unknown>>();
+  const logSection = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    let timer: number | undefined;
+    async function refresh() {
+      try {
+        const data = await api.get<Job>(endpoint, abort.signal);
+        if (abort.signal.aborted) return;
+        setJob(data);
+        setLoadError(null);
+        if (ACTIVE_JOBS.has(data.status)) timer = window.setTimeout(refresh, document.hidden ? 6500 : 2000);
+      } catch (failure) {
+        if (!abort.signal.aborted) {
+          setLoadError(failure);
+          timer = window.setTimeout(refresh, 6000);
+        }
+      }
+    }
+    void refresh();
+    return () => {
+      abort.abort();
+      window.clearTimeout(timer);
+    };
+  }, [endpoint, reload]);
+
+  async function runAction(next: "cancel" | "resume" | "rerun") {
+    if (action) return;
+    setAction(next);
+    setActionError(null);
+    try {
+      if (next === "cancel") await api.post(`${endpoint}/cancel`);
+      else {
+        const response = await api.post<{ job: Job }>(`${endpoint}/retry`, { mode: next });
+        if (next === "rerun") {
+          navigate(`/jobs/${response.job.job_id}`);
+          return;
+        }
+        setJob(response.job);
+      }
+      setReload((value) => value + 1);
+    } catch (failure) {
+      setActionError(failure);
+    } finally {
+      setAction(undefined);
+    }
+  }
+
+  function selectLog(node: string, scroll = false) {
+    const next = new URLSearchParams(query);
+    if (node) next.set("node_id", node);
+    else next.delete("node_id");
+    setQuery(next, { replace: true });
+    setShowLogs(true);
+    if (scroll) logSection.current?.scrollIntoView({ block: "nearest" });
+  }
+
+  if (!job) return (
+    <div className="work-page">
+      <Link className="back-link" to="/jobs">← 任务列表</Link>
+      <h2>任务详情</h2>
+      {loadError ? <ErrorBanner error={loadError} /> : <p className="muted">正在加载任务…</p>}
+    </div>
+  );
+
+  const active = ACTIVE_JOBS.has(job.status);
+  const progress = job.progress?.nodes as Record<string, NodeProgress> | undefined;
+  const nodes = job.nodes?.length ? job.nodes : Object.keys(progress || {}).map<PlanNode>((node_id) => ({
+    node_id, label: node_id, depends_on: [],
+  }));
+  const knownNodes = nodes.filter((node) => progress?.[node.node_id]?.started_at);
+  const live = nodes.filter((node) => progress?.[node.node_id]?.status === "running");
+  const failed = nodes.filter((node) => progress?.[node.node_id]?.status === "failed");
+  const attempts = (job.attempts || []) as Attempt[];
+  const current = attempts.find((item) => item.attempt_no === job.current_attempt);
+  const canResume = job.capabilities?.supports_resume === true && ["failed", "cancelled", "interrupted"].includes(job.status);
+  const canCancel = job.status === "queued" || (job.status === "running" && job.capabilities?.supports_cancel === true);
+  const files = (job.artifacts || []) as Artifact[];
+  const finalFiles = files.filter((file) => file.stage === "tags" || file.artifact_kind !== "manifest");
+  const mainFiles = finalFiles.length ? finalFiles : files;
+  const intermediate = files.filter((file) => !mainFiles.includes(file));
+  const input = job.request.input as { source_id?: string; dataset_id?: string } | undefined;
+  const newInput = new URLSearchParams();
+  if (input?.source_id) newInput.set("source_id", input.source_id);
+  if (input?.dataset_id) newInput.set("dataset_id", input.dataset_id);
+  const errorResult = job.error?.result as { errors?: Array<{ message?: string }> } | undefined;
+  const failure = errorResult?.errors?.[0]?.message || (typeof job.error?.message === "string" ? job.error.message : "");
+
+  return (
+    <div className="work-page">
+      <Link className="back-link" to="/jobs">← 任务列表</Link>
+      <header className="page-heading">
+        <div>
+          <div className="row"><h2>{job.batch ? `批次 ${job.batch}` : "任务详情"}</h2><TaskStatus status={job.status} /></div>
+          <p className="path-text">{input?.dataset_id ? basename(input.dataset_id) : job.job_id}</p>
+        </div>
         <div className="row">
-          <TaskStatus status={job.status} />
-          <span className="muted">attempt={job.current_attempt}</span>
-          <span className="muted">创建 {formatDateTime(job.created_at)}</span>
-          <span className="muted">更新 {formatDateTime(job.updated_at)}</span>
-          <span className="muted">
-            运行时长{" "}
-            {durationBetween(
-              job.attempts?.find((a) => a.attempt_no === job.current_attempt)?.started_at as
-                | string
-                | undefined,
-              job.attempts?.find((a) => a.attempt_no === job.current_attempt)?.ended_at as
-                | string
-                | undefined,
+          <button type="button" onClick={() => setReload((value) => value + 1)}>刷新</button>
+          {canCancel && <button type="button" disabled={Boolean(action)} onClick={() => void runAction("cancel")}>停止任务</button>}
+          {canResume && <button type="button" className="primary" disabled={Boolean(action)} onClick={() => void runAction("resume")}>{action === "resume" ? "正在恢复…" : "继续运行"}</button>}
+        </div>
+      </header>
+      {Boolean(loadError) && <p className="notice" role="status">连接暂时中断，以下为上次取得的状态。正在重试。</p>}
+      <ErrorBanner error={actionError} />
+      <div className="work-layout detail-layout">
+        <div className="work-main">
+          <section className="panel work-panel">
+            <div className="section-line"><h3>运行进度</h3>{current && <span className="help">第 {current.attempt_no} 次执行</span>}</div>
+            <div className="status-summary" aria-live="polite">
+              {job.status === "running" && (live.length ? `正在处理 ${live.map(nodeLabel).join("、")}` :
+                nodes.some((node) => node.kind === "production_node") ? "执行器运行中，等待节点状态。" : "正在运行，详情可在运行日志查看。")}
+              {job.status === "queued" && "正在等待 Worker 领取任务。"}
+              {job.status === "failed" && (failed.length ? `失败节点 ${failed.map(nodeLabel).join("、")}` : "任务执行失败。")}
+              {job.status === "succeeded" && "执行完成，可查看产物。"}
+              {job.status === "interrupted" && "执行中断，可按可用断点继续。"}
+              {job.status === "cancelling" && "正在等待执行进程停止。"}
+              {job.status === "cancelled" && "任务已停止。"}
+            </div>
+            {failure && <p className="notice failure">{failure}</p>}
+            {nodes.length > 0 && <TaskStages nodes={nodes} progress={progress} status={job.status} onNode={(id) => selectLog(id, true)} />}
+          </section>
+          <section className="panel work-panel" ref={logSection}>
+            <div className="section-line">
+              <h3>运行日志</h3>
+              <button type="button" onClick={() => setShowLogs(!showLogs)}>{showLogs ? "收起日志" : "展开日志"}</button>
+            </div>
+            {showLogs && (
+              <>
+                {knownNodes.length > 0 && (
+                  <label className="field">
+                    <span>日志范围</span>
+                    <select value={knownNodes.some((node) => node.node_id === nodeId) ? nodeId : ""} onChange={(event) => selectLog(event.target.value)}>
+                      <option value="">任务总日志</option>
+                      {knownNodes.map((node) => <option key={node.node_id} value={node.node_id}>{nodeLabel(node)}</option>)}
+                    </select>
+                  </label>
+                )}
+                {job.current_attempt > 0 ? (
+                  <RunLog key={`${job.current_attempt}:${nodeId}`} endpoint={endpoint} nodeId={nodeId} active={active} />
+                ) : <p className="muted">任务开始后会显示日志。</p>}
+              </>
             )}
-          </span>
+          </section>
         </div>
-
-        <div className="row" style={{ marginTop: "0.75rem" }}>
-          <button type="button" disabled={!canCancel || busy} onClick={() => void onCancel()}>
-            {job.status === "cancelling" ? "取消中…" : "取消"}
-          </button>
-          {!cancelSupported && <span className="help">插件声明不支持可靠取消</span>}
-          <button type="button" disabled={!canResume || busy} onClick={() => void onRetry("resume")}>
-            恢复（原冻结计划）
-          </button>
-          {!resumeSupported && <span className="help">插件不支持恢复或断点不兼容时将由后端拒绝</span>}
-          <button type="button" disabled={busy} onClick={() => void onRetry("rerun")}>
-            重新运行（新任务/默认原计划）
-          </button>
-          <label className="row">
-            <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
-            日志自动滚动
-          </label>
-          <label className="row">
-            轮询
-            <select value={pollMs} onChange={(e) => setPollMs(Number(e.target.value))}>
-              <option value={2000}>2s</option>
-              <option value={5000}>5s</option>
-              <option value={10000}>10s</option>
-            </select>
-          </label>
-          <button type="button" onClick={() => void refresh()}>
-            立即刷新
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void copyText(logs || JSON.stringify(job.error || {}, null, 2));
-            }}
-          >
-            复制日志/诊断
-          </button>
-        </div>
-
-        {job.status === "cancelling" && (
-          <p className="warn">已请求取消，等待后端确认停止后才会变为 cancelled（不会停止外部 vLLM）。</p>
-        )}
-
-        {job.error && (
-          <pre className="error" style={{ marginTop: "0.75rem" }}>
-            {JSON.stringify(job.error, null, 2)}
-          </pre>
-        )}
-
-        <h4>进度（真实计数；无可靠 total 时不画伪百分比）</h4>
-        <pre className="logbox">{JSON.stringify(progress, null, 2)}</pre>
-
-        <h4>输入 / 插件 / 模型摘要</h4>
-        <pre className="logbox">
-          {JSON.stringify(
-            {
-              task_type: job.task_type,
-              plan_id: job.plan_id,
-              plan_digest: job.plan_digest,
-              request: req,
-              capabilities: caps,
-            },
-            null,
-            2,
-          )}
-        </pre>
-
-        <div className="row">
-          <h4 style={{ margin: 0 }}>增量日志</h4>
-          <input
-            style={{ maxWidth: 200 }}
-            placeholder="node_id 过滤"
-            value={nodeId}
-            onChange={(e) => {
-              setNodeId(e.target.value);
-              const p = new URLSearchParams(searchParams);
-              if (e.target.value) p.set("node_id", e.target.value);
-              else p.delete("node_id");
-              setSearchParams(p, { replace: true });
-            }}
-          />
-        </div>
-        <pre className="logbox" ref={logRef}>
-          {logs || "（暂无日志）"}
-        </pre>
-
-        <h4>产物</h4>
-        {(job.artifacts || []).length === 0 ? (
-          <p className="muted">尚无已登记产物</p>
-        ) : (
-          <ul>
-            {(job.artifacts as Array<Record<string, unknown>>).map((a, i) => {
-              const id = String(a.artifact_id || a.path || i);
-              const path = String(a.path || a.artifact_id || "");
-              return (
-                <li key={id}>
-                  {JSON.stringify(a)}{" "}
-                  {path && (
-                    <a href={publicPath(`/api/v1/artifacts/${encodeURIComponent(path)}/download`)} target="_blank" rel="noreferrer">
-                      下载
-                    </a>
-                  )}
-                  {typeof a.dataset_id === "string" && (
-                    <Link to={`/datasets/${a.dataset_id}`}> 打开数据集</Link>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        <h4>Attempts</h4>
-        <pre className="logbox">{JSON.stringify(job.attempts || [], null, 2)}</pre>
-
-        <div className="row">
-          <button type="button" onClick={() => void loadSnapshot()}>
-            加载脱敏快照
-          </button>
-        </div>
-        {snapshot && <pre className="logbox">{JSON.stringify(snapshot, null, 2)}</pre>}
+        <aside className="work-side">
+          <section className="panel work-panel">
+            <h3>产物</h3>
+            {mainFiles.length ? <ResultFiles files={mainFiles} /> : <p className="muted">任务成功后显示已发布产物。</p>}
+            {intermediate.length > 0 && (
+              <details className="options-fold">
+                <summary>中间产物 · {intermediate.length}</summary>
+                <ResultFiles files={intermediate} />
+              </details>
+            )}
+          </section>
+          <section className="panel work-panel">
+            <h3>执行记录</h3>
+            <dl className="summary-list">
+              <div><dt>创建</dt><dd>{formatDateTime(job.created_at)}</dd></div>
+              {current?.started_at && <div><dt>本次耗时</dt><dd>{durationBetween(current.started_at, current.ended_at)}</dd></div>}
+            </dl>
+            {attempts.length > 0 && <ul className="attempt-list">
+              {[...attempts].reverse().map((item) => (
+                <li key={item.attempt_no}><span>第 {item.attempt_no} 次</span><TaskStatus status={item.status} /></li>
+              ))}
+            </ul>}
+            <details className="options-fold">
+              <summary>任务配置与诊断</summary>
+              <div className="row">
+                <button type="button" onClick={() => void api.get<Record<string, unknown>>(`${endpoint}/snapshot`).then(setSnapshot).catch(setActionError)}>加载快照</button>
+                {!active && <button type="button" disabled={Boolean(action)} onClick={() => void runAction("rerun")}>按原计划重跑</button>}
+                {!active && newInput.size > 0 && <Link to={`/jobs/new?${newInput}`}>以此输入新建</Link>}
+              </div>
+              <pre className="logbox">{JSON.stringify(snapshot || { job_id: jobId, request: job.request, error: job.error }, null, 2)}</pre>
+            </details>
+          </section>
+        </aside>
       </div>
     </div>
   );
+}
+
+export default function JobDetail() {
+  const { jobId } = useParams();
+  return jobId ? <JobRun key={jobId} jobId={jobId} /> : <Link to="/jobs">返回任务列表</Link>;
 }

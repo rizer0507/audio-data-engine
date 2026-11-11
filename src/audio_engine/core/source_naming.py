@@ -20,6 +20,7 @@ Legacy flat ``datasets/manifests/`` remains readable via ``resolve_existing_mani
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -637,7 +638,7 @@ def apply_source_name_to_single_pipeline(
             raise ValueError(
                 "--aggregate-base is only valid for multi_asr_aggregate pipelines"
             )
-        resolved = resolve_existing_manifest(manifest_stem("ingested", name))
+        resolved = resolve_existing_manifest(str(input_manifest or manifest_stem("ingested", name)))
         return {
             "source_dir": None,
             "input_manifest": str(resolved),
@@ -657,8 +658,10 @@ def apply_source_name_to_single_pipeline(
             )
         # Prefer segments_*; never auto-discover quality_sidecar_*.
         try:
-            resolved = resolve_existing_manifest(manifest_stem("segments", name))
+            resolved = resolve_existing_manifest(str(input_manifest or manifest_stem("segments", name)))
         except FileNotFoundError:
+            if input_manifest is not None:
+                raise
             # Legacy cleaned_* segments (041 combined pipeline) remain readable.
             resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
         return {
@@ -715,7 +718,7 @@ def apply_source_name_to_single_pipeline(
             raise ValueError(
                 "--aggregate-base is only valid for multi_asr_aggregate pipelines"
             )
-        resolved = resolve_existing_manifest(manifest_stem("segments", name))
+        resolved = resolve_existing_manifest(str(input_manifest or manifest_stem("segments", name)))
         if join_manifests is not None:
             joins = [
                 {
@@ -734,7 +737,8 @@ def apply_source_name_to_single_pipeline(
             "aggregate_manifests": joins or None,
             "asr_run": None,
             "aggregate_base": None,
-            "dnsmos_manifest": _posix(manifest_path("dnsmos", name)),
+            "dnsmos_manifest": os.environ.get("AUDIO_ENGINE_DNSMOS_MANIFEST")
+            or _posix(manifest_path("dnsmos", name)),
         }
 
     has_ingest = any(
@@ -941,6 +945,8 @@ def apply_source_name_to_single_pipeline(
             staged_manifest_path(f"prepared_evidence_{name}"),
             staged_manifest_path(f"prepared_asr_v3_{name}"),
         ]
+        if input_manifest is not None:
+            candidates = [resolve_existing_manifest(str(input_manifest))]
         resolved = None
         last_err: Exception | None = None
         for cand in candidates:
@@ -1115,8 +1121,10 @@ def apply_source_name_to_single_pipeline(
             )
         # 045: prefer VAD segments_*; legacy cleaned_* (combined ingest+VAD) still OK.
         try:
-            resolved = resolve_existing_manifest(manifest_stem("segments", name))
+            resolved = resolve_existing_manifest(str(input_manifest or manifest_stem("segments", name)))
         except FileNotFoundError:
+            if input_manifest is not None:
+                raise
             resolved = resolve_existing_manifest(manifest_stem("cleaned", name))
         out_kind = model_asr_kind(run_alias) if run_alias is not None else asr_kind
         return {

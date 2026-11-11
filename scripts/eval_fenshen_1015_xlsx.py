@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """把 run_fenshen_1015_eval.sh 的转写 parquet 收成字准 xlsx。
 
-每个切分一份，放在该切分识别 parquet 同目录::
+每次评测创建一个时间戳目录，每个切分一份 XLSX::
 
-  datasets/stage3/asr/eval_fenshen_1015_train_v015/evaluation_final_train_v015_base_vs_best_vs_over.xlsx
-  datasets/stage3/asr/eval_fenshen_1015_dev_v015/evaluation_final_dev_v015_base_vs_best_vs_over.xlsx
+  datasets/stage3/asr/eval_v030/1110_1430/v030_train_full.xlsx
+  datasets/stage3/asr/eval_v030/1110_1430/v030_dev_full.xlsx
 
 用法::
 
   python scripts/eval_fenshen_1015_xlsx.py full v015
+  python scripts/eval_fenshen_1015_xlsx.py lora-full v030
   python scripts/eval_fenshen_1015_xlsx.py lora v015 --split dev
+  python scripts/eval_fenshen_1015_xlsx.py rl v025 --split dev --ckpt best
   python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt best
   python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt over
 
 qwen-base 是 baseline。只转写 best 或 over 时不重跑 base，字准表仍读取已有的 qwen-base parquet 做比较。
 train 的基座文件名是 qwen-base-full，dev 是 qwen-base-dev。
 
-计算字准率和正确率之前，先从金标和识别里删掉
-``configs/normalization/fenshen_1015_filler_tokens.yaml`` 里的词。词表之外的差异照常计错。
+金标非空时：先 plain，再删
+``configs/normalization/fenshen_1015_filler_tokens.yaml`` 语气词，再收起 3 次及以上连续重复，然后算字准。
+金标为空（噪声 / non_speech）：不去语气词；识别 plain 后非空则字准=0，空则字准=1；只累计编辑距离，不参与总字准率。
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -187,8 +192,16 @@ def comparable_text(text: str) -> str:
 def score_pair(reference: str, hypothesis: str) -> tuple[float, int, int, int]:
     """返回字准率、exact_correct、编辑距离、基准字数。exact 只在编辑距离为 0 时为 1。
 
-    先去掉标点，再从金标和识别里删掉语气词表，然后把连续 3 次及以上的重复收成 1 次。
+    金标为空：只对识别做 plain，不去语气词、不折叠重复。plain 后非空则字准=0；
+    编辑距离为插入字数，基准字数为 0（不参与总字准率）。
+
+    金标非空：先 plain，再删语气词，再把连续 3 次及以上的重复收成 1 次后算编辑距离。
     """
+    if not _cell(reference):
+        hyp_plain = plain_transcript_text(hypothesis)
+        edits = len(hyp_plain)
+        exact = int(edits == 0)
+        return (1.0 if exact else 0.0), exact, edits, 0
     ops = levenshtein_ops(comparable_text(reference), comparable_text(hypothesis))
     edits = int(ops["total"] or 0)
     ref_len = int(ops["ref_len"] or 0)
@@ -297,13 +310,15 @@ def load_gold_rows(path: Path) -> list[dict[str, Any]]:
     return out
 
 
-def load_asr_text(path: Path, alias: str) -> dict[str, str]:
+def load_asr_text(path: Path, alias: str, *, require_alias: bool = False) -> dict[str, str]:
     texts: dict[str, str] = {}
     for sample in Manifest.load(path):
         if sample.id in texts:
             raise SystemExit(f"[ERROR] 转写 id 重复: {path} {sample.id}")
         if alias in sample.transcripts:
             texts[sample.id] = _cell(sample.get_transcript_text(alias))
+        elif require_alias:
+            raise SystemExit(f"[ERROR] {path.name} 缺少转写 {alias}: {sample.id}")
         elif len(sample.transcripts) == 1:
             only = next(iter(sample.transcripts))
             texts[sample.id] = _cell(sample.get_transcript_text(only))
@@ -317,20 +332,28 @@ def load_asr_text(path: Path, alias: str) -> dict[str, str]:
 def _model_stats(rows: list[dict[str, Any]], texts: dict[str, str]) -> dict[str, Any]:
     scored = [row for row in rows if row["id"] in texts]
     correct = 0
-    edits = 0
+    char_edits = 0
+    empty_edits = 0
     ref_chars = 0
     per_id: dict[str, tuple[str, float, int]] = {}
     for row in scored:
         hypothesis = texts[row["id"]]
         accuracy, exact, row_edits, row_ref = score_pair(row["reference"], hypothesis)
         correct += exact
-        edits += row_edits
-        ref_chars += row_ref
+        if _cell(row["reference"]):
+            # 空金标不进总字准：编辑距离与基准字数只累计非空金标。
+            char_edits += row_edits
+            ref_chars += row_ref
+        else:
+            empty_edits += row_edits
         per_id[row["id"]] = (hypothesis, accuracy, exact)
     return {
         "n": len(scored),
         "correct": correct,
-        "edits": edits,
+        # 有非空金标时 edits 只含字准编辑距离；纯空金标 scope 改报 empty_edits。
+        "edits": empty_edits if ref_chars <= 0 else char_edits,
+        "char_edits": char_edits,
+        "empty_edits": empty_edits,
         "ref_chars": ref_chars,
         "per_id": per_id,
     }
@@ -439,13 +462,17 @@ def build_frames(
             (
                 "分类",
                 "本金标 label_eval_type_split=false，不划分 auto_gold / hardcase / non_speech，只统计 overall。"
-                "label_source_gold_kind=non_speech 或 label_decision=empty 的计分参考仍是空串。",
+                "label_source_gold_kind=non_speech 或 label_decision=empty 的计分参考仍是空串，不参与总字准率。",
             )
         ]
         count_note = f"total={len(gold_rows)}；不做分类"
     else:
         type_notes = [
-            ("type non_speech", "label_source_gold_kind=non_speech 或 label_decision=empty。计分金标当空串。"),
+            (
+                "type non_speech",
+                "label_source_gold_kind=non_speech 或 label_decision=empty。"
+                "计分金标当空串；只计正确率与编辑距离，不参与总字准率。",
+            ),
             ("type auto_gold", "speech，且 plain(qwen_1_text)==plain(label_gold_text)。"),
             ("type hardcase", "speech，且 plain 后预标注与金标不一致。"),
         ]
@@ -458,14 +485,26 @@ def build_frames(
         *type_notes,
         (
             "正确率",
-            "字准率==1 的条数 / 该 scope 条数。标点差异在 plain 之后不算错。"
+            "字准率==1 的条数 / 该 scope 条数。"
+            "金标非空：标点差异在 plain 之后不算错；"
             f"计分前从金标和识别中删除语气词表 {SCORE_DROP_YAML}："
             + "、".join(_SCORE_DROP_TOKENS)
-            + "。"
-            "语气词删完后，同一片段连续出现 3 次及以上收成 1 次；连续 2 次保留，例如「不用不用」不改，「不用不用不用」收成「不用」。",
+            + "；"
+            "语气词删完后，同一片段连续出现 3 次及以上收成 1 次；连续 2 次保留，例如「不用不用」不改，「不用不用不用」收成「不用」。"
+            "金标为空：不去语气词；识别 plain 后只要还有文字，字准率=0、不算正确。",
         ),
-        ("总字准", "1 - 总编辑距离/总基准字数。编辑距离和基准字数都按删掉语气词、并收起 3 次及以上连续重复之后的文本计算。overall 含 non_speech 的编辑距离，其基准字数为 0。"),
-        ("non_speech 总字准", "总基准字数为 0 时，总字准改写总编辑距离整数；相对 qwen-base总字准改写编辑距离差。"),
+        (
+            "总字准",
+            "仅金标非空样本：1 - 总编辑距离/总基准字数。"
+            "编辑距离和基准字数都按删掉语气词、并收起 3 次及以上连续重复之后的文本计算。"
+            "空金标不计入总编辑距离与总基准字数，因此不参与总字准率。",
+        ),
+        (
+            "non_speech / 空金标",
+            "只统计正确率与总编辑距离（识别 plain 后的插入字数）；"
+            "总基准字数为 0，总字准改写总编辑距离整数；相对 qwen-base总字准改写编辑距离差。"
+            "不去语气词，避免「什么」等词被抹成空后误算正确。",
+        ),
         ("条数", count_note),
         ("字准实现", "audio_engine.core.transcript_reconcile.levenshtein_ops / plain_transcript_text"),
     ]
@@ -477,30 +516,42 @@ def build_frames(
     )
 
 
-def write_xlsx(path: Path, frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def write_xlsx(
+    path: Path, frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]
+) -> None:
     accuracy, pivot, detail, notes = frames
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        accuracy.to_excel(writer, index=False, sheet_name="正确率")
-        pivot.to_excel(writer, index=False, sheet_name="透视对比")
-        detail.to_excel(writer, index=False, sheet_name="明细")
-        notes.to_excel(writer, index=False, sheet_name="说明")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = path.open("xb")
+    try:
+        with stream, pd.ExcelWriter(stream, engine="openpyxl") as writer:
+            accuracy.to_excel(writer, index=False, sheet_name="正确率")
+            pivot.to_excel(writer, index=False, sheet_name="透视对比")
+            detail.to_excel(writer, index=False, sheet_name="明细")
+            notes.to_excel(writer, index=False, sheet_name="说明")
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def gold_path(root: Path, split: str, version: str) -> Path:
     return root / "datasets" / "stage1" / "derived" / f"gold_fenshen_1015_{split}_{version}.parquet"
 
 
-def asr_jobs(mode: str, split: str, ckpt: str = "all") -> list[tuple[str, str]]:
+def asr_jobs(
+    mode: str, split: str, ckpt: str = "all", *, sophon_run_tag: str | None = None
+) -> list[tuple[str, str]]:
     """返回 (展示名, asr-run)。qwen-base 始终在第一位，作为相对比较的 baseline。"""
     if ckpt not in ("all", "best", "over", "best-over"):
         raise SystemExit(f"[ERROR] 未知权重: {ckpt}")
     base_run = "qwen-base-full" if split == "train" else "qwen-base-dev"
     jobs: list[tuple[str, str]] = [("qwen-base", base_run)]
-    if ckpt in ("all", "best", "best-over"):
-        jobs.append((f"qwen-{mode}-best", f"qwen-{mode}-{split}-best"))
-    if ckpt in ("all", "over", "best-over"):
-        jobs.append((f"qwen-{mode}-over", f"qwen-{mode}-{split}-over"))
+    models = ("lora", "full") if mode == "lora-full" else (mode,)
+    for model in models:
+        if ckpt in ("all", "best", "best-over"):
+            suffix = f"-{sophon_run_tag}" if model == "sophon" and sophon_run_tag else ""
+            jobs.append((f"qwen-{model}-best", f"qwen-{model}-{split}-best{suffix}"))
+        if ckpt in ("all", "over", "best-over"):
+            jobs.append((f"qwen-{model}-over", f"qwen-{model}-{split}-over"))
     return jobs
 
 
@@ -509,23 +560,33 @@ def asr_parquet(root: Path, version: str, split: str, asr_run: str) -> Path:
     return root / "datasets" / "stage3" / "asr" / eval_name / f"{asr_run}_asr_{eval_name}.parquet"
 
 
-def output_path(root: Path, version: str, split: str, ckpt: str = "all") -> Path:
-    eval_name = f"eval_fenshen_1015_{split}_{version}"
-    tags = {
-        "all": "base_vs_best_vs_over",
-        "best-over": "base_vs_best_vs_over",
-        "best": "base_vs_best",
-        "over": "base_vs_over",
-    }
-    name = f"evaluation_final_{split}_{version}_{tags[ckpt]}.xlsx"
-    return root / "datasets" / "stage3" / "asr" / eval_name / name
+def create_report_dir(root: Path, version: str) -> Path:
+    parent = root / "datasets" / "stage3" / "asr" / f"eval_{version}"
+    parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%m%d_%H%M")
+    for attempt in count(1):
+        directory = parent / (stamp if attempt == 1 else f"{stamp}_{attempt}")
+        try:
+            directory.mkdir()
+        except FileExistsError:
+            continue
+        return directory
 
 
-def evaluate_split(root: Path, mode: str, version: str, split: str, ckpt: str = "all") -> Path:
+def evaluate_split(
+    root: Path,
+    mode: str,
+    version: str,
+    split: str,
+    ckpt: str = "all",
+    *,
+    report_dir: Path | None = None,
+    sophon_run_tag: str | None = None,
+) -> Path:
     gold = gold_path(root, split, version)
     if not gold.is_file():
         raise SystemExit(f"[ERROR] 缺少金标: {gold}")
-    jobs = asr_jobs(mode, split, ckpt)
+    jobs = asr_jobs(mode, split, ckpt, sophon_run_tag=sophon_run_tag)
     paths = {name: asr_parquet(root, version, split, run) for name, run in jobs}
     missing = [str(path) for path in paths.values() if not path.is_file()]
     if missing:
@@ -534,35 +595,61 @@ def evaluate_split(root: Path, mode: str, version: str, split: str, ckpt: str = 
     gold_rows = load_gold_rows(gold)
     models: list[tuple[str, dict[str, str]]] = []
     for name, run in jobs:
-        texts = load_asr_text(paths[name], run)
+        texts = load_asr_text(
+            paths[name], run, require_alias=bool(sophon_run_tag) and name == "qwen-sophon-best"
+        )
         absent = [row["id"] for row in gold_rows if row["id"] not in texts]
         if absent:
             raise SystemExit(
                 f"[ERROR] {paths[name].name} 缺少 {len(absent)} 条金标 id，例如 {absent[0]}"
             )
         models.append((name, texts))
-    destination = output_path(root, version, split, ckpt)
-    write_xlsx(
-        destination,
-        build_frames(gold_rows, models, gold_path=gold, model_paths=paths),
-    )
+    frames = build_frames(gold_rows, models, gold_path=gold, model_paths=paths)
+    if report_dir is None:
+        report_dir = create_report_dir(root, version)
+    destination = report_dir / f"{version}_{split}_{mode}.xlsx"
+    write_xlsx(destination, frames)
     print(f"[OK] {split} {len(gold_rows)} -> {destination}")
     return destination
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="fenshen_1015 转写 parquet 汇总成字准 xlsx")
-    parser.add_argument("mode", choices=("lora", "full"))
+    parser.add_argument("mode", choices=("lora", "full", "lora-full", "rl", "sophon"))
     parser.add_argument("version", help="例如 v015")
-    parser.add_argument("--split", choices=("train", "dev", "both"), default="both")
-    parser.add_argument("--ckpt", choices=("all", "best", "over", "best-over"), default="all")
+    parser.add_argument("--split", choices=("train", "dev", "both"))
+    parser.add_argument("--ckpt", choices=("all", "best", "over", "best-over"))
+    parser.add_argument("--sophon-run-tag", help="本次运行写入 sophon.run.txt 的 run_tag")
     parser.add_argument("--root", type=Path, default=ROOT, help="audio-data-engine 根目录")
     args = parser.parse_args(argv)
+    if args.sophon_run_tag:
+        from audio_engine.core.source_naming import validate_asr_run
+
+        if args.mode != "sophon":
+            parser.error("--sophon-run-tag 仅适用于 sophon")
+        try:
+            args.sophon_run_tag = validate_asr_run(args.sophon_run_tag)
+        except ValueError as exc:
+            parser.error(str(exc))
     if not args.version.startswith("v") or not args.version[1:].isdigit():
         raise SystemExit(f"[ERROR] 版本号须为 v 加数字，当前: {args.version}")
-    splits = ("train", "dev") if args.split == "both" else (args.split,)
+    default_split, default_ckpt = ("dev", "best") if args.mode == "lora-full" else ("both", "all")
+    split = args.split or default_split
+    ckpt = args.ckpt or default_ckpt
+    if args.mode == "sophon":
+        if ckpt in ("over", "best-over"):
+            parser.error("sophon 只提供 best")
+        split = args.split or "dev"
+        ckpt = "best"
+    splits = ("train", "dev") if split == "both" else (split,)
+    root = args.root.resolve()
+    report_dir = None
     for split in splits:
-        evaluate_split(args.root.resolve(), args.mode, args.version, split, args.ckpt)
+        destination = evaluate_split(
+            root, args.mode, args.version, split, ckpt,
+            report_dir=report_dir, sophon_run_tag=args.sophon_run_tag,
+        )
+        report_dir = destination.parent
     return 0
 
 

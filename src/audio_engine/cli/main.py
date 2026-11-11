@@ -578,6 +578,9 @@ def pipeline_run(
     output_manifest: Optional[Path] = typer.Option(
         None, "--output-manifest", help="Override output.manifest"
     ),
+    summary_xlsx_path: Optional[Path] = typer.Option(
+        None, "--summary-xlsx", help="Override the tagging summary path"
+    ),
     runs_dir: Optional[Path] = typer.Option(
         None, "--runs-dir", help="Override run directory root (isolate parallel runs)"
     ),
@@ -967,8 +970,8 @@ def pipeline_run(
                 step.params = {
                     **(step.params or {}),
                     "batch_id": batch,
-                    "summary_xlsx": summary_xlsx,
-                    "output_manifest": overrides["output_manifest"],
+                    "summary_xlsx": str(summary_xlsx_path or summary_xlsx),
+                    "output_manifest": str(output_manifest or overrides["output_manifest"]),
                 }
         if overrides.get("asr_run"):
             _apply_asr_run_transcript_key(cfg, str(overrides["asr_run"]))

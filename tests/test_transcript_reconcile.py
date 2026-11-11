@@ -12,6 +12,7 @@ from audio_engine.core.transcript_reconcile import (
     parse_vocabulary_hotwords,
     plain_transcript_text,
     reconcile_transcripts,
+    rewrite_plain_transcript_entry,
 )
 
 
@@ -32,6 +33,35 @@ def test_parse_vocabulary_hotwords():
     assert parse_vocabulary_hotwords(["不需要！", " 用 "]) == frozenset({"不需要", "用"})
     assert parse_vocabulary_hotwords("") == frozenset()
     assert parse_vocabulary_hotwords(None) == frozenset()
+
+
+def test_rewrite_write_config_keeps_punct_blank_uses_plain():
+    keep_punct = {
+        "unicode": {"normalize": True, "form": "NFKC"},
+        "annotation_brackets": {"remove": True},
+        "punctuation": {"remove": False},
+        "whitespace": {"remove": True},
+        "english": {"lowercase": True},
+        "number": {"normalize": False},
+        "filler": {"remove": False},
+    }
+    kept = rewrite_plain_transcript_entry(
+        {"text": "你好，世界！"},
+        keep_raw=True,
+        write_config=keep_punct,
+    )
+    assert kept["text"] == "你好,世界!"
+    assert kept["extra"]["raw_text"] == "你好，世界！"
+
+    blanked = rewrite_plain_transcript_entry(
+        {"text": "住址"},
+        keep_raw=True,
+        blank_hotwords=frozenset({"住址"}),
+        blank_model=True,
+        write_config=keep_punct,
+    )
+    assert blanked["text"] == ""
+    assert blanked["extra"]["blanked_exact_hotword"] is True
 
 
 def test_reconcile_xlsx_and_fenp(tmp_path: Path):

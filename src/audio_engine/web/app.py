@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -199,15 +200,23 @@ def create_app(settings: WebSettings | None = None, *, config_path: str | Path |
 
     @app.get("/api/v1/artifacts/{artifact_id}/download")
     def download_artifact(artifact_id: str, request: Request):
-        # artifact_id is a path relative to project root previously registered by a job
         from fastapi.responses import FileResponse
 
-        path = Path(artifact_id)
-        if not path.is_absolute():
-            path = (settings.project_root / path).resolve()
+        job_id, _, index = artifact_id.rpartition(":")
+        publication = (
+            app.state.store.get_publication(job_id)
+            if index.isascii() and index.isdecimal() else None
+        )
+        artifacts = json.loads(publication["artifacts_json"]) if publication else []
+        if not artifacts or len(index) > 8 or int(index) >= len(artifacts):
+            raise_api_error("ARTIFACT_NOT_FOUND", artifact_id, status=404)
+        artifact_path = artifacts[int(index)].get("path")
+        if not artifact_path:
+            raise_api_error("ARTIFACT_NOT_FOUND", artifact_id, status=404)
+        path = settings.resolve(artifact_path)
         try:
-            path.relative_to(settings.project_root.resolve())
-        except ValueError:
+            app.state.results_service._ensure_allowed(path)
+        except PermissionError:
             raise_api_error("ARTIFACT_FORBIDDEN", "artifact outside project root", status=403)
         if not path.is_file():
             raise_api_error("ARTIFACT_NOT_FOUND", artifact_id, status=404)

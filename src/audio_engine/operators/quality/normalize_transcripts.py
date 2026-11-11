@@ -1,4 +1,4 @@
-"""Rewrite ASR transcript texts to plain characters only."""
+"""Rewrite ASR transcript texts via a versioned normalization profile."""
 
 from __future__ import annotations
 
@@ -38,15 +38,31 @@ def _load_blank_exact_into_params(params: dict[str, Any]) -> None:
         params.setdefault("blank_exact_hotwords", loaded)
 
 
+def _load_write_config(params: dict[str, Any]) -> dict[str, Any] | None:
+    """Load write-side normalization profile from ``normalization_path``.
+
+    Missing / empty path keeps legacy plain write (zh_asr_v1 via rewrite default).
+    """
+    path = params.get("normalization_path") or _DEFAULT_NORMALIZATION_PATH
+    resolved = Path(path)
+    if not resolved.is_file():
+        raise FileNotFoundError(f"normalization_path not found: {resolved}")
+    loaded = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"normalization_path must be a mapping: {resolved}")
+    return loaded
+
+
 @register_operator
 class NormalizeTranscriptsOperator(BaseOperator):
-    """Strip control tags / emotion markers / punctuation from selected transcripts.
+    """Normalize selected transcripts for ASR write / metric prep.
 
     Params:
       models: transcript keys to clean (default: all present keys)
       keep_raw: if true, stash original text under ``extra.raw_text`` when missing
-      normalization_path: zh_asr profile path (fingerprint; cleaning uses the same
-        profile as ``plain_transcript_text`` / Metric Engine)
+      normalization_path: write-side profile (e.g. zh_asr_v1 or zh_asr_keep_punct_v1).
+        Blank matching always uses plain (no-punct) text; after blanking, residual
+        stays plain. Fingerprint includes file content hash.
       blank_exact_hotwords: phrases that blank a transcript. Default is whole-text
         equality. ``embedded: true`` deletes each phrase wherever it occurs as a
         contiguous span and keeps the surrounding characters.
@@ -54,7 +70,7 @@ class NormalizeTranscriptsOperator(BaseOperator):
     """
 
     name = "normalize_transcripts"
-    version = "1.3.0"
+    version = "1.4.0"
     category = "quality"
 
     def dependency_fingerprint(self, config: OperatorConfig) -> dict[str, Any] | None:
@@ -113,6 +129,8 @@ class NormalizeTranscriptsOperator(BaseOperator):
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         params = dict(config.params)
         _load_blank_exact_into_params(params)
+        write_config = _load_write_config(params)
+        norm_path = str(params.get("normalization_path") or _DEFAULT_NORMALIZATION_PATH)
 
         models = params.get("models")
         if models is None:
@@ -135,6 +153,7 @@ class NormalizeTranscriptsOperator(BaseOperator):
                 blank_hotwords=blank_hotwords,
                 blank_model=blank_applies_to_model(model, blank_models),
                 blank_embedded=blank_embedded,
+                write_config=write_config,
             )
 
         return {
@@ -145,9 +164,7 @@ class NormalizeTranscriptsOperator(BaseOperator):
                 "params": {
                     "models": model_keys,
                     "keep_raw": keep_raw,
-                    "normalization_path": params.get(
-                        "normalization_path", _DEFAULT_NORMALIZATION_PATH
-                    ),
+                    "normalization_path": norm_path,
                     "blank_exact_hotwords": sorted(blank_hotwords),
                     "blank_embedded": blank_embedded,
                     "blank_models": sorted(blank_models),

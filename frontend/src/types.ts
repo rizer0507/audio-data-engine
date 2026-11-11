@@ -135,11 +135,28 @@ export type ModelBinding = {
 export type TaskRequest = {
   task_type: "pipeline" | "tagging";
   root_plugin: PluginRef | null;
-  input: { kind: "source"; source_id: string } | { kind: "dataset"; dataset_id: string };
+  input: { kind: "source"; source_id: string } | { kind: "dataset"; dataset_id: string; batch?: string };
   parameters: Record<string, unknown>;
   model_bindings: ModelBinding[];
   tags: PluginRef[];
   execution: Record<string, unknown>;
+};
+
+export type PlanNode = {
+  node_id: string;
+  kind?: string;
+  label: string;
+  depends_on: string[];
+  model_route?: string | null;
+};
+
+export type NodeProgress = {
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  processed?: number;
+  total?: number;
 };
 
 export type ExecutionPlan = {
@@ -147,9 +164,9 @@ export type ExecutionPlan = {
   plan_digest: string;
   expires_at?: string;
   catalog_generation?: number;
-  nodes?: unknown[];
-  resolved_models?: unknown[];
-  selected_tags?: unknown[];
+  nodes?: PlanNode[];
+  resolved_models?: ModelConnection[];
+  selected_tags?: PluginRef[];
   evidence_union?: unknown;
   warnings?: unknown[];
   supports_cancel?: boolean;
@@ -165,6 +182,8 @@ export type Job = {
   plan_digest: string;
   current_attempt: number;
   request: Record<string, unknown>;
+  batch?: string | null;
+  nodes?: PlanNode[];
   progress?: Record<string, unknown> | null;
   artifacts?: unknown[];
   error?: Record<string, unknown> | null;
@@ -182,12 +201,18 @@ export type JobLogsResponse = {
   chunks: Array<{ text: string; offset?: number }>;
   next_cursor: string;
   truncated?: boolean;
+  eof?: boolean;
 };
 
 export type DatasetSummary = {
   dataset_id: string;
   path: string;
   format?: string;
+  batch?: string | null;
+  stage?: string | null;
+  asr_route?: string | null;
+  job_id?: string | null;
+  published_at?: string | null;
   registered?: boolean;
   note?: string;
   state_kind?: string;
@@ -195,6 +220,8 @@ export type DatasetSummary = {
   work_dataset_id?: string | null;
   tagging_binding?: Record<string, unknown> | null;
 };
+
+export type DatasetBatch = { batch: string | null; count: number };
 
 export type SampleRow = {
   sample_id: string;

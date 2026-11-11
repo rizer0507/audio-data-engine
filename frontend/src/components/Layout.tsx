@@ -2,11 +2,11 @@ import { NavLink } from "react-router-dom";
 import type { ReactNode } from "react";
 
 const links = [
+  ["任务工作台", "/jobs"],
+  ["数据集", "/datasets"],
   ["数据源", "/sources"],
   ["模型连接", "/models"],
   ["插件库", "/plugins"],
-  ["任务", "/jobs"],
-  ["数据集", "/datasets"],
   ["评测", "/evaluations"],
 ] as const;
 

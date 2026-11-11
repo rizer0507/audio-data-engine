@@ -46,9 +46,12 @@ def _raise(code: str, message: str, *, status: int = 400, details: dict | None =
 
 @router.get("")
 
-def list_datasets(request: Request):
+def list_datasets(
+    request: Request, batch: str | None = None, catalog_only: bool = False,
+    dataset_id: str | None = None,
+):
 
-    return _results(request).list_datasets()
+    return _results(request).list_datasets(batch=batch, catalog_only=catalog_only, dataset_id=dataset_id)
 
 
 

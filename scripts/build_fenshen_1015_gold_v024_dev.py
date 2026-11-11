@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""把 v024 验证集写成和 gold_fenshen_1015_dev_v030.parquet 相同的评测金标。
+"""把 v024 验证集写成评测金标。
 
-字准表不划分 auto_gold / hardcase / non_speech，只统计 overall。
+按 sample_map 的 eval_type / selection_bucket 写出 label_eval_type，
+并打开 label_eval_type_split，字准表划分 auto_gold / hardcase / non_speech。
 空金标仍记 source_gold_kind=non_speech，计分参考是空串。
 qwen_1_text 放预标注：人工包用 candidate_text，旧人工 auto_gold 用 qwen_1_text，
 三路一致用补过标点的转写。
@@ -12,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -119,9 +121,11 @@ def build() -> None:
         audio_path = _cell(row.get("audio_path"))
         if not sample_id or not audio_path:
             raise SystemExit(f"[ERROR] dev 行缺少 id 或音频: {row}")
-        bucket = _cell(row.get("selection_bucket"))
+        bucket = _cell(row.get("eval_type")) or _cell(row.get("selection_bucket"))
         component = _cell(row.get("source_component"))
         gold = _cell(row.get("gold_text"))
+        if bucket not in {"auto_gold", "hardcase", "non_speech"}:
+            raise SystemExit(f"[ERROR] 未知 eval_type: {sample_id} -> {bucket}")
         empty_ref = bucket == "non_speech" or not gold
         if empty_ref and gold:
             raise SystemExit(f"[ERROR] non_speech 仍有金标: {sample_id}")
@@ -153,7 +157,8 @@ def build() -> None:
             "gold_source": "labeling_platform",
             "source_gold_kind": "non_speech" if empty_ref else "speech",
             "type": "non_speech" if empty_ref else "speech",
-            "eval_type_split": False,
+            "eval_type": bucket,
+            "eval_type_split": True,
             "exclude_from_training": False,
             "eval_split": "dev",
             "eval_origin": "train_v024_dev",
@@ -179,8 +184,13 @@ def build() -> None:
                 lineage=[
                     LineageEntry(
                         operator="build_fenshen_1015_gold_v024_dev",
-                        version="v1",
-                        params={"dataset": "train_v024", "eval_type_split": False, "selection_bucket": bucket},
+                        version="v2",
+                        params={
+                            "dataset": "train_v024",
+                            "eval_type_split": True,
+                            "eval_type": bucket,
+                            "selection_bucket": bucket,
+                        },
                     )
                 ],
             )
@@ -200,8 +210,13 @@ def build() -> None:
         raise SystemExit("[ERROR] 正式评测门禁未过:\n" + "\n".join(report.errors))
 
     gold_rows = xlsx_mod.load_gold_rows(OUT)
-    if any(row["type"] for row in gold_rows):
-        raise SystemExit("[ERROR] v024 评测金标不应写出分类 type")
+    type_counts = Counter(row["type"] for row in gold_rows)
+    if type_counts.get("") or set(type_counts) - {"auto_gold", "hardcase", "non_speech"}:
+        raise SystemExit(f"[ERROR] v024 评测金标分类异常: {dict(type_counts)}")
+    if dict(type_counts) != dict(bucket_counts):
+        raise SystemExit(
+            f"[ERROR] 写出分类与 sample_map 不一致: gold={dict(type_counts)} map={bucket_counts}"
+        )
     empty_refs = sum(not row["reference"] for row in gold_rows)
     if empty_refs != bucket_counts.get("non_speech", 0):
         raise SystemExit(f"[ERROR] 空参考 {empty_refs} 与 non_speech {bucket_counts.get('non_speech', 0)} 不一致")
@@ -210,6 +225,7 @@ def build() -> None:
         [
             {
                 "id": row["id"],
+                "type": row["type"],
                 "gold_text": row["label"],
                 "candidate_text": row["candidate_text"],
                 "wav_path": row["wav_path"],
@@ -222,7 +238,7 @@ def build() -> None:
         {"项": "non_speech", "值": bucket_counts.get("non_speech", 0)},
         {"项": "hardcase", "值": bucket_counts.get("hardcase", 0)},
         {"项": "auto_gold", "值": bucket_counts.get("auto_gold", 0)},
-        {"项": "分类", "值": "不做分类，字准表只统计 overall"},
+        {"项": "分类", "值": "label_eval_type_split=true，按 sample_map.eval_type 划分"},
     ]
     notes = pd.DataFrame(
         [
@@ -230,10 +246,10 @@ def build() -> None:
             ("来源", str(SAMPLE_MAP)),
             ("命令", "bash scripts/run_fenshen_1015_eval.sh lora v024 dev best"),
             ("范围", "train_v024 的 dev。每个类别 round(n*0.2)，id 不重复。"),
-            ("分类", "label_eval_type_split=false。不划分 auto_gold / hardcase / non_speech。"),
+            ("分类", "label_eval_type_split=true。label_eval_type 来自 sample_map.eval_type。"),
             (
                 "空参考",
-                "source_gold_kind=non_speech 的计分参考是空串。这只用于计分，不单列 scope。",
+                "source_gold_kind=non_speech 的计分参考是空串；同时记 type=non_speech。",
             ),
             ("音频", "audio.resampled_16k，与训练集 sample_map 的 audio_path 相同。"),
             (
@@ -256,16 +272,16 @@ def build() -> None:
         "sample_count": len(samples),
         "bucket_counts": bucket_counts,
         "empty_reference_count": empty_refs,
-        "eval_type_split": False,
+        "eval_type_split": True,
         "source": {"sample_map": str(SAMPLE_MAP), "split": "dev"},
-        "type_policy": "不做分类。字准表只统计 overall。空金标按空串计分。",
+        "type_policy": "按 sample_map.eval_type 写出 label_eval_type；字准表划分 auto_gold / hardcase / non_speech。",
         "next": "bash scripts/run_fenshen_1015_eval.sh lora v024 dev best",
     }
     OUT.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(f"[OK] samples={len(samples)} buckets={bucket_counts} empty_ref={empty_refs} unclassified")
+    print(f"[OK] samples={len(samples)} buckets={bucket_counts} empty_ref={empty_refs} classified")
     print(f"[OK] gold {OUT}")
     print(f"[OK] xlsx {XLSX}")
 

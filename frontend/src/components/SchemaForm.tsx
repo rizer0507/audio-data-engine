@@ -47,6 +47,7 @@ function Field({
   required?: boolean;
   onChange: (v: unknown) => void;
 }) {
+  const [arrayDraft, setArrayDraft] = useState<string | null>(null);
   const title = schema.title || name;
   const t = primaryType(schema);
   const help = schema.description;
@@ -120,8 +121,10 @@ function Field({
           {title}
           {required ? " *" : ""}（逗号分隔）
           <input
-            value={asText}
+            value={arrayDraft ?? asText}
+            onBlur={() => setArrayDraft(null)}
             onChange={(e) => {
+              setArrayDraft(e.target.value);
               const parts = e.target.value
                 .split(",")
                 .map((x) => x.trim())
@@ -177,14 +180,16 @@ export default function SchemaForm({
   schema,
   value,
   onChange,
+  onValidityChange,
 }: {
   schema: Record<string, unknown>;
   value: Record<string, unknown>;
   onChange: (v: Record<string, unknown>) => void;
+  onValidityChange?: (valid: boolean) => void;
 }) {
   const s = schema as JsonSchema;
   const [jsonMode, setJsonMode] = useState(false);
-  const [jsonText, setJsonText] = useState("");
+  const [jsonText, setJsonText] = useState<string | null>(null);
   const [jsonError, setJsonError] = useState("");
 
   const complex = useMemo(() => isComplex(s), [s]);
@@ -197,7 +202,7 @@ export default function SchemaForm({
   }
 
   if (complex || jsonMode || (!keys.length && s.additionalProperties)) {
-    const text = jsonMode || complex ? jsonText || JSON.stringify(value, null, 2) : JSON.stringify(value, null, 2);
+    const text = jsonText ?? JSON.stringify(value, null, 2);
     return (
       <div className="form-grid">
         <div className="row">
@@ -211,7 +216,9 @@ export default function SchemaForm({
               type="button"
               onClick={() => {
                 setJsonMode(false);
+                setJsonText(null);
                 setJsonError("");
+                onValidityChange?.(true);
               }}
             >
               切回表单
@@ -220,16 +227,19 @@ export default function SchemaForm({
         </div>
         <textarea
           rows={10}
-          value={jsonMode || complex ? text : JSON.stringify(value, null, 2)}
+          value={text}
           onChange={(e) => {
             setJsonMode(true);
             setJsonText(e.target.value);
             try {
               const parsed = JSON.parse(e.target.value) as Record<string, unknown>;
+              if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("参数必须是 JSON 对象");
               setJsonError("");
+              onValidityChange?.(true);
               onChange(parsed);
             } catch (err) {
               setJsonError(err instanceof Error ? err.message : "JSON 无效");
+              onValidityChange?.(false);
             }
           }}
         />

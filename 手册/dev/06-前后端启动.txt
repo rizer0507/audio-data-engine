@@ -1,28 +1,22 @@
-前后端启动（服务器内网）
-================================================================================
-# 说明：内网 Maven 只有 PyPI，没有可用 npm 源；npm ci 会卡死。
-# 前端在本机 build，经 U 盘同步 frontend/dist；服务器只装 Python Web 依赖并启动。
+前后端启动
 
-# 工程根
+# 本机仓库根目录构建前端，部署时将 frontend/dist 随代码同步到服务器
+npm --prefix frontend ci
+npm --prefix frontend run build
+
+# 本机排版预览（可选） http://127.0.0.1:5179/asr_data/
+python -m pip install -e ".[web]"
+audio-data-web --config configs/web.yaml --project-root .
+
+# 服务器两个终端都先进入工程并激活环境
 cd /data2/data-cp/lizi/audio-data-engine
-# conda 环境（与现场一致）
 source /data2/data-cp/zk/env_hub/miniconda312_qw3tts/bin/activate
-# 限制原生线程
-export OMP_NUM_THREADS=1
-# 同上
-export MKL_NUM_THREADS=1
 
-# 安装/更新 Web 依赖（内网 PyPI）
-pip install -e ".[web]" --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
-# 确认静态页已同步（缺则先跑本机 npm run build + U 盘热更新）
-test -f frontend/dist/index.html
+# 终端 1 启动 Web，访问服务器的 /asr_data/
+python -m pip install -e ".[web]" --index-url http://maven.paic.com.cn/repository/pypi/simple --trusted-host maven.paic.com.cn
+test -f frontend/dist/index.html && audio-data-web --config configs/web.yaml --project-root .
 
-# 终端1：Web（同源托管 frontend/dist，默认 127.0.0.1:5179）
-audio-data-web --config /data2/data-cp/lizi/audio-data-engine/configs/web.yaml --project-root /data2/data-cp/lizi/audio-data-engine
-# 终端2：Worker（领取并执行任务）
-audio-data-worker --config /data2/data-cp/lizi/audio-data-engine/configs/web.yaml --project-root /data2/data-cp/lizi/audio-data-engine
+# 终端 2 执行任务时启动 Worker，模型和运行环境按工序一手册准备
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 audio-data-worker --config configs/web.yaml --project-root .
 
-# 无 console script 时等价启动（终端1）
-# PYTHONPATH=src python -m audio_engine.web.app --config /data2/data-cp/lizi/audio-data-engine/configs/web.yaml --project-root /data2/data-cp/lizi/audio-data-engine
-# 无 console script 时等价启动（终端2）
-# PYTHONPATH=src python -m audio_engine.web.worker --config /data2/data-cp/lizi/audio-data-engine/configs/web.yaml --project-root /data2/data-cp/lizi/audio-data-engine
+# 停止时在各自终端按 Ctrl+C

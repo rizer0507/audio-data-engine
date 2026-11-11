@@ -130,7 +130,12 @@ def refresh_plugins(request: Request):
 
 @router.post("/validate")
 def validate_plugins(payload: dict[str, Any], request: Request):
-    return _engine(request).validate(payload)
+    from audio_engine.web.app import raise_api_error
+
+    try:
+        return _engine(request).validate(payload)
+    except ValueError as exc:
+        raise_api_error("VALIDATION_FAILED", str(exc), status=400)
 
 
 @router.post("/plan")

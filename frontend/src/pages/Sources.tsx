@@ -301,7 +301,7 @@ export default function Sources() {
                       <button type="button" onClick={() => fillFromSource(s)}>
                         修改
                       </button>
-                      <Link to={`/jobs?source_id=${encodeURIComponent(s.source_id)}`}>新建任务</Link>
+                      <Link to={`/jobs/new?source_id=${encodeURIComponent(s.source_id)}`}>新建任务</Link>
                     </td>
                   </tr>
                 );

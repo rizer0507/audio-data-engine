@@ -47,7 +47,7 @@ def test_production_capabilities_are_honest(registry: PluginRegistry) -> None:
     desc = registry.describe("pipeline", "audio_ingest_vad_asr_dnsmos_tags")
     assert desc.capabilities.supports_resume is True
     assert desc.capabilities.supports_cancel is False
-    assert desc.capabilities.supports_isolated_output is False
+    assert desc.capabilities.supports_isolated_output is True
     assert desc.capabilities.supports_task_private_env is True
     assert desc.capabilities.supports_tag_selection is True
     assert any("cancel" in n.lower() for n in desc.capabilities.notes)

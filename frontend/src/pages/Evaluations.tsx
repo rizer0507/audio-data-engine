@@ -3,8 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { ApiRequestError, api, formatDateTime, newIdempotencyKey } from "../api";
 import ErrorBanner from "../components/ErrorBanner";
 import TaskStatus from "../components/TaskStatus";
+import BatchDatasetPicker, { useDatasetCatalog } from "../components/BatchDatasetPicker";
 import type {
-  DatasetSummary,
   ExecutionPlan,
   Job,
   ModelBinding,
@@ -16,7 +16,7 @@ import SchemaForm, { defaultsFromSchema } from "../components/SchemaForm";
 export default function Evaluations() {
   const navigate = useNavigate();
   const [plugins, setPlugins] = useState<PluginDescriptor[]>([]);
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
+  const catalog = useDatasetCatalog();
   const [models, setModels] = useState<ModelConnection[]>([]);
   const [pluginId, setPluginId] = useState("");
   const [selected, setSelected] = useState<PluginDescriptor | null>(null);
@@ -38,9 +38,8 @@ export default function Evaluations() {
     setLoading(true);
     setError(null);
     try {
-      const [p, d, m, ev] = await Promise.all([
+      const [p, m, ev] = await Promise.all([
         api.get<{ items: PluginDescriptor[] }>("/api/v1/plugins?kind=pipeline&purpose=evaluation"),
-        api.get<{ items: DatasetSummary[] }>("/api/v1/datasets"),
         api.get<{ items: ModelConnection[] }>("/api/v1/models"),
         api.get<{ items: Job[] }>("/api/v1/evaluations"),
       ]);
@@ -49,7 +48,6 @@ export default function Evaluations() {
           (x) => x.capabilities?.purpose === "evaluation" && x.status === "enabled",
         ),
       );
-      setDatasets(d.items || []);
       setModels(m.items || []);
       setItems((ev.items || []) as Job[]);
     } catch (e) {
@@ -207,23 +205,7 @@ export default function Evaluations() {
               ))}
             </select>
           </label>
-          <label>
-            评测数据集版本
-            <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-              <option value="">选择…</option>
-              {datasets.map((d) => (
-                <option key={d.dataset_id} value={d.dataset_id}>
-                  {d.dataset_id}
-                </option>
-              ))}
-            </select>
-            <input
-              style={{ marginTop: "0.35rem" }}
-              value={datasetId}
-              onChange={(e) => setDatasetId(e.target.value)}
-              placeholder="或粘贴 dataset_id"
-            />
-          </label>
+          <BatchDatasetPicker catalog={catalog} value={datasetId} onChange={setDatasetId} label="评测清单" />
         </div>
 
         {selected && (
@@ -267,7 +249,7 @@ export default function Evaluations() {
           <button type="button" onClick={() => void checkGate()} disabled={!datasetId}>
             检查 Gold 门禁
           </button>
-          <button type="button" onClick={() => void onPlan()}>
+          <button type="button" disabled={!selected || !datasetId.trim()} onClick={() => void onPlan()}>
             规划（不推理）
           </button>
           <button

@@ -156,3 +156,79 @@ def test_vllm_chat_asr_matches_force_language_payload(tmp_path: Path, monkeypatc
     assert payload["model"] == "qwen3-asr"
     assert result["text"] == "不需要谢谢"
     assert result["language"] == "Chinese"
+
+
+def test_sophon_chat_asr_requests_text_only_transcription(tmp_path: Path, monkeypatch):
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF-test")
+    context = "vocabulary:不用，不需要"
+
+    def fake_http_json(url, *, body, headers, timeout):
+        payload = json.loads(body)
+        assert url == "http://127.0.0.1:6179/v1/chat/completions"
+        assert payload["model"] == "/models/Sophon-Realtime-tag"
+        assert payload["modalities"] == ["text"]
+        assert payload["stream"] is False
+        assert payload["language"] == "zh"
+        assert payload["temperature"] == 0
+        assert "chat_template_kwargs" not in payload
+        system, user = payload["messages"]
+        assert "逐字转写" in system["content"]
+        assert context in system["content"]
+        assert user["content"] == [
+            {"type": "text", "text": "<|audio|>"},
+            {
+                "type": "input_audio",
+                "input_audio": {
+                    "data": base64.b64encode(audio.read_bytes()).decode(),
+                    "format": "wav",
+                },
+            },
+        ]
+        return {"choices": [{"message": {"content": " 不用，谢谢。 "}}]}
+
+    monkeypatch.setattr(vllm, "_http_json", fake_http_json)
+    result = vllm.call_vllm_chat_asr(
+        str(audio),
+        {
+            "api_base": "http://127.0.0.1:6179",
+            "model": "/models/Sophon-Realtime-tag",
+            "chat_format": "sophon",
+            "context": context,
+        },
+    )
+    assert result["text"] == "不用，谢谢。"
+    assert result["language"] == "zh"
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "expected"),
+    [
+        ("［laughter］（开心）<strong>嗯，不用不用。</strong>（叹气）", "嗯,不用不用。"),
+        ("[sigh]<laughter>哈哈！</laughter>。", ""),
+        ("<laughter>我知道</laughter>[unknown_event", "我知道"),
+        ("[cough]听不清。", "听不清。"),
+    ],
+)
+def test_sophon_v1_cleans_tags_and_keeps_original(tmp_path, monkeypatch, raw_text, expected):
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF-test")
+    prompt = "只转写清楚可辨的词句。"
+
+    def fake_http_json(_url, *, body, **_kwargs):
+        assert json.loads(body)["messages"][0]["content"] == prompt
+        return {"choices": [{"message": {"content": raw_text}}]}
+
+    monkeypatch.setattr(vllm, "_http_json", fake_http_json)
+    result = vllm.call_vllm_chat_asr(
+        str(audio),
+        {
+            "api_base": "http://127.0.0.1:6179",
+            "chat_format": "sophon",
+            "system_prompt": prompt,
+            "strip_sophon_tags": True,
+            "context": "",
+        },
+    )
+    assert result["text"] == expected
+    assert result["extra"]["raw_text"] == raw_text

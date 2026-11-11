@@ -638,6 +638,21 @@ class JobStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def list_published_manifests(self) -> list[dict[str, Any]]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT json_extract(artifact.value, '$.path') AS path,
+                       jobs.job_id, jobs.request_json, publications.published_at
+                FROM publications JOIN jobs USING (job_id),
+                     json_each(publications.artifacts_json) AS artifact
+                WHERE publications.outcome = 'succeeded'
+                  AND json_extract(artifact.value, '$.artifact_kind') = 'manifest'
+                ORDER BY publications.published_at DESC, artifact.key
+                """
+            ).fetchall()
+        return [dict(row) for row in rows if row["path"]]
+
     def list_active_attempts(self) -> list[dict[str, Any]]:
         with self.connection() as conn:
             rows = conn.execute(

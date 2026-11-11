@@ -4,9 +4,10 @@
 #   → cleaned_mt3000 → qwen_asr_mt3000.parquet
 #
 # 落盘即清洗（048）：识别后同进程跑 quality.normalize_transcripts
-#   （zh_asr_v1 去标点/空白 + blank_exact_qwen_v1 整段热词删除，前后残余保留；raw_text 保留原串）。
+#   （zh_asr_keep_punct_v1：保留标点、去空白/控制标签；blank_exact_qwen_v1 仍按无标点 plain
+#    匹配/删跨度，命中后残余仍为 plain；raw_text 保留原串）。
 #   --asr-run 别名会同步把 normalize 的 models 指到该 alias。
-# 字准/补洗仍可用 pipelines/asr_metric_pipeline.yaml（对已清洗数据幂等）。
+# 字准/补洗仍可用 pipelines/asr_metric_pipeline.yaml（对已清洗数据幂等；比对仍去标点）。
 #
 # 兼容：不传 --source-name 时使用下方写死路径。
 # 前置：input 须含 resampled_16k
@@ -51,5 +52,5 @@ pipeline:
     params:
       models: [qwen]
       keep_raw: true
-      normalization_path: configs/normalization/zh_asr_v1.yaml
+      normalization_path: configs/normalization/zh_asr_keep_punct_v1.yaml
       blank_exact_hotwords_path: configs/normalization/blank_exact_qwen_v1.yaml

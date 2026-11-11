@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
+import unicodedata
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -11,6 +13,16 @@ from uuid import uuid4
 
 _ASR_TEXT_TAG = "<asr_text>"
 _LANG_PREFIX = "language "
+_SOPHON_LAUGHTER = re.compile(
+    r"<laughter\s*>(?:[\s哈呵嘿嘻，,.!！。~…]|ha|he|hi)*</laughter\s*>", re.IGNORECASE
+)
+_SOPHON_TAG = re.compile(
+    r"\[[^\]]*(?:\]|$)|【[^】]*(?:】|$)|<\s*/?\s*(?:[^\W\d]|[|!])[^<>]*(?:>|$)"
+    r"|\(\s*(?:笑|笑声|大笑|轻笑|叹气|呼吸|咳嗽|喘息|哭声|掌声|噪声|背景音乐|听不清|无语音"
+    r"|开心|悲伤|愤怒|惊讶|兴奋|重读|laughter|sigh|breath|quick_breath|cough|noise|music|silence"
+    r"|happy|sad|angry|excited|surprised|emphasis)\s*\)",
+    re.IGNORECASE,
+)
 
 
 def _encode_multipart(
@@ -125,8 +137,39 @@ def _http_json(
     return payload
 
 
+def _sophon_chat_payload(path: Path, settings: dict[str, Any], context: str) -> dict[str, Any]:
+    prompt = settings.get("system_prompt") or (
+        "逐字转写音频中的人声，保留语气词和重复。只输出转写文本。"
+        "没有可辨认的人声时输出空文本。"
+    )
+    if context:
+        prompt += f"\n以下词表仅供参考，以实际听到的语音为准。\n{context}"
+    return {
+        "messages": [
+            {"role": "system", "content": prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "<|audio|>"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                            "format": path.suffix.lower().lstrip(".") or "wav",
+                        },
+                    },
+                ],
+            },
+        ],
+        "modalities": ["text"],
+        "stream": False,
+        "language": settings.get("language") or "zh",
+        "max_tokens": int(settings.get("max_new_tokens", 256)),
+    }
+
+
 def call_vllm_chat_asr(audio_path: str, settings: dict[str, Any]) -> dict[str, Any]:
-    """Call vLLM `/v1/chat/completions` for Qwen3-ASR with forced Chinese."""
+    """Call vLLM `/v1/chat/completions` with the configured ASR request format."""
     path = Path(audio_path)
     if not path.is_file():
         raise FileNotFoundError(f"音频文件不存在: {audio_path}")
@@ -134,27 +177,23 @@ def call_vllm_chat_asr(audio_path: str, settings: dict[str, Any]) -> dict[str, A
     context = settings.get("context")
     if context is None:
         context = settings.get("prompt") or ""
-    payload = {
-        "messages": [
-            {
-                "role": "system",
-                "content": f"{context}",
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "audio_url",
-                        "audio_url": {
-                            "url": _audio_data_url(path),
-                        },
-                    }
-                ],
-            },
-        ],
-        "chat_template_kwargs": _chat_template_kwargs(settings),
-        "temperature": float(settings.get("temperature", 0)),
-    }
+    sophon = settings.get("chat_format") == "sophon"
+    if sophon:
+        payload = _sophon_chat_payload(path, settings, str(context))
+    else:
+        payload = {
+            "messages": [
+                {"role": "system", "content": f"{context}"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "audio_url", "audio_url": {"url": _audio_data_url(path)}}
+                    ],
+                },
+            ],
+            "chat_template_kwargs": _chat_template_kwargs(settings),
+        }
+    payload["temperature"] = float(settings.get("temperature", 0))
     # model 对 served-model-name 路由必需；不改变上面与业务对齐的 messages/kwargs/temperature。
     if settings.get("model"):
         payload = {"model": str(settings["model"]), **payload}
@@ -173,6 +212,23 @@ def call_vllm_chat_asr(audio_path: str, settings: dict[str, Any]) -> dict[str, A
         content = response["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(f"vLLM chat ASR 返回格式无效: {response!r}") from exc
+
+    if sophon:
+        raw_text = str(content or "")
+        extra = {"raw_response": response}
+        text = raw_text.strip()
+        if settings.get("strip_sophon_tags"):
+            extra["raw_text"] = raw_text
+            text = unicodedata.normalize("NFKC", text)
+            text = _SOPHON_LAUGHTER.sub("", text)
+            text = _SOPHON_TAG.sub("", text).strip()
+            if not any(char.isalnum() for char in text):
+                text = ""
+        return {
+            "text": text,
+            "language": payload["language"],
+            "extra": extra,
+        }
 
     language, text = _parse_qwen_chat_content(str(content or ""))
     return {

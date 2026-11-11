@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -17,9 +16,9 @@ import yaml
 from audio_engine.core.checkpoint import digest_payload
 from audio_engine.core.production.config import is_production_yaml, load_production_config
 from audio_engine.core.production.orchestrator import ProductionOrchestrator
+from audio_engine.core.source_naming import validate_source_name
 from audio_engine.core.tagging.config import load_tagging_config
 from audio_engine.core.tagging.library import (
-    TagLibrary,
     TagLibraryError,
     build_definition_snapshot,
     load_tag_library,
@@ -50,6 +49,7 @@ from audio_engine.plugins.snapshot import (
     freeze_yaml_tree,
     sha256_file,
     sha256_obj,
+    sha256_text,
     write_snapshot_dir,
 )
 
@@ -73,6 +73,10 @@ COMMON_PIPELINE_IMPL = (
 PRODUCTION_IMPL = COMMON_PIPELINE_IMPL + (
     "src/audio_engine/core/production/orchestrator.py",
     "src/audio_engine/core/production/config.py",
+    "src/audio_engine/core/production/paths.py",
+    "src/audio_engine/core/source_naming.py",
+    "scripts/filter_segments_drop_identity_verify.py",
+    "scripts/drop_qwen_en_identity_verify.py",
 )
 TAG_IMPL = (
     "src/audio_engine/core/tagging/library.py",
@@ -209,6 +213,8 @@ def _task_env_from_models(
     """Build a task-private env mapping. Does not mutate os.environ."""
 
     env = dict(os.environ)
+    if not models:
+        return env
     # Clear conflicting legacy multi-base vars so frozen bindings win.
     for key in (
         "GLM_ASR_API_BASE",
@@ -507,32 +513,74 @@ class YamlPipelinePlugin:
         out_manifest = work_dir / "outputs" / "output_manifest.parquet"
         out_manifest.parent.mkdir(parents=True, exist_ok=True)
         env = _task_env_from_models(plan.resolved_models, context=context)
+        data = plan.definition_snapshot.get("pipeline", {}).get("data") or self._meta
+        operators = {step["operator"] for step in data.get("pipeline", [])}
+        source_dir = _engine_source_dir(request.input.as_dict(), request.parameters)
+        evidence_join = "quality.evidence_join" in operators and "dnsmos_manifest" in request.parameters
+        tagging = "quality.multi_tag_v1" in operators
+        ingest = source_dir and "ingest.scan" in operators
+        if evidence_join or tagging or ingest or "audio.fsmn_vad_segment" in operators:
+            data = _read_pipeline_meta(self.definition_path)
+            data["output_dir"] = str(work_dir / "outputs" / "audio")
+            data["cache_dir"] = str(work_dir / "cache")
+            data["catalog_dir"] = str(work_dir / "catalog")
+            if ingest:
+                data["input"] = {"source_dir": source_dir}
+            for step in data.get("pipeline", []):
+                if evidence_join and step["operator"] == "quality.evidence_join":
+                    step.setdefault("params", {})["dnsmos_manifest"] = request.parameters["dnsmos_manifest"]
+                if tagging and step["operator"] == "quality.multi_tag_v1":
+                    params = step.setdefault("params", {})
+                    params["work_root"] = str(work_dir / "tagging")
+                    params["evidence_mode"] = request.parameters.get("evidence_mode") or "existing"
+                    if request.tags:
+                        tagging_config = self.project_root / params["config_path"]
+                        runtime = _read_pipeline_meta(tagging_config)
+                        runtime["select_tags"] = [
+                            {"tag_id": tag.id, "version": tag.version} for tag in request.tags
+                        ]
+                        private_runtime = snap_dir / "tagging_runtime.yaml"
+                        private_runtime.write_text(yaml.safe_dump(runtime), encoding="utf-8")
+                        params["config_path"] = str(private_runtime)
+            pipeline_path = snap_dir / "effective_pipeline.yaml"
+            pipeline_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        else:
+            pipeline_path = self.definition_path
         cmd = [
             sys.executable,
             "-m",
             "audio_engine.cli.main",
             "pipeline",
             "run",
-            str(self.definition_path),
+            str(pipeline_path),
             "--output-manifest",
             str(out_manifest),
+            "--runs-dir",
+            str(work_dir / "work"),
         ]
         if request.input.kind == "source":
             engine_name = request.input.engine_source_name()
             if engine_name:
                 cmd.extend(["--source-name", engine_name])
-            source_dir = _engine_source_dir(
-                request.input.as_dict(), request.parameters
-            )
-            if source_dir and "source_dir" in (request.parameters or {}):
-                # Only pass when explicitly in parameters (schema-declared).
-                pass
+            if ingest:
+                cmd.extend(["--source-dir", source_dir])
+        summary = None
         if request.input.dataset_id:
             # dataset_id may be a path relative to project or absolute parquet
             manifest = Path(request.input.dataset_id)
             if not manifest.is_absolute():
                 manifest = self.project_root / manifest
             cmd.extend(["--input-manifest", str(manifest)])
+            if tagging:
+                batch = request.parameters.get("batch") or manifest.stem.removeprefix("prepared_evidence_")
+                batch = validate_source_name(batch)
+                summary = out_manifest.parent / f"summary_free_tags_v2_{batch}.xlsx"
+                cmd.extend(["--source-name", batch, "--summary-xlsx", str(summary)])
+        if evidence_join:
+            for item in request.parameters["asr_manifests"]:
+                cmd.extend(["--join-manifest", item])
+        if request.parameters.get("asr_run"):
+            cmd.extend(["--transcript-key", request.parameters["asr_run"]])
         if request.execution.resume and context.work_dir:
             cmd.append("--resume")
         if request.execution.force:
@@ -548,12 +596,14 @@ class YamlPipelinePlugin:
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
         except CancelledError:
             return PluginResult(outcome="cancelled", run_dir=str(work_dir))
 
-        log_path = work_dir / "run.log"
+        log_path = work_dir / "pipeline.log"
         log_path.write_text(
             (proc.stdout or "") + "\n" + (proc.stderr or ""),
             encoding="utf-8",
@@ -576,6 +626,8 @@ class YamlPipelinePlugin:
             artifacts.append(
                 ArtifactRef(artifact_kind="manifest", path=str(out_manifest))
             )
+        if summary and summary.is_file():
+            artifacts.append(ArtifactRef("report", str(summary)))
         return PluginResult(
             outcome="succeeded",
             artifacts=artifacts,
@@ -625,6 +677,12 @@ class ProductionPipelinePlugin:
                     "title": "启用的 ASR 路次",
                     "description": "空表示使用定义中的全部路次；不得隐式补齐未选路次",
                     "items": {"type": "string"},
+                    "uniqueItems": True,
+                },
+                "label_xlsx": {
+                    "type": "string",
+                    "title": "AI 话术分类 XLSX（可选）",
+                    "description": "服务器绝对路径。提供后按父源 file_id 剔除「接洽（身份核实）」片段。",
                 },
             },
         }
@@ -670,23 +728,17 @@ class ProductionPipelinePlugin:
                 },
             ]
 
-        # Accurate capability declaration based on audited code:
-        # ProductionOrchestrator supports resume; no cancel API; dataset outputs
-        # still use shared stage1 paths keyed by source_name. Adapter provides
-        # task-private runs_dir and env, but cannot yet fully isolate published
-        # datasets without engine changes.
         caps = PluginCapabilities(
             supports_resume=True,
             supports_cancel=False,
             supports_tag_selection=bool(self.registration.get("supports_tag_selection", True)),
-            supports_isolated_output=False,
+            supports_isolated_output=True,
             supports_task_private_env=True,
             purpose=str(self.registration.get("purpose") or "processing"),
             notes=[
                 "cancel: ProductionOrchestrator has no cancel/interrupt API; capability=false",
                 "resume: supported via resume run root / succeeded node skip",
-                "isolated_output: run logs under task runs_dir; published datasets still "
-                "use shared datasets/stage1/<source_name> paths — not fully task-private",
+                "isolated_output: manifests, audio, and reports use task-private paths",
                 "task_private_env: child CLI subprocesses receive task-scoped env",
             ],
         )
@@ -777,9 +829,48 @@ class ProductionPipelinePlugin:
                 request.parameters, desc.parameters_schema, plugin_ref=request.plugin.as_dict()
             )
         )
-        allowed = set(desc.detail.get("asr_route_ids") or [])
-        _, model_report = _resolve_models(request, context, allowed_routes=allowed or None)
+        routes = {r.route_id: r.family for r in self._config.asr_routes} if self._config else {}
+        selected = request.parameters.get("asr_route_ids") or list(routes)
+        allowed = set(selected) if isinstance(selected, list) and all(isinstance(x, str) for x in selected) else set()
+        _, model_report = _resolve_models(request, context, allowed_routes=set(routes))
         report.extend(model_report)
+        for route_id in sorted(allowed - routes.keys()):
+            report.errors.append(ValidationIssue(
+                code="ASR_ROUTE_UNKNOWN", message=f"未知 ASR 路次 {route_id}",
+                field_path="parameters.asr_route_ids",
+            ))
+        bindings = {b.route_id: b.connection_id for b in request.model_bindings}
+        for route_id in sorted(allowed & routes.keys()):
+            family = routes[route_id]
+            conn = context.model_connections.get(bindings.get(route_id, ""))
+            needs_connection = route_id in bindings or (
+                family in {"qwen", "glm"} and not request.execution.extra.get("mock")
+            )
+            if needs_connection and (conn is None or not conn.base_url or conn.provider != family):
+                report.errors.append(ValidationIssue(
+                    code="ASR_CONNECTION_REQUIRED",
+                    message=f"路次 {route_id} 需要绑定一个 {family} 模型连接",
+                    field_path="model_bindings",
+                ))
+        if self._config is None:
+            report.errors.append(ValidationIssue(
+                code="PRODUCTION_CONFIG_MISSING", message="工序一定义不可用",
+            ))
+        source_dir = _engine_source_dir(request.input.as_dict(), request.parameters)
+        if not source_dir or not Path(source_dir).is_dir():
+            report.errors.append(ValidationIssue(
+                code="SOURCE_DIR_REQUIRED", message="原始音频目录不存在",
+                field_path="input.path",
+            ))
+        label_xlsx = request.parameters.get("label_xlsx")
+        if isinstance(label_xlsx, str) and label_xlsx.strip():
+            workbook = Path(label_xlsx.strip())
+            if not workbook.is_file() or workbook.suffix.lower() not in {".xlsx", ".xlsm"}:
+                report.errors.append(ValidationIssue(
+                    code="LABEL_XLSX_INVALID", message="话术标签必须是可读的 XLSX 或 XLSM 文件",
+                    field_path="parameters.label_xlsx",
+                ))
+        report.ok = not report.errors
         return report
 
     def plan(self, request: PluginRequest, context: PluginContext) -> ExecutionPlan:
@@ -790,15 +881,21 @@ class ProductionPipelinePlugin:
                 "validate failed: " + "; ".join(e.message for e in report.errors)
             )
         desc = self.describe()
-        models, _ = _resolve_models(
-            request, context, allowed_routes=set(desc.detail.get("asr_route_ids") or []) or None
-        )
         plan_id, plan_digest = _plan_ids(request, self.catalog_generation)
-        snapshot = freeze_yaml_tree(self.definition_path, project_root=self.project_root)
-
         selected_routes = request.parameters.get("asr_route_ids") or desc.detail.get(
             "asr_route_ids"
         )
+        selected_bindings = [
+            binding for binding in request.model_bindings if binding.route_id in selected_routes
+        ]
+        models = [context.model_connections[b.connection_id] for b in selected_bindings]
+        snapshot = freeze_yaml_tree(
+            self.definition_path, project_root=self.project_root, include_manifests=False
+        )
+        tagging_config = load_tagging_config(self.project_root / (
+            self._config.tagging.config or "configs/tagging/zh_asr_free_tags_v2.yaml"
+        ))
+        tag_library = self._tag_library_snapshot(tagging_config.library_path)
         nodes = []
         for item in desc.detail.get("dag_nodes") or []:
             nid = item["id"]
@@ -806,16 +903,24 @@ class ProductionPipelinePlugin:
                 rid = nid[len("asr_") :]
                 if rid not in selected_routes:
                     continue
+            deps = list(item.get("depends_on") or [])
+            if request.parameters.get("label_xlsx") and deps == ["vad"]:
+                deps = ["filter_identity_verify"]
             nodes.append(
                 PlanNode(
                     node_id=nid,
                     kind="production_node",
                     label=nid,
-                    depends_on=list(item.get("depends_on") or []),
+                    depends_on=deps,
                     model_route=nid[len("asr_") :] if nid.startswith("asr_") else None,
                     details=item,
                 )
             )
+            if nid == "vad" and request.parameters.get("label_xlsx"):
+                nodes.append(PlanNode(
+                    node_id="filter_identity_verify", kind="production_node",
+                    label="剔除接洽（身份核实）", depends_on=["vad"],
+                ))
 
         # Fix evidence_join depends_on to selected ASR only
         selected_asr = [n.node_id for n in nodes if n.node_id.startswith("asr_")]
@@ -824,11 +929,7 @@ class ProductionPipelinePlugin:
                 node.depends_on = selected_asr + ["dnsmos"]
 
         work = context.work_dir or (self.project_root / "runs" / "web" / plan_id)
-        warnings = [
-            "plan is read-only; no ASR/DNSMOS inference executed",
-            "supports_cancel=false until ProductionOrchestrator gains cancel",
-            "published datasets remain under shared stage1 paths (not fully isolated)",
-        ]
+        warnings = ["plan is read-only; no ASR/DNSMOS inference executed"]
         evidence = {
             "mode": request.execution.evidence_mode or "existing",
             "compute": False,
@@ -854,6 +955,11 @@ class ProductionPipelinePlugin:
                 "production": snapshot,
                 "implementation_digest": desc.implementation_digest,
                 "selected_asr_routes": list(selected_routes or []),
+                "tag_library": tag_library,
+                "label_xlsx_digest": (
+                    sha256_file(Path(request.parameters["label_xlsx"]))
+                    if request.parameters.get("label_xlsx") else None
+                ),
             },
             warnings=warnings,
         )
@@ -893,145 +999,186 @@ class ProductionPipelinePlugin:
         source_dir = _engine_source_dir(req.get("input") or {}, params)
         execution = parse_execution_options(req.get("execution"))
 
-        # Optionally filter ASR routes into a temporary production YAML under snapshot.
-        selected = params.get("asr_route_ids")
-        config_path = self.definition_path
-        if selected:
-            filtered = self._config.model_copy(deep=True)
-            keep = set(selected)
-            filtered.asr_routes = [r for r in filtered.asr_routes if r.route_id in keep]
-            if not filtered.asr_routes:
-                return PluginResult(
-                    outcome="failed",
-                    errors=[
-                        ValidationIssue(
-                            code="ASR_ROUTES_EMPTY",
-                            message="asr_route_ids filtered to empty set",
-                        )
-                    ],
-                )
-            config_path = snap_dir / "effective_production.yaml"
-            payload = yaml.safe_load(self.definition_path.read_text(encoding="utf-8"))
-            payload["production"]["asr_routes"] = [
-                r.model_dump() for r in filtered.asr_routes
-            ]
-            config_path.write_text(
-                yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
-                encoding="utf-8",
-            )
-            config = load_production_config(config_path)
-        else:
-            config = self._config
-
-        # Inject per-route env from model bindings into production config copy.
-        route_to_conn = {
-            b["route_id"]: b["connection_id"] for b in req.get("model_bindings") or []
-        }
-        if route_to_conn:
-            config = config.model_copy(deep=True)
-            for route in config.asr_routes:
-                cid = route_to_conn.get(route.route_id)
-                if not cid:
-                    continue
-                conn = next(
-                    (m for m in plan.resolved_models if m.connection_id == cid), None
-                )
-                if not conn or not conn.base_url:
-                    continue
-                env = dict(route.env)
-                if conn.provider == "glm":
-                    env["GLM_ASR_API_BASE"] = conn.base_url
-                    env["GLM_ASR_API_BASES"] = conn.base_url
-                    if conn.model:
-                        env["GLM_ASR_MODEL"] = conn.model
-                elif conn.provider == "qwen":
-                    env["QWEN_ASR_API_BASE"] = conn.base_url
-                    env["QWEN_ASR_API_BASES"] = conn.base_url
-                    if conn.model:
-                        env["QWEN_ASR_MODEL"] = conn.model
-                route.env = env
-
-        # Tag selection: write a private tagging runtime config if tags provided.
-        tagging_config = None
-        if req.get("tags"):
-            tagging_config = str(
-                self._write_private_tagging_config(
-                    snap_dir,
-                    tags=[PluginRef(**t) for t in req["tags"]],
-                    base_runtime=config.tagging.config,
-                )
-            )
-
-        # Prefer per-route env on ASR nodes. Avoid mutating process-global
-        # os.environ when any route already carries an explicit binding — Worker
-        # already runs this adapter in an isolated subprocess.
-        context.log(f"production execute source={source_name} runs_dir={work_dir}")
-        routes_have_binding = any(
-            (r.env.get("GLM_ASR_API_BASE") or r.env.get("QWEN_ASR_API_BASE"))
-            for r in config.asr_routes
-        )
-        env = _task_env_from_models(plan.resolved_models, context=context)
-        old_env: dict[str, str | None] = {}
+        mock = bool(execution.extra.get("mock"))
+        resume = context.resume_run_dir
+        workspace = resume.parent.parent if resume else work_dir
+        output_root = workspace / "outputs"
+        effective_dir = workspace / "effective"
+        effective_dir.mkdir(parents=True, exist_ok=True)
+        orch = None
         try:
-            if not routes_have_binding:
-                for k, v in env.items():
-                    if k.startswith(("GLM_ASR_", "QWEN_ASR_")):
-                        old_env[k] = os.environ.get(k)
-                        os.environ[k] = v
-            else:
-                # Still clear inherited conflicting vars without installing a
-                # single global base that would fight multi-route isolation.
-                for k in (
-                    "GLM_ASR_API_BASE",
-                    "GLM_ASR_API_BASES",
-                    "GLM_ASR_MODEL",
-                    "QWEN_ASR_API_BASE",
-                    "QWEN_ASR_API_BASES",
-                    "QWEN_ASR_MODEL",
+            snapshot = plan.definition_snapshot["production"]
+            self._verify_frozen_yaml(snapshot)
+            tag_library = plan.definition_snapshot.get("tag_library") or {}
+            if self._tag_library_snapshot(tag_library.get("path", "")) != tag_library:
+                raise ValueError("工序一标签库已变更，请重新规划任务")
+            frozen_impl = plan.definition_snapshot.get("implementation_digest")
+            if frozen_impl != self.describe().implementation_digest:
+                raise ValueError("工序一实现已变更，请重新规划任务")
+            config = load_production_config(self.definition_path)
+            selected = plan.definition_snapshot["selected_asr_routes"]
+            config.asr_routes = [route for route in config.asr_routes if route.route_id in selected]
+            label_xlsx = self._prepare_label_xlsx(plan, effective_dir)
+
+            bindings = {b["route_id"]: b["connection_id"] for b in req.get("model_bindings") or []}
+            models = {model.connection_id: model for model in plan.resolved_models}
+            for route in config.asr_routes:
+                connection = models.get(bindings.get(route.route_id))
+                if route.family in {"qwen", "glm"} and not mock and (
+                    not connection or connection.provider != route.family
                 ):
-                    if k in os.environ:
-                        old_env[k] = os.environ.pop(k)
+                    raise ValueError(f"路次 {route.route_id} 缺少 {route.family} 模型连接")
+                if (
+                    not mock and connection and connection.api_key_env
+                    and not context.resolve_secret(connection.api_key_env)
+                ):
+                    raise ValueError(f"路次 {route.route_id} 的密钥环境变量未设置")
+                route.pipeline = self._private_pipeline(
+                    route.pipeline, f"asr_{route.route_id}", effective_dir, output_root,
+                    connection=connection,
+                )
+
+            for node_id in ("ingest", "vad", "dnsmos", "evidence_join", "tagging"):
+                node = getattr(config, node_id)
+                node.pipeline = self._private_pipeline(
+                    node.pipeline, node_id, effective_dir, output_root,
+                    source_dir=source_dir if node_id == "ingest" else None,
+                )
+            tagging_config = config.tagging.config
+            if req.get("tags"):
+                tagging_config = str(self._write_private_tagging_config(
+                    effective_dir,
+                    tags=[PluginRef(**t) for t in req["tags"]],
+                    base_runtime=tagging_config,
+                ))
+            config_path = effective_dir / "production.yaml"
+            config_path.write_text(yaml.safe_dump({
+                "name": config.name, "production": config.model_dump(mode="json"),
+            }, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            context.log(f"production execute source={source_name} workspace={workspace}")
             orch = ProductionOrchestrator(
                 config,
                 config_path=config_path,
                 source_name=source_name,
                 source_dir=source_dir,
-                runs_dir=work_dir,
-                resume=str(work_dir) if execution.resume else None,
+                runs_dir=workspace / "production",
+                resume=resume,
                 force=execution.force,
-                mock=bool(execution.extra.get("mock")),
-                log=lambda msg: context.log(msg),
+                mock=mock,
+                log=context.log,
                 tagging_config=tagging_config,
+                output_root=output_root,
+                label_xlsx=label_xlsx,
+                on_progress=context.on_progress,
             )
             result = orch.run()
         except CancelledError:
             return PluginResult(outcome="cancelled", run_dir=str(work_dir))
         except Exception as exc:  # noqa: BLE001
+            run_dir = orch.run_root if orch else resume
             return PluginResult(
                 outcome="failed",
-                run_dir=str(work_dir),
+                run_dir=str(run_dir) if run_dir else None,
                 errors=[
                     ValidationIssue(code="PRODUCTION_EXECUTE_FAILED", message=str(exc))
                 ],
             )
-        finally:
-            for k, v in old_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
-
-        outcome = "succeeded" if result.status == "succeeded" else "failed"
+        paths = result.paths
+        artifacts = [
+            ArtifactRef("manifest", str(path))
+            for path in [
+                paths.tagged_free_tags, paths.prepared_evidence,
+                paths.ingested, paths.segments, paths.dnsmos,
+                *(paths.asr(route.resolved_asr_run()) for route in config.asr_routes),
+                *([paths.segments_vad_all] if label_xlsx else []),
+            ]
+        ]
+        artifacts.extend(
+            ArtifactRef("report", str(path))
+            for path in sorted(paths.summary_xlsx.parent.glob(f"{paths.summary_xlsx.stem}*.xlsx"))
+        )
         return PluginResult(
-            outcome=outcome,  # type: ignore[arg-type]
+            outcome="succeeded",
             run_dir=str(result.run_root),
+            artifacts=artifacts,
             counts={"nodes": len(result.node_states)},
             details={"node_states": result.node_states},
             snapshot_digest=plan.plan_digest,
-            warnings=[
-                "dataset outputs may reside under shared datasets/stage1 paths",
-            ],
         )
+
+    @staticmethod
+    def _verify_frozen_yaml(snapshot: dict[str, Any]) -> None:
+        if snapshot.get("absolute_path") and "data" in snapshot:
+            path = Path(snapshot["absolute_path"])
+            if sha256_text(path.read_text(encoding="utf-8")) != snapshot["content_digest"]:
+                raise ValueError(f"工序一定义已变更，请重新规划任务: {snapshot['path']}")
+        for child in snapshot.get("children", {}).values():
+            ProductionPipelinePlugin._verify_frozen_yaml(child)
+
+    @staticmethod
+    def _tag_library_snapshot(path: str) -> dict[str, Any]:
+        if not path:
+            return {}
+        library = load_tag_library(path)
+        return {
+            "path": path,
+            "digests": {
+                tag_id: sha256_file(Path(entry.source_path))
+                for tag_id, entry in library.entries.items()
+            },
+        }
+
+    @staticmethod
+    def _prepare_label_xlsx(plan: ExecutionPlan, directory: Path) -> Path | None:
+        value = plan.request.get("parameters", {}).get("label_xlsx")
+        if not value:
+            return None
+        source = Path(value)
+        frozen = directory / f"label_xlsx{source.suffix.lower()}"
+        if not frozen.exists():
+            temporary = frozen.with_suffix(".tmp")
+            shutil.copyfile(source, temporary)
+            if sha256_file(temporary) != plan.definition_snapshot.get("label_xlsx_digest"):
+                temporary.unlink()
+                raise ValueError("话术分类表已变更，请重新规划任务")
+            temporary.replace(frozen)
+        if sha256_file(frozen) != plan.definition_snapshot.get("label_xlsx_digest"):
+            raise ValueError("任务的话术分类表快照已变更，请重新规划任务")
+        return frozen
+
+    def _private_pipeline(
+        self, pipeline: str, node_id: str, directory: Path, output_root: Path, *,
+        source_dir: str | None = None,
+        connection: ResolvedModelConnection | None = None,
+    ) -> str:
+        data = _read_pipeline_meta(self.project_root / pipeline)
+        data["output_dir"] = str(output_root / "audio")
+        data["cache_dir"] = str(output_root / "cache")
+        data["catalog_dir"] = str(output_root / "catalog")
+        if source_dir:
+            data["input"] = {"source_dir": source_dir}
+        if connection:
+            for step in data["pipeline"]:
+                if step["operator"] == f"asr.{connection.provider}_batch":
+                    params = step.setdefault("params", {})
+                    params.pop("api_bases", None)
+                    params.update(
+                        api_base=connection.base_url,
+                        model=connection.model,
+                        model_version=connection.model_revision,
+                        timeout=connection.timeout_seconds,
+                        concurrency=connection.concurrency,
+                        api_key_env=connection.api_key_env,
+                    )
+                    params.pop("api_key", None)
+                    if not connection.api_key_env:
+                        params["api_key"] = "dummy"
+        for step in data["pipeline"]:
+            if step["operator"] == "quality.multi_tag_v1":
+                step.setdefault("params", {})["work_root"] = str(output_root / "tagging")
+        path = directory / f"{node_id}.yaml"
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return str(path)
 
     def _write_private_tagging_config(
         self,

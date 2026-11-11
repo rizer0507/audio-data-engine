@@ -36,7 +36,7 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml `
   --source-dir $env:SOURCE_DIR
 
 # 2) 同源多 ASR（契约别名：每族 _1/_2；≥3 族）
-# 落盘即清洗（048）：text 已去标点/控制标签；Qwen 整句 blank；raw_text 留原串。
+# 落盘即清洗（048）：控制标签已剥；GLM/SV 去标点；Qwen text 保留标点 + blank；raw_text 留原串。
 # 字准/历史补洗仍可用 asr_metric_pipeline（对已清洗数据幂等），join/tag 不强制先跑。
 $env:QWEN_ASR_API_BASE = "http://127.0.0.1:5559"
 audio-data pipeline run pipelines/qwen_asr_batch.yaml `

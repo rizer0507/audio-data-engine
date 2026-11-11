@@ -42,9 +42,23 @@ audio-data pipeline run pipelines/audio_ingest.yaml --source-name "$BATCH" --sou
 # 输入 ingested_$BATCH.parquet → 输出 datasets/stage1/segments/segments_$BATCH.parquet
 audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
 
+# ---------- 2.5) 按 AI 话术标签剔除「接洽（身份核实）」（可选；有 xlsx 时做）----------
+# 输入：segments_$BATCH.parquet + LABEL_XLSX（关注列：file_id、AI话术分类标签）
+# 匹配键：切段父源 labels.source_audio_id / label_source_audio_id ↔ xlsx.file_id
+#         （切段后顶层 id 已是 seg_...，不能拿来对 file_id）
+# 流程：脚本先打印列核对与命中统计，确认字段对齐后再删除该标签父源的全部切段
+# 产物：全量备份 segments_$BATCH_vad_all.parquet；过滤结果写回 segments_$BATCH.parquet
+#       后续 ASR/DNSMOS 用 --source-name 会直接读过滤后的 segments_
+# LABEL_XLSX 按实际路径改；本机示例：data/raw/分身13-14日志_合并清洗数据_已打标签.xlsx
+export LABEL_XLSX="$PWD/data/raw/分身13-14日志_合并清洗数据_已打标签.xlsx"
+# 只看匹配报告、不写盘：
+# python scripts/filter_segments_drop_identity_verify.py --source-name "$BATCH" --xlsx "$LABEL_XLSX" --dry-run
+python scripts/filter_segments_drop_identity_verify.py --source-name "$BATCH" --xlsx "$LABEL_XLSX"
+
 # ---------- 3) ASR 与 DNSMOS（可并行；都读 segments_）----------
-# ASR 落盘已含转写清洗（048：去控制标签/zh_asr_v1 去标点；Qwen 另挂 blank_exact）
-# transcripts.*.text 已是可比正文；原串在 extra.raw_text。不必再为 join/tag 先跑 asr_metric_pipeline。
+# ASR 落盘已含转写清洗（048：去控制标签；GLM/SenseVoice 用 zh_asr_v1 去标点；
+# Qwen 用 zh_asr_keep_punct_v1 保留标点 + blank_exact，热词仍按无标点 plain 匹配）
+# transcripts.*.text 已是清洗正文；原串在 extra.raw_text。不必再为 join/tag 先跑 asr_metric_pipeline。
 # Qwen 一路 → datasets/stage1/asr/qwen1_asr_$BATCH.parquet
 audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH" --asr-run qwen1
 # GLM 一路 → datasets/stage1/asr/glm1_asr_$BATCH.parquet

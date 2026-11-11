@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from audio_engine.core.source_naming import parse_join_manifest_arg, validate_asr_run
 from audio_engine.plugins.contracts import (
     PluginContext,
     PluginStatus,
@@ -14,7 +15,10 @@ from audio_engine.plugins.contracts import (
 )
 from audio_engine.plugins.registry import PluginRegistry
 from audio_engine.plugins.snapshot import write_snapshot_dir
-from audio_engine.web.services.sources import SourceRegistryError, SourceService, effective_batch
+from audio_engine.web.services.models import ModelServiceError, probe_model_port
+from audio_engine.web.services.sources import (
+    SourceRegistryError, SourceService, effective_batch, path_allowed,
+)
 from audio_engine.web.settings import ModelConnectionConfig, WebSettings
 
 
@@ -135,7 +139,44 @@ class EngineService:
         """Bind internal source_id to engine batch/path on input (not parameters schema)."""
 
         data = dict(request_data)
+        params = dict(data.get("parameters") or {})
+        for field in ("source_dir", "label_xlsx"):
+            value = params.get(field)
+            if isinstance(value, str) and value.strip():
+                path = Path(value.strip())
+                if not path.is_absolute() or not path_allowed(path, self.settings.allowed_source_roots):
+                    raise ValueError(f"{field} 必须是服务器允许范围内的绝对路径")
+                params[field] = str(path.resolve())
+            elif isinstance(value, str):
+                params.pop(field)
+        manifest_roots = [
+            self.settings.project_root, self.settings.runs_dir, *self.settings.allowed_source_roots,
+        ]
+        if isinstance(params.get("dnsmos_manifest"), str):
+            path = self.settings.resolve(params["dnsmos_manifest"])
+            if not path.is_file() or not path_allowed(path, manifest_roots):
+                raise ValueError("DNSMOS 清单不存在或超出服务器允许范围")
+            params["dnsmos_manifest"] = str(path)
+        if isinstance(params.get("asr_manifests"), list):
+            joins = []
+            for value in params["asr_manifests"]:
+                item = parse_join_manifest_arg(value) if isinstance(value, str) else {}
+                if not item:
+                    raise ValueError("ASR 清单必须使用 路次名=清单路径")
+                alias = validate_asr_run(item["model"])
+                path = self.settings.resolve(item["path"])
+                if not path.is_file() or not path_allowed(path, manifest_roots):
+                    raise ValueError(f"ASR 路次 {alias} 的清单不存在或超出服务器允许范围")
+                joins.append(f"{alias}={path}")
+            if len({join.partition("=")[0] for join in joins}) != len(joins):
+                raise ValueError("ASR 清单路次名重复")
+            params["asr_manifests"] = joins
+        data["parameters"] = params
         inp = dict(data.get("input") or {})
+        if inp.get("kind") == "dataset" and inp.get("dataset_id"):
+            dataset_path = self.settings.resolve(str(inp["dataset_id"]))
+            if not path_allowed(dataset_path, manifest_roots):
+                raise ValueError("输入数据清单超出服务器允许范围")
         if inp.get("kind") != "source":
             return data
         source_id = str(inp.get("source_id") or "").strip()
@@ -153,7 +194,10 @@ class EngineService:
             )
         inp["batch"] = batch
         if item.get("path"):
-            inp["path"] = item["path"]
+            path = Path(item["path"])
+            if not path.is_absolute() or not path_allowed(path, self.settings.allowed_source_roots):
+                raise ValueError(f"数据源 {source_id} 的目录超出服务器允许范围")
+            inp["path"] = str(path.resolve())
         data["input"] = inp
         return data
 
@@ -205,13 +249,16 @@ class EngineService:
         on_log=None,
         on_progress=None,
         cancel_token=None,
+        resume_run_dir: Path | None = None,
     ) -> dict[str, Any]:
         from audio_engine.plugins.contracts import (
             CancelToken,
             ExecutionPlan,
             PlanNode,
             PluginRef,
+            PluginResult,
             ResolvedModelConnection,
+            ValidationIssue,
         )
 
         self.ensure_catalog()
@@ -220,6 +267,25 @@ class EngineService:
         models = [
             ResolvedModelConnection(**m) for m in plan_dict.get("resolved_models") or []
         ]
+        if (
+            "production" in (plan_dict.get("definition_snapshot") or {})
+            and not (plan_dict.get("request", {}).get("execution") or {}).get("mock")
+            and resume_run_dir is None
+        ):
+            for connection in {model.connection_id: model for model in models}.values():
+                if connection.provider not in {"qwen", "glm"}:
+                    continue
+                try:
+                    probe_model_port(connection.base_url)
+                except (OSError, ValueError, ModelServiceError):
+                    return PluginResult(
+                        outcome="failed",
+                        errors=[ValidationIssue(
+                            code="MODEL_PORT_UNREACHABLE",
+                            message=f"模型连接 {connection.connection_id} 的服务器端口不可连接",
+                            details={"connection_id": connection.connection_id},
+                        )],
+                    ).as_dict()
         plan = ExecutionPlan(
             plan_id=plan_dict["plan_id"],
             plan_digest=plan_dict["plan_digest"],
@@ -252,6 +318,7 @@ class EngineService:
             cancel_token=cancel_token or CancelToken(),
             on_log=on_log,
             on_progress=on_progress,
+            resume_run_dir=resume_run_dir,
             readonly=False,
         )
         # Execute via registry using frozen plan content (adapters still resolve

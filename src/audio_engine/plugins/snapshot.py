@@ -58,6 +58,7 @@ def freeze_yaml_tree(
     *,
     project_root: Path,
     visited: set[str] | None = None,
+    include_manifests: bool = True,
 ) -> dict[str, Any]:
     """Recursively snapshot a YAML file and referenced local YAML/config paths."""
 
@@ -84,13 +85,16 @@ def freeze_yaml_tree(
     children: dict[str, Any] = {}
     if isinstance(data, dict):
         for ref_path in _collect_path_refs(data):
+            if not include_manifests and Path(ref_path).suffix.lower() == ".parquet":
+                continue
             child = _resolve_rel(ref_path, base=resolved.parent, project_root=project_root)
             if not child.exists() or not child.is_file():
                 children[ref_path] = {"path": ref_path, "missing": True}
                 continue
             if child.suffix.lower() in {".yaml", ".yml", ".json"}:
                 children[ref_path] = freeze_yaml_tree(
-                    child, project_root=project_root, visited=visited
+                    child, project_root=project_root, visited=visited,
+                    include_manifests=include_manifests,
                 )
             else:
                 children[ref_path] = {
@@ -140,7 +144,7 @@ def _collect_path_refs(node: Any) -> list[str]:
     def walk(n: Any, key: str | None = None) -> None:
         if isinstance(n, dict):
             for k, v in n.items():
-                walk(v, str(k))
+                walk(v, "lexicons" if key == "lexicons" and isinstance(v, str) else str(k))
         elif isinstance(n, list):
             for item in n:
                 walk(item, key)

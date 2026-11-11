@@ -4,6 +4,7 @@ import Sources from "./pages/Sources";
 import Models from "./pages/Models";
 import Plugins from "./pages/Plugins";
 import Jobs from "./pages/Jobs";
+import NewJob from "./pages/NewJob";
 import JobDetail from "./pages/JobDetail";
 import Datasets from "./pages/Datasets";
 import DatasetDetail from "./pages/DatasetDetail";
@@ -13,11 +14,12 @@ export default function App() {
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<Navigate to="/sources" replace />} />
+        <Route path="/" element={<Navigate to="/jobs" replace />} />
         <Route path="/sources" element={<Sources />} />
         <Route path="/models" element={<Models />} />
         <Route path="/plugins" element={<Plugins />} />
         <Route path="/jobs" element={<Jobs />} />
+        <Route path="/jobs/new" element={<NewJob />} />
         <Route path="/jobs/:jobId" element={<JobDetail />} />
         <Route path="/datasets" element={<Datasets />} />
         <Route path="/datasets/*" element={<DatasetDetail />} />

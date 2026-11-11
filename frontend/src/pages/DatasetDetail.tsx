@@ -388,7 +388,7 @@ export default function DatasetDetail() {
             <button type="button" onClick={() => void loadExplain(sampleId)}>
               规则解释（只读，不推理）
             </button>
-            <Link to={`/jobs?dataset_id=${encodeURIComponent(datasetId)}`}>新建打标任务</Link>
+            <Link to={`/jobs/new?dataset_id=${encodeURIComponent(datasetId)}`}>新建打标任务</Link>
           </div>
           <AudioPlayer
             src={audioUrl(datasetId, sampleId, audioAsset)}

@@ -23,36 +23,41 @@ STAGE1_QUALITY_DIR = DATASETS_ROOT / "stage1" / "quality"
 class ProductionPaths:
     """Stable product locations for one batch (source_name)."""
 
-    def __init__(self, source_name: str):
+    def __init__(self, source_name: str, *, root: Path = Path()):
         self.source_name = validate_source_name(source_name)
+        self.root = root
 
     @property
     def ingested(self) -> Path:
-        return manifest_path("ingested", self.source_name)
+        return self.root / manifest_path("ingested", self.source_name)
 
     @property
     def segments(self) -> Path:
-        return manifest_path("segments", self.source_name)
+        return self.root / manifest_path("segments", self.source_name)
+
+    @property
+    def segments_vad_all(self) -> Path:
+        return self.segments.with_name(f"{self.segments.stem}_vad_all.parquet")
 
     def asr(self, route_id: str) -> Path:
         alias = validate_asr_run(route_id)
-        return manifest_path(model_asr_kind(alias), self.source_name)
+        return self.root / manifest_path(model_asr_kind(alias), self.source_name)
 
     @property
     def dnsmos(self) -> Path:
-        return manifest_path("dnsmos", self.source_name)
+        return self.root / manifest_path("dnsmos", self.source_name)
 
     @property
     def prepared_evidence(self) -> Path:
-        return manifest_path("prepared_evidence", self.source_name)
+        return self.root / manifest_path("prepared_evidence", self.source_name)
 
     @property
     def tagged_free_tags(self) -> Path:
-        return manifest_path("tagged_free_tags_v2", self.source_name)
+        return self.root / manifest_path("tagged_free_tags_v2", self.source_name)
 
     @property
     def summary_xlsx(self) -> Path:
-        return Path("data/exports") / f"summary_free_tags_v2_{self.source_name}.xlsx"
+        return self.root / "data/exports" / f"summary_free_tags_v2_{self.source_name}.xlsx"
 
     def as_posix(self, path: Path) -> str:
         return _posix(path)

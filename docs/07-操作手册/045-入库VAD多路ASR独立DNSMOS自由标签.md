@@ -2,6 +2,25 @@
 
 新生产主链。DNSMOS 是与 ASR 同级的正式独立流水线，不是质量侧车。
 
+## 服务器 Web 操作台
+
+1. 在服务器上自行启动 Qwen 和 GLM vLLM。按实际部署填写 Web 的模型连接地址、served-model-name、部署修订和密钥环境变量名。模型页「检查端口」从 Web API 所在服务器尝试 TCP 连接。真实识别使用所绑定的模型地址及各自的 ASR 协议。
+2. 在服务器部署配置中为 API 和 Worker 指定相同的项目根目录、SQLite 和运行目录。将实际音频目录与可选话术表所在目录加入 `allowed_source_roots`。Worker 环境需有 `FSMN_VAD_RUNTIME_DIR`，DNSMOS 配置需指向服务器可读的 ONNX 文件。按本手册准备 FSMN 运行目录和线程环境。部署包需包含本手册引用的 XLSX 过滤脚本与 Qwen 标点规范化配置。
+3. 在数据源页面登记批次和原始音频目录。在「任务」选择「入库、切段、多路识别、质量评分与标签」，绑定启用的 ASR 路次（默认 `qwen1`、`glm1`），规划后提交。留空标签选择使用自由标签 v2 的默认规则。
+4. 可选参数「AI 话术分类 XLSX」填写服务器绝对路径。表格摘要随计划保存，执行时核对。VAD 后先写全量 `segments_<batch>_vad_all.parquet`，再按父源 `file_id` 生成过滤清单，ASR 和 DNSMOS 读取同一份过滤清单。待删除编号为零命中时，任务停在剔除节点并保留核对日志。
+5. 在任务详情查看节点进度、日志和产物。成功后可下载清单和汇总表，也可从「数据集」打开已登记清单。每个 Web 任务使用独立产物目录，手工 CLI 的按批次产物路径见下文。
+
+服务器启动命令（两个进程读取同一份服务器配置）：
+
+```bash
+audio-data-web --project-root "$PROJECT_ROOT" --config "$WEB_CONFIG"
+audio-data-worker --project-root "$PROJECT_ROOT" --config "$WEB_CONFIG"
+```
+
+Worker 确认失败的执行进程已退出后，恢复会复用仍有产物的成功节点。上次执行意外中断且无法安全复用时，新 attempt 使用独立工作区。计划引用的流水线、标签定义或 XLSX 内容变化后应重新规划。此 Web 主链暂不开放运行中取消。
+
+分步运行时，证据合并可选择片段清单并填写 `路次名=ASR清单路径` 及 DNSMOS 清单路径。自由打标可选择上一步的证据清单；清单名未含实际批次时，在表单中补填批次名。
+
 ## 一条命令
 
 ```bash
@@ -42,10 +61,26 @@ VAD 的实际并发是 `parallel_shards × source_workers`，当前默认 `8 × 
 |------|----------|
 | 入库 | `datasets/stage1/ingested/ingested_<batch>.parquet` |
 | VAD 片段 | `datasets/stage1/segments/segments_<batch>.parquet` |
+| 话术标签剔除（可选） | 同路径写回过滤后的 `segments_<batch>.parquet`；全量备份 `segments_<batch>_vad_all.parquet` |
 | ASR | `datasets/stage1/asr/<route_id>_asr_<batch>.parquet` |
 | DNSMOS | `datasets/stage1/quality/dnsmos_<batch>.parquet` |
 | 合并证据 | `datasets/stage1/derived/prepared_evidence_<batch>.parquet` |
 | 自由 tag | `datasets/stage1/derived/tagged_free_tags_v2_<batch>.parquet` |
+
+有业务 xlsx（含 `file_id`、`AI话术分类标签`）时，可在 VAD 之后、ASR/DNSMOS 之前跑：
+
+```bash
+# 先 --dry-run 核对列与命中；确认后再去掉「接洽（身份核实）」父源的全部切段
+python scripts/filter_segments_drop_identity_verify.py \
+  --source-name "$BATCH" \
+  --xlsx "$LABEL_XLSX" \
+  --dry-run
+python scripts/filter_segments_drop_identity_verify.py \
+  --source-name "$BATCH" \
+  --xlsx "$LABEL_XLSX"
+```
+
+匹配键是切段父源 `labels.source_audio_id` / `label_source_audio_id` ↔ xlsx `file_id`；切段顶层 `id`（`seg_...`）不能对 `file_id`。一步到位总入口不含此步（需显式 xlsx）。
 
 历史 `quality_sidecar_*` / `cleaned_*`（041 合并入口）仍可读，但新链默认不发现、不依赖。
 
@@ -80,6 +115,8 @@ audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml \
 ```bash
 audio-data pipeline run pipelines/audio_ingest.yaml --source-name "$BATCH" --source-dir "$SOURCE_DIR"
 audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
+# 可选：按 xlsx 剔除「接洽（身份核实）」后再进 ASR/DNSMOS（见上文）
+# python scripts/filter_segments_drop_identity_verify.py --source-name "$BATCH" --xlsx "$LABEL_XLSX"
 audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"
 ```
 

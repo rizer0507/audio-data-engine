@@ -150,6 +150,8 @@ audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
 # audio-data pipeline run pipelines/audio_ingest.yaml \
 #   --source-name "$BATCH" --source-dir "$SOURCE_DIR"
 # audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
+# # 可选：VAD 后按 xlsx 剔除「接洽（身份核实）」；先 --dry-run 核对 file_id 匹配
+# # python scripts/filter_segments_drop_identity_verify.py --source-name "$BATCH" --xlsx "$LABEL_XLSX"
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH" --asr-run qwen1
 # audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm1
 # audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"
@@ -159,7 +161,7 @@ audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
 #   --source-name "$BATCH" --config configs/tagging/zh_asr_free_tags_v2.yaml
 #
 # ASR 落盘已含转写清洗（048）：各 *_asr_batch.yaml 在识别后同进程 normalize
-# （zh_asr_v1；Qwen 另挂 blank_exact_qwen_v1）。join/tag 直接用 transcripts.*.text；
+# （GLM/SV: zh_asr_v1；Qwen: zh_asr_keep_punct_v1 + blank_exact_qwen_v1）。join/tag 直接用 transcripts.*.text；
 # 原串在 extra.raw_text。asr_metric_pipeline 改为字准/历史补洗入口（幂等）。
 #
 # 旧 audio_quality_sidecar / quality_sidecar_* 已退出新默认流程（仅历史复现）。
@@ -209,7 +211,7 @@ audio-data pipeline run pipelines/data_cleaning_source_A.yaml \
 2a. Qwen 全量识别（独立；v3 契约别名用 --asr-run qwen_1 / qwen_2）
 -------------------------------------------------------
 # → cleaned_<name> → {alias}_asr_<name>.parquet
-# 落盘即清洗（048）：normalize + blank_exact_qwen_v1；text 无标点；raw_text 保留原串
+# 落盘即清洗（048）：normalize + blank_exact_qwen_v1；text 保留标点（zh_asr_keep_punct_v1）；raw_text 保留原串
 # 若用 vLLM HTTP：先在 tmux 起服（手册/dev/00 §2.0），批跑另开 tmux 会话
 export QWEN_ASR_MODEL_PATH="/home/lizi/Qwen3-ASR-main/data/outputs/0814-1506/checkpoint-1500"
 

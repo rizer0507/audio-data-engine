@@ -6,15 +6,12 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-
-import yaml
 
 from audio_engine.core.artifacts import atomic_write_json
 from audio_engine.core.catalog import utc_now
@@ -80,6 +77,9 @@ class ProductionOrchestrator:
         mock: bool = False,
         log: LogFn | None = None,
         tagging_config: str | None = None,
+        output_root: Path | None = None,
+        label_xlsx: Path | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.config = config
         self.config_path = Path(config_path).resolve()
@@ -91,11 +91,16 @@ class ProductionOrchestrator:
         self.mock = mock
         self.log = log or (lambda _msg: None)
         self.tagging_config = tagging_config
-        self.paths = ProductionPaths(self.source_name)
+        self.paths = ProductionPaths(self.source_name, root=output_root or Path())
+        self.output_root = output_root
+        self.label_xlsx = label_xlsx
+        self.on_progress = on_progress
+        self.run_root: Path | None = None
         self.base_dir = self.config_path.parent
 
     def run(self) -> ProductionRunResult:
         run_root = self._prepare_run_root()
+        self.run_root = run_root
         self._freeze_config(run_root)
         state = self._load_or_create_state(run_root)
         state.status = "running"
@@ -103,7 +108,6 @@ class ProductionOrchestrator:
         self._event(run_root, "production_started", {"source_name": self.source_name})
 
         nodes = self._build_nodes()
-        definition = TaskDefinition(name=self.config.name, nodes=nodes)
         node_by_id = {node.id: node for node in nodes}
         overlap_evidence: dict[str, Any] | None = None
 
@@ -111,8 +115,13 @@ class ProductionOrchestrator:
             remaining = {node.id for node in nodes}
             done: set[str] = set()
             # Seed already-succeeded nodes for resume.
-            for node_id, node_state in state.nodes.items():
-                if node_state.status == "succeeded" and self._outputs_exist(node_by_id[node_id]):
+            for node_id in node_by_id:
+                node = node_by_id[node_id]
+                if (
+                    state.nodes[node_id].status == "succeeded"
+                    and set(node.depends_on) <= done
+                    and self._outputs_exist(node)
+                ):
                     done.add(node_id)
                     remaining.discard(node_id)
                     self._event(run_root, "node_skipped", {"node_id": node_id, "reason": "resume"})
@@ -168,7 +177,12 @@ class ProductionOrchestrator:
                             future.result()
                             results[node.id] = None
                         except Exception as exc:  # noqa: BLE001 — collect then raise
+                            ns = state.nodes[node.id]
+                            ns.status = "failed"
+                            ns.finished_at = utc_now()
+                            ns.error = str(exc)
                             results[node.id] = exc
+                        self._write_progress(run_root, state, phase="running")
 
                 wave_finished = time.monotonic()
                 # Overlap evidence: any wave with ≥2 nodes that both started before
@@ -234,6 +248,7 @@ class ProductionOrchestrator:
     def _build_nodes(self) -> list[TaskNode]:
         ingest_out = self.paths.as_posix(self.paths.ingested)
         segments_out = self.paths.as_posix(self.paths.segments)
+        vad_out = self.paths.as_posix(self.paths.segments_vad_all) if self.label_xlsx else segments_out
         dnsmos_out = self.paths.as_posix(self.paths.dnsmos)
         evidence_out = self.paths.as_posix(self.paths.prepared_evidence)
         tagged_out = self.paths.as_posix(self.paths.tagged_free_tags)
@@ -270,23 +285,42 @@ class ProductionOrchestrator:
                     vad_pipe,
                     source_name=self.source_name,
                     input_manifest=ingest_out,
-                    output_manifest=segments_out,
+                    output_manifest=vad_out,
                     extra=self.config.vad.extra_args,
                 ),
                 depends_on=["ingest"],
                 env=dict(self.config.vad.env),
-                outputs=[segments_out],
+                outputs=[vad_out],
             ),
         ]
+
+        segment_dependency = "vad"
+        if self.label_xlsx:
+            segment_dependency = "filter_identity_verify"
+            nodes.append(
+                TaskNode(
+                    id=segment_dependency,
+                    command=[
+                        sys.executable,
+                        str(Path("scripts/filter_segments_drop_identity_verify.py").resolve()),
+                        vad_out,
+                        "--xlsx", str(self.label_xlsx),
+                        "--output", segments_out,
+                        "--no-backup", "--force",
+                    ],
+                    depends_on=["vad"],
+                    outputs=[segments_out],
+                )
+            )
 
         asr_ids: list[str] = []
         for route in self.config.asr_routes:
             route_id = route.route_id
             node_id = f"asr_{route_id}"
             asr_ids.append(node_id)
-            asr_out = self.paths.as_posix(self.paths.asr(route_id))
-            asr_pipe = _resolve_pipeline(route.pipeline, base=self.base_dir)
             asr_run = route.resolved_asr_run()
+            asr_out = self.paths.as_posix(self.paths.asr(asr_run))
+            asr_pipe = _resolve_pipeline(route.pipeline, base=self.base_dir)
             nodes.append(
                 TaskNode(
                     id=node_id,
@@ -298,7 +332,7 @@ class ProductionOrchestrator:
                         asr_run=asr_run,
                         extra=route.extra_args,
                     ),
-                    depends_on=["vad"],
+                    depends_on=[segment_dependency],
                     env=dict(route.env),
                     outputs=[asr_out],
                 )
@@ -314,7 +348,7 @@ class ProductionOrchestrator:
                     output_manifest=dnsmos_out,
                     extra=self.config.dnsmos.extra_args,
                 ),
-                depends_on=["vad"],
+                depends_on=[segment_dependency],
                 env=dict(self.config.dnsmos.env),
                 outputs=[dnsmos_out],
             )
@@ -322,7 +356,7 @@ class ProductionOrchestrator:
 
         join_depends = [*asr_ids, "dnsmos"]
         join_manifests = [
-            f"{route.resolved_asr_run()}={self.paths.as_posix(self.paths.asr(route.route_id))}"
+            f"{route.resolved_asr_run()}={self.paths.as_posix(self.paths.asr(route.resolved_asr_run()))}"
             for route in self.config.asr_routes
         ]
         join_extra = list(self.config.evidence_join.extra_args)
@@ -358,6 +392,8 @@ class ProductionOrchestrator:
         tag_extra = list(self.config.tagging.extra_args)
         if tag_cfg:
             tag_extra.extend(["--config", tag_cfg])
+        if self.output_root is not None:
+            tag_extra.extend(["--summary-xlsx", self.paths.as_posix(self.paths.summary_xlsx)])
         nodes.append(
             TaskNode(
                 id="tagging",
@@ -440,13 +476,13 @@ class ProductionOrchestrator:
         ) as stderr:
             # Inject --runs-dir if the CLI supports it via env; also pass explicitly.
             command = list(node.command)
-            if "--runs-dir" not in command:
+            if command[:5] == _cli_base() and "--runs-dir" not in command:
                 command.extend(["--runs-dir", str(child_runs)])
             result = subprocess.run(
                 command,
                 env=env,
                 stdout=stdout,
-                stderr=stderr,
+                stderr=subprocess.STDOUT if self.output_root is not None else stderr,
                 check=False,
             )
         ns = state.nodes[node.id]
@@ -505,7 +541,7 @@ class ProductionOrchestrator:
                 raise FileNotFoundError(f"resume run dir not found: {self.resume}")
             return root.resolve()
         name = pipeline_run_name(self.config.name, self.source_name)
-        root = self.runs_dir / f"{_ts()}_{name}"
+        root = self.runs_dir / ("run" if self.output_root is not None else f"{_ts()}_{name}")
         root.mkdir(parents=True, exist_ok=False)
         (root / "nodes").mkdir(parents=True, exist_ok=True)
         (root / "config_snapshot").mkdir(parents=True, exist_ok=True)
@@ -609,6 +645,7 @@ class ProductionOrchestrator:
             "phase": phase,
             "status": state.status,
             "source_name": self.source_name,
+            "run_dir": str(run_root),
             "updated_at": utc_now(),
             "ready": ready or [],
             "running": running,
@@ -626,6 +663,8 @@ class ProductionOrchestrator:
         }
         atomic_write_json(run_root / "progress_view.json", payload)
         atomic_write_json(run_root / "metrics.json", payload)
+        if self.on_progress:
+            self.on_progress(payload)
         line = (
             f"[PRODUCTION] status={state.status} phase={phase} "
             f"running={running} succeeded={len(succeeded)} "
@@ -638,7 +677,7 @@ class ProductionOrchestrator:
 
     def _path_map(self) -> dict[str, Any]:
         routes = {
-            route.route_id: self.paths.as_posix(self.paths.asr(route.route_id))
+            route.route_id: self.paths.as_posix(self.paths.asr(route.resolved_asr_run()))
             for route in self.config.asr_routes
         }
         return {
