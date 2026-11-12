@@ -86,13 +86,13 @@ Sophon 使用内网 Sophon-Realtime-32B-Tag。评测从 `/v1/models` 取实际 I
 
 当前评测调用 HTTP `/v1/chat/completions`，只请求文本。WebSocket 的 `session.turn_detection` 和 Sophon 的 `SOPHON_TURN_*` 作用于实时会话。生产 FSMN 保持 `fsmn_vad_segment/v9` 与 fenshen 参数；已切片如需增加声学证据，独立对比 `configs/quality/silero_vad_v1.yaml` 的 `0.50 / 120 ms` 和试验组 `0.60 / 160 ms`（试验组同时调整检测与判定的最短语音时长）。低 SIG、VAD `uncertain` 与缺失证据保留给复核；短词、弱语音纳入回归。
 
-评测入口默认使用 `pipelines/sophon_asr_v1.yaml`。该配置独立于 Qwen YAML，默认 `context: ""`，保留 `temperature=0`、`max_tokens=256`、`modalities=["text"]`，用 system 指令要求只转写可辨认词句和真实语气词，纯噪声与纯非语言声返回空串。ASR 按 [官方 Tag 标签语法](https://github.com/adventists-ai/sophon-realtime/blob/3585943/tag/plugin/sophon_realtime/proc.py#L21-L24) 去除标签、纯笑声片段及常见非语言标注，词句继续经过现有保标点规范化。`transcripts.<alias>.extra.raw_text` 保存原串，HTTP 调用失败缺少转写字段时终止新版 Sophon 报表，避免把失败当成无语音。
+评测入口默认 `SOPHON_PROFILE=v1-hotwords` → `pipelines/sophon_asr_v1-hotwords.yaml`：`language: zh`，`context` 对齐 fenshen 生产 `vllm_hotwords.default`（`Vocabulary：不方便，平安融易，测额，额度，还贷，征信，没有，暂时不要，不可以，不用，不要谢谢，不需要。`）；评测无场景路由，不用「接洽-身份核实」词表。无热词对照用 `SOPHON_PROFILE=v1`（`context: ""`）。配置独立于 Qwen YAML，保留 `temperature=0`、`max_tokens=256`、`modalities=["text"]`，用 system 指令要求只转写可辨认词句和真实语气词，纯噪声与纯非语言声返回空串。ASR 按 [官方 Tag 标签语法](https://github.com/adventists-ai/sophon-realtime/blob/3585943/tag/plugin/sophon_realtime/proc.py#L21-L24) 去除标签、纯笑声片段及常见非语言标注，词句继续经过现有保标点规范化。`transcripts.<alias>.extra.raw_text` 保存原串，HTTP 调用失败缺少转写字段时终止新版 Sophon 报表，避免把失败当成无语音。
 
-调热词或提示词时复制 `pipelines/sophon_asr_v1.yaml` 为新版本，例如 `pipelines/sophon_asr_v1-hotwords.yaml`，只修改试验组的 `params.context`。可写 `vocabulary:产品名A，专有名词B`，也可复制 Qwen 配置里的原词表作为独立对照。非空词表附在 system 提示，`SOPHON_PROFILE=legacy` 使用原 Qwen 配置和原 Sophon 提示。配置由评测客户端加载，更新评测代码后启动新任务即可。
+继续调热词或提示词时复制现有 profile 为新版本，只改试验组的 `params.context` / `system_prompt`。非空词表附在 system 提示，`SOPHON_PROFILE=legacy` 使用原 Qwen 配置和原 Sophon 提示。配置由评测客户端加载，更新评测代码后启动新任务即可。
 
 ```bash
 bash scripts/run_fenshen_1015_eval.sh sophon v032
-SOPHON_PROFILE=v1-hotwords bash scripts/run_fenshen_1015_eval.sh sophon v032
+SOPHON_PROFILE=v1 bash scripts/run_fenshen_1015_eval.sh sophon v032
 SOPHON_PROFILE=legacy bash scripts/run_fenshen_1015_eval.sh sophon v032
 ```
 

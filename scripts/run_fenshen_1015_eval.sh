@@ -22,6 +22,8 @@
 #   bash scripts/run_fenshen_1015_eval.sh lora v014 both all
 #   bash scripts/run_fenshen_1015_eval.sh rl v025
 #   bash scripts/run_fenshen_1015_eval.sh sophon v032
+#   Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen vllm_hotwords.default + language=zh）
+#   SOPHON_PROFILE=v1 bash scripts/run_fenshen_1015_eval.sh sophon v032
 #   SOPHON_PROFILE=legacy bash scripts/run_fenshen_1015_eval.sh sophon v032
 
 set -euo pipefail
@@ -39,7 +41,7 @@ usage() {
   echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 both best-over"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh rl v025"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh sophon v032（默认 dev best）"
-  echo "Sophon 默认 SOPHON_PROFILE=v1，回退可设 SOPHON_PROFILE=legacy。"
+  echo "Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen 热词 + 中文），回退可设 SOPHON_PROFILE=v1 或 legacy。"
   echo "full 的 best 在 5560，over 在 5561。lora 的 best 在 5565，over 在 5566。rl 固定在 5580，sophon 固定在 6179，两者无 over。"
   echo "字准表始终和 qwen-base 比较。只转写 best/over 时，没有 base parquet 才会调用 5555。"
 }
@@ -76,7 +78,7 @@ PORT_SOPHON=6179
 SOPHON_RUN_TAG=""
 QWEN_PIPELINE="pipelines/qwen_asr_batch.yaml"
 if [[ "$MODE" == "sophon" ]]; then
-  SOPHON_PROFILE="${SOPHON_PROFILE:-v1}"
+  SOPHON_PROFILE="${SOPHON_PROFILE:-v1-hotwords}"
   if [[ ! "$SOPHON_PROFILE" =~ ^(legacy|v[0-9]+(-[a-z0-9]+)*)$ ]]; then
     echo "无效的 SOPHON_PROFILE: $SOPHON_PROFILE" >&2
     exit 1

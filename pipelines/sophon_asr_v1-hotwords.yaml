@@ -1,0 +1,55 @@
+# Sophon HTTP 纯转写 + fenshen 生产热词（对齐 ph_ai_model_asr_rt_cpu
+# app/config/dev_fenshen.yaml 的 vllm_hotwords.default；评测无场景路由，不用「接洽-身份核实」词表）。
+# 回退无热词：SOPHON_PROFILE=v1
+name: sophon_asr_batch
+
+input:
+  manifest: datasets/stage1/cleaned/cleaned_source_A.parquet
+
+output:
+  manifest: datasets/stage1/asr/sophon_asr_source_A.parquet
+
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+  checkpoint_every: 500
+
+sharding:
+  shards: 8
+  strategy: duration-balanced
+  parallel_shards: 8
+  gpus: [4, 5]
+  instances_per_gpu: 4
+  workers: 1
+  executor: sequential
+
+pipeline:
+  - name: sophon_asr
+    operator: asr.qwen_batch
+    params:
+      input_audio_key: resampled_16k
+      config_path: null  # Sophon 独立配置，关闭共享 Qwen YAML 的继承
+      chat_format: sophon  # HTTP /v1/chat/completions，非流式，只请求文本
+      language: zh  # 指定中文
+      context: "Vocabulary：不方便，平安融易，测额，额度，还贷，征信，没有，暂时不要，不可以，不用，不要谢谢，不需要。"
+      temperature: 0
+      max_new_tokens: 256
+      timeout: 120
+      batch_size: 32
+      concurrency: 4
+      strip_sophon_tags: true  # 清理非语言标签并在 extra.raw_text 留存原始输出
+      system_prompt: >-
+        逐字转写音频中清楚可辨的词句，保留实际说出的语气词和重复。
+        跳过听不清的部分，禁止猜测、补全或回答。忽略背景噪声和非语言声音。
+        若没有可辨认的词句，返回空文本。
+        只输出转写正文，禁止输出笑声、叹气、呼吸、咳嗽、情绪或重读标签，
+        也不要输出“无语音”或“听不清”等说明。
+
+  - name: normalize_transcripts
+    operator: quality.normalize_transcripts
+    params:
+      models: [qwen]
+      keep_raw: true
+      normalization_path: configs/normalization/zh_asr_keep_punct_v1.yaml
+      blank_exact_hotwords_path: configs/normalization/blank_exact_qwen_v1.yaml
