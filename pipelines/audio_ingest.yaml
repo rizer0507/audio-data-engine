@@ -1,5 +1,6 @@
-# 045：音频入库（父源登记 + 16k mono ch0 规范化）
+# 045 / 050：音频入库（统一场景识别 + 父源登记 + 16k mono ch0 规范化）
 # 与 VAD 切分拆开；产物为父源 Manifest，不是片段。
+# 同目录可混放 fenshen / 审批面谈(8k) / 审批外呼(16k)；写入 labels.audio_scene。
 #
 #   audio-data pipeline run pipelines/audio_ingest.yaml \
 #     --source-name "$BATCH" --source-dir /path/to/raw
@@ -15,21 +16,26 @@ output:
 
 execution:
   executor: thread
-  workers: 32
-  max_in_flight: 128
+  workers: 4
+  max_in_flight: 0
   fail_fast: false
   checkpoint_every: 5000
 
 sharding:
-  shards: 8
+  shards: 64
   strategy: hash
-  parallel_shards: 16
-  workers: 16
+  parallel_shards: 64
+  workers: 4
   executor: thread
 
 pipeline:
   - name: ingest
     operator: ingest.scan
+
+  - name: resolve_audio_scene
+    operator: ingest.resolve_audio_scene
+    params:
+      drop_rejected: true
 
   - name: pcm_convert
     operator: audio.pcm_to_wav
@@ -37,6 +43,7 @@ pipeline:
       workers: 32
     params:
       sample_rate: 16000
+      # Fallback only; per-sample labels.source_sample_rate from resolve_audio_scene wins.
       source_sample_rate: 16000
       channels: 1
       input_audio_key: raw

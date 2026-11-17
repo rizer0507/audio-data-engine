@@ -89,10 +89,44 @@ def resolve_headerless_rate(
     params: dict[str, Any],
     *,
     default_sr: int = TARGET_SR,
+    labels: dict[str, Any] | None = None,
 ) -> tuple[int, RateSource]:
+    """Resolve headerless PCM sample rate.
+
+    Preference: per-sample ``labels.source_sample_rate`` (scene routing) →
+    YAML ``params.source_sample_rate`` → default convention (16 kHz).
+    """
+    if labels and labels.get("source_sample_rate") is not None:
+        return int(labels["source_sample_rate"]), "source_config"
     if "source_sample_rate" in params and params["source_sample_rate"] is not None:
         return int(params["source_sample_rate"]), "source_config"
     return int(default_sr), "default_convention"
+
+
+def pcm_array_to_float32(data: np.ndarray) -> np.ndarray:
+    """Map integer PCM into float32 amplitude domain before resampling / WAV write."""
+    arr = np.asanyarray(data)
+    if np.issubdtype(arr.dtype, np.floating):
+        return arr.astype(np.float32, copy=False)
+    if arr.dtype == np.int16:
+        return (arr.astype(np.float32) / 32768.0).astype(np.float32)
+    if arr.dtype == np.int32:
+        return (arr.astype(np.float32) / 2147483648.0).astype(np.float32)
+    if arr.dtype == np.uint8:
+        return ((arr.astype(np.float32) - 128.0) / 128.0).astype(np.float32)
+    return arr.astype(np.float32)
+
+
+def write_pcm16_wav(path: str, data: np.ndarray, sample_rate: int) -> None:
+    """Write mono/multi PCM16 WAV from float or integer arrays without int16-scale clipping.
+
+    Integer inputs are converted to float amplitude first so ``soundfile`` does not
+    treat ~[-32768, 32767] floats as normalized [-1, 1] and saturate.
+    """
+    import soundfile as sf
+
+    arr = pcm_array_to_float32(np.asanyarray(data))
+    sf.write(str(path), arr, int(sample_rate), subtype="PCM_16")
 
 
 def is_non_target_rate(sr: int, target: int = TARGET_SR) -> bool:

@@ -142,11 +142,11 @@ def test_worker_runs_and_publishes_production_with_xlsx(app_client, monkeypatch,
 
     raw = tmp_path / "raw"
     raw.mkdir()
-    for name, tone in (("drop", 400), ("keep", 600)):
+    for name, tone in (("fenshen_drop", 400), ("fenshen_keep", 600)):
         sf.write(raw / f"{name}.wav", 0.2 * np.sin(np.arange(16000) * tone * 2 * np.pi / 16000), 16000)
     workbook = Workbook()
     workbook.active.append(["file_id", "AI话术分类标签"])
-    workbook.active.append(["drop", "接洽（身份核实）"])
+    workbook.active.append(["fenshen_drop", "接洽（身份核实）"])
     workbook_path = tmp_path / "labels.xlsx"
     workbook.save(workbook_path)
 
@@ -205,11 +205,16 @@ def test_worker_runs_and_publishes_production_with_xlsx(app_client, monkeypatch,
         assert params["api_base"] == f"http://127.0.0.1:{port}/v1"
         assert params["model"] == f"{family}-fixture"
     assert detail["progress"]["nodes"]["filter_identity_verify"]["status"] == "succeeded"
+    ingest_logs = client.get(f"/api/v1/jobs/{job_id}/logs", params={"node_id": "ingest"})
+    ingest_text = "".join(chunk["text"] for chunk in ingest_logs.json()["chunks"])
+    assert "done=2/2" in ingest_text
+    assert "ingested_rows=2" in ingest_text
+    assert "select_pass=2/2" in ingest_text
     logs = client.get(f"/api/v1/jobs/{job_id}/logs", params={"node_id": "filter_identity_verify"})
     assert "drop_ids_hit=1" in logs.json()["chunks"][0]["text"]
     tagged = next(a for a in detail["artifacts"] if Path(a["path"]).name.startswith("tagged_free_tags"))
     rows = Manifest.load(tagged["path"]).samples
-    assert [sample.labels["source_audio_id"] for sample in rows] == ["keep"]
+    assert [sample.labels["source_audio_id"] for sample in rows] == ["fenshen_keep"]
     assert set(rows[0].transcripts) == {"qwen1", "glm1"}
     backup = next(a for a in detail["artifacts"] if a["path"].endswith("_vad_all.parquet"))
     assert len(Manifest.load(backup["path"]).samples) == 2

@@ -4,7 +4,8 @@
 # 先把 gold 放到 datasets/stage1/derived，再自行拉起要用的端口。
 #   full: best 5560, over 5561
 #   lora: best 5565, over 5566
-#   rl: 固定 5580；sophon: 固定 6179。两个模式都只提供 best。
+#   rl: 固定 5580；omni: 固定 6190；sophon: 固定 6179。三个模式都只提供 best。
+#   omni 走与 lora/full/rl 相同的 qwen_asr_batch，模型 ID 从 6190 的 /v1/models 读取。
 #   qwen-base: 5555。第四个参数为 all 时总是转写。
 #   只转写 best/over 时，本次切分已有 qwen-base parquet 就跳过 5555；没有则调用 5555 补转写。
 # 字准 xlsx 始终和 qwen-base 比较；lora-full 将 LoRA 和 Full 放进同一份报表。
@@ -21,6 +22,7 @@
 #   bash scripts/run_fenshen_1015_eval.sh full v014 both best-over
 #   bash scripts/run_fenshen_1015_eval.sh lora v014 both all
 #   bash scripts/run_fenshen_1015_eval.sh rl v025
+#   bash scripts/run_fenshen_1015_eval.sh omni v030
 #   bash scripts/run_fenshen_1015_eval.sh sophon v032
 #   Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen vllm_hotwords.default + language=zh）
 #   SOPHON_PROFILE=v1 bash scripts/run_fenshen_1015_eval.sh sophon v032
@@ -34,21 +36,22 @@ SPLIT="${3:-dev}"
 CKPT="${4:-best}"
 
 usage() {
-  echo "用法: bash scripts/run_fenshen_1015_eval.sh <lora|full|lora-full|rl|sophon> <v0xx> [train|dev|both] [all|best|over|best-over]"
+  echo "用法: bash scripts/run_fenshen_1015_eval.sh <lora|full|lora-full|rl|omni|sophon> <v0xx> [train|dev|both] [all|best|over|best-over]"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh lora-full v030（默认 dev best）"
+  echo "示例: bash scripts/run_fenshen_1015_eval.sh omni v030"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 train best"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 dev over"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 both best-over"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh rl v025"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh sophon v032（默认 dev best）"
   echo "Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen 热词 + 中文），回退可设 SOPHON_PROFILE=v1 或 legacy。"
-  echo "full 的 best 在 5560，over 在 5561。lora 的 best 在 5565，over 在 5566。rl 固定在 5580，sophon 固定在 6179，两者无 over。"
+  echo "full 的 best 在 5560，over 在 5561。lora 的 best 在 5565，over 在 5566。rl 固定在 5580，omni 固定在 6190，sophon 固定在 6179，三者无 over。"
   echo "字准表始终和 qwen-base 比较。只转写 best/over 时，没有 base parquet 才会调用 5555。"
 }
 
 case "$MODE" in
   lora-full) models=(lora full) ;;
-  lora|full|rl|sophon) models=("$MODE") ;;
+  lora|full|rl|omni|sophon) models=("$MODE") ;;
   *) usage; exit 1 ;;
 esac
 
@@ -74,6 +77,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PORT_BASE=5555
+PORT_OMNI=6190
 PORT_SOPHON=6179
 SOPHON_RUN_TAG=""
 QWEN_PIPELINE="pipelines/qwen_asr_batch.yaml"
@@ -93,7 +97,7 @@ if [[ "$MODE" == "sophon" ]]; then
   fi
 fi
 single_port=0
-if [[ "$MODE" == "rl" || "$MODE" == "sophon" ]]; then
+if [[ "$MODE" == "rl" || "$MODE" == "omni" || "$MODE" == "sophon" ]]; then
   single_port=1
   if [[ "$CKPT" == "over" || "$CKPT" == "best-over" ]]; then
     echo "${MODE} 只有 best 端口，请用 all 或 best"
@@ -199,6 +203,7 @@ for model in "${models[@]}"; do
     full) best_port=5560; over_port=5561 ;;
     lora) best_port=5565; over_port=5566 ;;
     rl) best_port=5580 ;;
+    omni) best_port="$PORT_OMNI" ;;
     sophon) best_port="$PORT_SOPHON" ;;
   esac
   if [[ "$want_best" -eq 1 ]]; then
@@ -217,12 +222,18 @@ if [[ "$want_base" -eq 1 ]]; then
   port_models+=(base)
   port_ckpts+=(base)
 fi
-SOPHON_MODEL="$(python - "$MODE" "$PORT_SOPHON" "${ports[@]}" <<'PY'
+SERVED_LINES="$(python - "$MODE" "$PORT_SOPHON" "$PORT_OMNI" "${ports[@]}" <<'PY'
 import json
 import sys
 import urllib.request
 
-mode, sophon_port, *ports = sys.argv[1:]
+mode, sophon_port, omni_port, *ports = sys.argv[1:]
+wanted = {}
+if mode == "sophon":
+    wanted[sophon_port] = "sophon"
+elif mode == "omni":
+    wanted[omni_port] = "omni"
+found = {}
 for port in ports:
     url = f"http://127.0.0.1:{port}/v1/models"
     print(f"GET {url}", file=sys.stderr)
@@ -231,13 +242,27 @@ for port in ports:
     payload = json.loads(body)
     names = [item.get("id") for item in payload.get("data") or []]
     print(f"port {port} models: {names}", file=sys.stderr)
-    if mode == "sophon" and port == sophon_port:
+    if port in wanted:
         model = next((name for name in names if name), None)
         if model is None:
-            raise SystemExit(f"端口 {port} 没有返回可用的 Sophon 模型 ID")
-        print(model)
+            raise SystemExit(f"端口 {port} 没有返回可用的模型 ID")
+        found[wanted[port]] = model
+        print(f"{wanted[port]}\t{model}")
+missing = [kind for kind in wanted.values() if kind not in found]
+if missing:
+    raise SystemExit("没有读到模型 ID: " + ",".join(missing))
 PY
 )"
+SOPHON_MODEL=""
+OMNI_MODEL=""
+if [[ -n "$SERVED_LINES" ]]; then
+  while IFS=$'\t' read -r kind name; do
+    case "$kind" in
+      sophon) SOPHON_MODEL="$name" ;;
+      omni) OMNI_MODEL="$name" ;;
+    esac
+  done <<<"$SERVED_LINES"
+fi
 
 run_one() {
   local split="$1"
@@ -257,6 +282,10 @@ run_one() {
   unset QWEN_ASR_API_BASE QWEN_ASR_API_BASES
   export QWEN_ASR_API_KEY=dummy
   export QWEN_ASR_API_BASE="http://127.0.0.1:${port}"
+  if [[ "$MODE" == "omni" && "$port" == "$PORT_OMNI" ]]; then
+    unset QWEN_ASR_CHAT_FORMAT
+    export QWEN_ASR_MODEL="$OMNI_MODEL"
+  fi
   if [[ "$MODE" == "sophon" && "$port" == "$PORT_SOPHON" ]]; then
     pipeline="$SOPHON_PIPELINE_SNAPSHOT"
     # Bind each split's shards to this run directory. --force disables checkpoint reuse.

@@ -35,12 +35,21 @@ export QWEN_ASR_API_KEY=dummy
 export GLM_ASR_API_BASE=http://127.0.0.1:5570
 
 # ---------- 1) 入库（单独产生 ingested_$BATCH.parquet）----------
-# 父源登记 + 16k mono 规范化 → datasets/stage1/ingested/ingested_$BATCH.parquet
+# 统一场景识别 + 父源登记 + 16k mono 规范化 → datasets/stage1/ingested/ingested_$BATCH.parquet
+# 同目录可混放：fenshen*（分身 16k）、shenpi_ai-/shepi_ai-（审批；后缀含大写 V/P=面谈 8k，否则外呼 16k）
+# 写入 labels.audio_scene=fenshen|shenpi_interview|shenpi_outbound|unknown（展开为 label_audio_scene）
+# 历史错误审批入库须换新批次名从原始 PCM 重跑本步，不能只改标签
 audio-data pipeline run pipelines/audio_ingest.yaml --source-name "$BATCH" --source-dir "$SOURCE_DIR"
 
-# ---------- 2) VAD 切分（读 ingested_ → 写 segments_）----------
+# ---------- 2a) 分身 VAD（FSMN v9；只处理 fenshen / 历史兼容缺标记分身）----------
 # 输入 ingested_$BATCH.parquet → 输出 datasets/stage1/segments/segments_$BATCH.parquet
 audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
+
+# ---------- 2b) 审批 VAD（HTTP FireRedVAD；只处理面谈/外呼；默认产物 -shenpi）----------
+# 部署地址按环境配置；无服务时可 AUDIO_ENGINE_SHENPI_VAD_MOCK=1 做替身
+# export SHENPI_VAD_API_BASE='http://your-vad-host:8094'
+# 输入同一份 ingested_$BATCH → 输出 datasets/stage1/segments/segments_$BATCH-shenpi.parquet
+# audio-data pipeline run pipelines/vad_segment_shenpi_batch.yaml --source-name "$BATCH"
 
 # ---------- 2.5) 按 AI 话术标签剔除「接洽（身份核实）」（可选；有 xlsx 时做）----------
 # 输入：segments_$BATCH.parquet + LABEL_XLSX（关注列：file_id、AI话术分类标签）
@@ -56,23 +65,28 @@ export LABEL_XLSX="$PWD/data/raw/分身13-14日志_合并清洗数据_已打标�
 python scripts/filter_segments_drop_identity_verify.py --source-name "$BATCH" --xlsx "$LABEL_XLSX"
 
 # ---------- 3) ASR 与 DNSMOS（可并行；都读 segments_）----------
+# 分身：VAD_BATCH="$BATCH"；审批：VAD_BATCH="${BATCH}-shenpi"
+# export VAD_BATCH="$BATCH"
+# export VAD_BATCH="${BATCH}-shenpi"
 # ASR 落盘已含转写清洗（048：去控制标签；GLM/SenseVoice 用 zh_asr_v1 去标点；
 # Qwen 用 zh_asr_keep_punct_v1 保留标点 + blank_exact，热词仍按无标点 plain 匹配）
 # transcripts.*.text 已是清洗正文；原串在 extra.raw_text。不必再为 join/tag 先跑 asr_metric_pipeline。
-# Qwen 一路 → datasets/stage1/asr/qwen1_asr_$BATCH.parquet
-audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH" --asr-run qwen1
-# GLM 一路 → datasets/stage1/asr/glm1_asr_$BATCH.parquet
-audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm1
-# 独立 DNSMOS → datasets/stage1/quality/dnsmos_$BATCH.parquet
-audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"
+# label_audio_scene 随片段保留到下游，规则不依赖改写该字段
+# Qwen 一路 → datasets/stage1/asr/qwen1_asr_$VAD_BATCH.parquet
+audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "${VAD_BATCH:-$BATCH}" --asr-run qwen1
+# GLM 一路 → datasets/stage1/asr/glm1_asr_$VAD_BATCH.parquet
+audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "${VAD_BATCH:-$BATCH}" --asr-run glm1
+# 独立 DNSMOS → datasets/stage1/quality/dnsmos_$VAD_BATCH.parquet
+audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "${VAD_BATCH:-$BATCH}"
 
 # ---------- 4) 证据合并 ----------
-# 对齐片段 + ASR + DNSMOS → datasets/stage1/derived/prepared_evidence_$BATCH.parquet
-audio-data pipeline run pipelines/evidence_join.yaml --source-name "$BATCH" --join-manifest qwen1 --join-manifest glm1
+# 对齐片段 + ASR + DNSMOS → datasets/stage1/derived/prepared_evidence_$VAD_BATCH.parquet
+# 若设了 AUDIO_ENGINE_DNSMOS_MANIFEST，须指向同分支同次片段的 DNSMOS
+audio-data pipeline run pipelines/evidence_join.yaml --source-name "${VAD_BATCH:-$BATCH}" --join-manifest qwen1 --join-manifest glm1
 
 # ---------- 5) 自由 tag ----------
-# 消费已提交证据 → datasets/stage1/derived/tagged_free_tags_v2_$BATCH.parquet
-audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml --source-name "$BATCH" --config configs/tagging/zh_asr_free_tags_v2.yaml
+# 消费已提交证据 → datasets/stage1/derived/tagged_free_tags_v2_$VAD_BATCH.parquet
+audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml --source-name "${VAD_BATCH:-$BATCH}" --config configs/tagging/zh_asr_free_tags_v2.yaml
 
 # ---------- 进度 / 续跑（各步独立 runs）----------
 # 看某次子流水线进度（把路径换成该步 runs 目录）
@@ -81,5 +95,7 @@ audio-data pipeline progress "runs/<run-dir>" --follow
 
 # ---------- 说明 ----------
 # ASR 路次可在各 ASR 命令的 --asr-run 与 evidence_join 的 --join-manifest 里改
-# 旧一步到位总入口仍可用：pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml（本册不推荐）
+# 混合批次要两路都处理时：工序 2a + 2b 都跑，下游分别用 BATCH 与 BATCH-shenpi
+# 旧一步到位总入口仍可用：pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml（只编排 FSMN 分身；审批请分步）
 # 旧 audio_quality_sidecar / 五类 classify 已退出本册默认
+# 详解审批场景与 HTTP VAD：docs/04-改进需求/进行中/050-工序一审批场景HTTP-VAD接入.md

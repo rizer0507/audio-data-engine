@@ -1,0 +1,52 @@
+# 050：审批 HTTP VAD 切分（独立流水线）
+# 输入：与分身相同的父源 ingested_*（含 labels.audio_scene）
+# 输出：默认 segments_<batch>-shenpi；只处理 shenpi_interview / shenpi_outbound
+#
+#   export SHENPI_VAD_API_BASE='http://your-vad-host:8090'
+#   audio-data pipeline run pipelines/vad_segment_shenpi_batch.yaml \
+#     --source-name "$BATCH"
+#   # 显式：
+#   #   --input-manifest datasets/stage1/ingested/ingested_$BATCH.parquet \
+#   #   --output-manifest datasets/stage1/segments/segments_$BATCH-shenpi.parquet
+#
+# mock：AUDIO_ENGINE_SHENPI_VAD_MOCK=1 或 params.mock=true
+
+name: vad_segment_shenpi_batch
+
+input:
+  manifest: datasets/stage1/ingested/ingested_source_A.parquet
+
+output:
+  manifest: datasets/stage1/segments/segments_source_A-shenpi.parquet
+
+execution:
+  executor: thread
+  workers: 4
+  max_in_flight: 8
+  fail_fast: false
+  checkpoint_every: 500
+
+sharding:
+  shards: 4
+  strategy: duration-balanced
+  parallel_shards: 4
+  workers: 2
+  executor: thread
+
+pipeline:
+  - name: shenpi_vad_segment
+    operator: audio.shenpi_vad_segment
+    params:
+      input_audio_key: resampled_16k
+      raw_audio_key: raw
+      output_audio_key: resampled_16k
+      channel_index: 0
+      profiles_path: configs/vad/shenpi_vad_profiles.yaml
+      source_results_dir: vad_source_results
+      segments_subdir: vad_segments
+      source_workers: 4
+      max_in_flight_sources: 8
+      timeout_s: 120
+      retries: 2
+      mode: stream
+      # api_base 优先取环境变量 SHENPI_VAD_API_BASE

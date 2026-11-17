@@ -149,9 +149,15 @@ audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
 # --- 各业务流水线也可独立运行 ---
 # audio-data pipeline run pipelines/audio_ingest.yaml \
 #   --source-name "$BATCH" --source-dir "$SOURCE_DIR"
+# # 统一场景：fenshen* / 审批 shenpi_ai-|shepi_ai-（后缀大写 V/P=面谈 8k，否则外呼 16k）
+# # labels.audio_scene → label_audio_scene；历史错误审批须换批次从原始 PCM 重入库
 # audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
+# # 审批 HTTP VAD（同 ingested；默认 segments_$BATCH-shenpi）：
+# # export SHENPI_VAD_API_BASE='http://your-vad-host:8090'
+# # audio-data pipeline run pipelines/vad_segment_shenpi_batch.yaml --source-name "$BATCH"
 # # 可选：VAD 后按 xlsx 剔除「接洽（身份核实）」；先 --dry-run 核对 file_id 匹配
 # # python scripts/filter_segments_drop_identity_verify.py --source-name "$BATCH" --xlsx "$LABEL_XLSX"
+# # 分身下游 VAD_BATCH=$BATCH；审批下游 VAD_BATCH=${BATCH}-shenpi
 # audio-data pipeline run pipelines/qwen_asr_batch.yaml --source-name "$BATCH" --asr-run qwen1
 # audio-data pipeline run pipelines/glm_asr_batch.yaml --source-name "$BATCH" --asr-run glm1
 # audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"
@@ -164,7 +170,9 @@ audio-data pipeline run pipelines/audio_ingest_vad_asr_dnsmos_tags.yaml \
 # （GLM/SV: zh_asr_v1；Qwen: zh_asr_keep_punct_v1 + blank_exact_qwen_v1）。join/tag 直接用 transcripts.*.text；
 # 原串在 extra.raw_text。asr_metric_pipeline 改为字准/历史补洗入口（幂等）。
 #
+# 审批 HTTP VAD 需求: docs/04-改进需求/进行中/050-工序一审批场景HTTP-VAD接入.md
 # 旧 audio_quality_sidecar / quality_sidecar_* 已退出新默认流程（仅历史复现）。
+# 一步到位总入口只编排 FSMN 分身；混合批次审批请分步跑 2b。
 
 
 -------------------------------------------------------

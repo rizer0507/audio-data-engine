@@ -18,8 +18,11 @@ from audio_engine.core.manifest import Manifest
 from audio_engine.core.catalog import register_manifest_output
 from audio_engine.core.pipeline import PipelineConfig, PipelineRunner, ShardingConfig
 from audio_engine.core.progress import (
+    INGEST_STEP_PROGRESS,
+    ProgressSnapshot,
     collect_sharded_progress,
     emit_progress,
+    is_audio_ingest,
     resolve_asr_batch_size,
     shard_input_count,
     sharding_config_summary,
@@ -382,6 +385,9 @@ def spawn_shard_processes(
     gpu_ids = list(sharding.gpus)
 
     shard_totals = {shard.stem: shard_input_count(shard) for shard in shards}
+    if (progress_config or {}).get("ingest_steps"):
+        for stem in shard_totals:
+            (run_root / stem / INGEST_STEP_PROGRESS).unlink(missing_ok=True)
     total_samples = sum(shard_totals.values())
     emit(f"Running {len(shards)} shards, {parallel} at a time ({total_samples} samples)")
     if gpu_ids:
@@ -420,6 +426,7 @@ def spawn_shard_processes(
             prev_done=prev_done,
             prev_at=prev_at,
             config=progress_config,
+            succeeded_stems={stem for stem, code in exit_codes.items() if code == 0},
         )
         emit_progress(snapshot, run_root=run_root, log=emit)
         prev_done = snapshot.done
@@ -599,6 +606,14 @@ def run_sharded_pipeline(
 
             params, vad_mock = FsmnVadSegmentOperator.preflight(step.params, mock=cfg.mock)
             emit(f"FSMN VAD preflight: runtime={params.get('model_runtime_dir')} mock={vad_mock}")
+        if step.operator == "audio.shenpi_vad_segment":
+            from audio_engine.operators.audio.shenpi_vad_segment import ShenpiVadSegmentOperator
+
+            params = ShenpiVadSegmentOperator.preflight(step.params, mock=cfg.mock)
+            emit(
+                f"Shenpi VAD preflight: api_base={params.get('api_base')} "
+                f"mock={params.get('mock')}"
+            )
 
     for step in cfg.steps:
         if step.operator != "asr.qwen_batch":
@@ -662,6 +677,14 @@ def run_sharded_pipeline(
     if tempo_steps:
         emit(f"Resolved pipeline for shards: {resolved_yaml}")
 
+    track_ingest = is_audio_ingest(cfg.name)
+    if track_ingest and shard_dir is None:
+        emit_progress(
+            ProgressSnapshot(total=0, done=0, phase="preparing", updated_at=time.time()),
+            run_root=root,
+            log=emit,
+        )
+
     if shard_dir is not None:
         shards = sorted(Path(shard_dir).glob("shard-*.parquet"))
         if not shards:
@@ -672,6 +695,12 @@ def run_sharded_pipeline(
         prepared_path = root / "prepared_input.parquet"
         full.save(prepared_path)
         emit(f"Prepared {len(full)} samples → {prepared_path}")
+        if track_ingest and not len(full):
+            emit_progress(
+                ProgressSnapshot(total=0, done=0, output_rows=0, updated_at=time.time()),
+                run_root=root,
+                log=emit,
+            )
         shards = write_shards(full, root, sharding)
 
     ingest_names = sorted({s.name for s in cfg.steps if s.operator.startswith("ingest.")})
@@ -681,6 +710,10 @@ def run_sharded_pipeline(
         batch_size=resolve_asr_batch_size(cfg),
         checkpoint_every=cfg.execution.checkpoint_every,
     )
+    if track_ingest:
+        progress_config["ingest_steps"] = [
+            step.name for step in cfg.steps if step.name not in ingest_names
+        ]
     exit_codes = spawn_shard_processes(
         config_path=shard_config_path,
         shards=shards,

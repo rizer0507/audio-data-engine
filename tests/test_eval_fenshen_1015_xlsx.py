@@ -133,6 +133,12 @@ def test_empty_gold_ignores_filler_and_skips_char_acc():
     assert "空金标不计入" in notes.loc[notes["字段/口径"] == "总字准", "说明"].item()
 
 
+def test_omni_rejects_over_checkpoint():
+    mod = _load_script()
+    with pytest.raises(SystemExit):
+        mod.main(["omni", "v030", "--split", "dev", "--ckpt", "over"])
+
+
 def test_ckpt_keeps_base_as_comparison():
     mod = _load_script()
     assert mod.asr_jobs("full", "dev", "best") == [
@@ -147,6 +153,10 @@ def test_ckpt_keeps_base_as_comparison():
         "qwen-base",
         "qwen-full-best",
         "qwen-full-over",
+    ]
+    assert mod.asr_jobs("omni", "dev", "best") == [
+        ("qwen-base", "qwen-base-dev"),
+        ("qwen-omni-best", "qwen-omni-dev-best"),
     ]
     assert mod.asr_jobs("lora-full", "dev", "best-over") == [
         ("qwen-base", "qwen-base-dev"),

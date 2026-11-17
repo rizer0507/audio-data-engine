@@ -10,8 +10,16 @@ from typing import Any
 
 from loguru import logger
 
+from audio_engine.core.artifacts import atomic_write_json
+
 PROGRESS_JSON = "progress.json"
 PROGRESS_LOG = "PROGRESS.log"
+INGEST_STEP_PROGRESS = "ingest_step_progress.json"
+
+
+def is_audio_ingest(pipeline_name: str) -> bool:
+    # The CLI appends the batch name to the configured pipeline name.
+    return pipeline_name == "audio_ingest" or pipeline_name.startswith("audio_ingest_")
 
 
 @dataclass
@@ -28,8 +36,13 @@ class ProgressSnapshot:
     pct: float = 0.0
     config: dict[str, Any] = field(default_factory=dict)
     updated_at: float = 0.0
+    step_done: dict[str, int] = field(default_factory=dict)
+    output_rows: int | None = None
+    phase: str | None = None
 
     def format_line(self) -> str:
+        if self.phase == "preparing":
+            return "[PROGRESS] pipeline=audio_ingest phase=preparing total=pending_scan"
         eta = _format_duration(self.eta_s) if self.eta_s is not None else "n/a"
         cfg = _format_config(self.config)
         return (
@@ -38,6 +51,14 @@ class ProgressSnapshot:
             f"(window={self.rate_window:.2f}/s) "
             f"elapsed={_format_duration(self.elapsed_s)} eta={eta} "
             f"shards[run={self.running} done={self.finished} queue={self.queued}]"
+            + (
+                f" unit=parents ingested_rows={self.output_rows} excluded={self.done - self.output_rows}"
+                if self.output_rows is not None else ""
+            )
+            + (
+                " steps[" + " ".join(f"{name}={done}/{self.total}" for name, done in self.step_done.items()) + "]"
+                if self.step_done else ""
+            )
             + (f" | {cfg}" if cfg else "")
         )
 
@@ -180,19 +201,37 @@ def collect_sharded_progress(
     prev_done: int,
     prev_at: float,
     config: dict[str, Any] | None = None,
+    succeeded_stems: set[str] | None = None,
 ) -> ProgressSnapshot:
     """Aggregate done counts across shard checkpoints / VAD source results / outputs."""
     root = Path(run_root)
     total = sum(shard_totals.values())
-    per_shard_done = sum(
-        shard_done_count(root, stem, size) for stem, size in shard_totals.items()
-    )
-    # Prefer per-shard vad_source_results; fall back to parent-level aggregate.
-    parent_vad = _count_result_jsons(root / "vad_source_results")
-    shard_vad = sum(count_vad_source_results(root, stem) for stem in shard_totals)
-    done = per_shard_done
-    if parent_vad and shard_vad == 0:
-        done = max(done, parent_vad)
+    steps = list((config or {}).get("ingest_steps") or [])
+    step_done = dict.fromkeys(steps, 0)
+    output_rows = None
+    if steps:
+        succeeded = succeeded_stems or set()
+        done = sum(shard_totals[stem] for stem in succeeded)
+        output_rows = sum(shard_input_count(root / f"{stem}.parquet") for stem in succeeded)
+        for stem, size in shard_totals.items():
+            if stem in succeeded:
+                for step in steps:
+                    step_done[step] += size
+                continue
+            try:
+                progress = json.loads((root / stem / INGEST_STEP_PROGRESS).read_text(encoding="utf-8"))
+                current = steps.index(progress["step"])
+            except (OSError, ValueError, KeyError):
+                continue
+            for step in steps[:current]:
+                step_done[step] += size
+            step_done[steps[current]] += min(progress["done"], size)
+    else:
+        done = sum(shard_done_count(root, stem, size) for stem, size in shard_totals.items())
+        # Prefer per-shard VAD results; fall back to parent-level aggregate.
+        parent_vad = _count_result_jsons(root / "vad_source_results")
+        if parent_vad and not any(count_vad_source_results(root, stem) for stem in shard_totals):
+            done = max(done, parent_vad)
     done = min(done, total)
 
     now = time.time()
@@ -216,6 +255,8 @@ def collect_sharded_progress(
         pct=pct,
         config=dict(config or {}),
         updated_at=now,
+        step_done=step_done,
+        output_rows=output_rows,
     )
 
 
@@ -224,13 +265,17 @@ def write_progress(run_root: Path, snapshot: ProgressSnapshot) -> None:
     root = Path(run_root)
     root.mkdir(parents=True, exist_ok=True)
     payload = asdict(snapshot)
-    (root / PROGRESS_JSON).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(root / PROGRESS_JSON, payload)
     line = snapshot.format_line()
     with (root / PROGRESS_LOG).open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
+
+
+def read_progress(run_root: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads((run_root / PROGRESS_JSON).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 def emit_progress(

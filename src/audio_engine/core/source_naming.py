@@ -649,6 +649,26 @@ def apply_source_name_to_single_pipeline(
             "aggregate_base": None,
         }
 
+    if key in {"vad_segment_shenpi_batch", "vad_segment_shenpi", "shenpi_vad_batch"}:
+        if run_alias is not None:
+            raise ValueError("--asr-run is only valid for ASR inference pipelines")
+        if base_alias is not None:
+            raise ValueError(
+                "--aggregate-base is only valid for multi_asr_aggregate pipelines"
+            )
+        # Same ingested_<batch> input as the twin branch; write segments_<batch>-shenpi.
+        resolved = resolve_existing_manifest(str(input_manifest or manifest_stem("ingested", name)))
+        shenpi_name = f"{name}-shenpi"
+        return {
+            "source_dir": None,
+            "input_manifest": str(resolved),
+            "source_id": None,
+            "output_manifest": _posix(manifest_path("segments", shenpi_name)),
+            "aggregate_manifests": None,
+            "asr_run": None,
+            "aggregate_base": None,
+        }
+
     if key in {"dnsmos_score_batch", "dnsmos_batch", "dnsmos_score"}:
         if run_alias is not None:
             raise ValueError("--asr-run is only valid for ASR inference pipelines")

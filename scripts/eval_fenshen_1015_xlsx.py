@@ -12,6 +12,7 @@
   python scripts/eval_fenshen_1015_xlsx.py lora-full v030
   python scripts/eval_fenshen_1015_xlsx.py lora v015 --split dev
   python scripts/eval_fenshen_1015_xlsx.py rl v025 --split dev --ckpt best
+  python scripts/eval_fenshen_1015_xlsx.py omni v030 --split dev --ckpt best
   python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt best
   python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt over
 
@@ -615,7 +616,7 @@ def evaluate_split(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="fenshen_1015 转写 parquet 汇总成字准 xlsx")
-    parser.add_argument("mode", choices=("lora", "full", "lora-full", "rl", "sophon"))
+    parser.add_argument("mode", choices=("lora", "full", "lora-full", "rl", "omni", "sophon"))
     parser.add_argument("version", help="例如 v015")
     parser.add_argument("--split", choices=("train", "dev", "both"))
     parser.add_argument("--ckpt", choices=("all", "best", "over", "best-over"))
@@ -636,10 +637,12 @@ def main(argv: list[str] | None = None) -> int:
     default_split, default_ckpt = ("dev", "best") if args.mode == "lora-full" else ("both", "all")
     split = args.split or default_split
     ckpt = args.ckpt or default_ckpt
+    if args.mode in ("sophon", "omni") and ckpt in ("over", "best-over"):
+        parser.error(f"{args.mode} 只提供 best")
     if args.mode == "sophon":
-        if ckpt in ("over", "best-over"):
-            parser.error("sophon 只提供 best")
         split = args.split or "dev"
+        ckpt = "best"
+    elif args.mode == "omni" and ckpt == "all":
         ckpt = "best"
     splits = ("train", "dev") if split == "both" else (split,)
     root = args.root.resolve()

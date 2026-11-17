@@ -1,6 +1,16 @@
 # Audio Data Engine 项目上下文
 
-核对日期：2026-11-11。基于分支 `v4.1`、现有文档和部分相关历史对话整理；不是完整聊天导出。
+核对日期：2026-11-13。基于分支 `v4.1`、现有文档和部分相关历史对话整理；不是完整聊天导出。
+
+## 工序一入库批次进度（2026-11-17）
+
+入库分片按当前步骤上报已处理父音频数，父 run 汇总到 `progress.json` 与 `PROGRESS.log`。原进度从各步骤 checkpoint 取最大值，转码完成即可提前显示 100%，且清单行数不能代表处理过的父音频数。新汇总给出各步骤的批次分母、成功分片处理的父音频数、质检保留和剔除数；扫描和场景剔除仍可查 `prepare/`。CLI 单独入库、一步到位入口及 Web 节点日志的使用方法见 [045 父 run 查询](07-操作手册/045-入库VAD多路ASR独立DNSMOS自由标签.md#父-run-查询--续跑--失败重试)。
+
+本机用合成 8 kHz/16 kHz PCM 验证两分片入库、场景剔除、最终清单与续跑，扫描 3 条、场景剔除 1 条、最终保留 2 条。进度、分片、045、050 和 Web API 相关测试共 39 项通过。Web 集成测试使用符合 050 场景规则的分身样例，并核对入库节点日志中的全批次总数。真实服务器批次待验证。
+
+## fenshen_1015 gold_dev_v031（2026-11-13）
+
+从 `datasets/stage1/derived/gold_fenshen_1015_dev_v030.parquet`（601）去掉 `transcripts.qwen_1.text == 【听不清】` 的 7 条，写出 `gold_fenshen_1015_dev_v031.parquet`（594），兼写 jsonl / meta。过滤脚本：`tmp/1113/filter_v030_to_v031.py`。正式评测门禁通过；不做 type split。其中 2 条被删样本金标非空（`你想干啥？` / `哪里？`），其余 5 条为空金标 non_speech。注意：仓库里另有 `scripts/build_fenshen_1015_gold_v031_from_export.py`（1102 导出另建 v031），与本次「v030 去听不清」产物同名路径，勿混跑覆盖。
 
 ## fenshen_1015 空金标计分（2026-11-11）
 
@@ -32,7 +42,21 @@ Web 主链复用 045 编排和现有算子，支持可选 XLSX 剔除，按路�
 
 ## Qwen 落盘保留标点（2026-11-06）
 
+2026-11-17，服务器 Qwen ASR 时间戳日志出现两类请求期异常。中间件收到 HTTP 200 的 JSON `null` 后访问 `body["choices"]`，抛出 `TypeError`，尚未进入强制对齐推理。vLLM 客户端断开后的取消路径可能产生该响应，现场需用客户端超时日志确认。另有单条请求在 EngineCore 的多模态接收缓存找不到 `mm_hash` 而返回 500，可用 `--mm-processor-cache-gb 0` 做服务器复测。证据为现场 11-17 10:42–10:52 的 `err.txt`，其中首次 `TypeError` 在第 30 行，缓存断言及 HTTP 500 在第 104–106 行。当前仅完成日志与源码核对。
+
+同日修复 `scripts/serve_qwen_base_with_timestamps.py` 的时间戳响应处理。中间件先验证上游 JSON 的 `choices[].message.content`，对整个 `null`、不可解析 JSON 或无效结构记录 vLLM 响应异常并返回 502。有效的空转写仍返回空时间戳列表，原生非 200 响应透传。用替身 ASGI 复现旧版异常并验证修复，连同 Qwen 和 vLLM 相关测试共 33 项通过。上线 `5555` 和按请求核对 `null` 的实际触发原因待服务器执行。
+
+2026-11-16，新增 `scripts/serve_qwen_base_with_timestamps.py`。在 qwen-base 服务器环境执行该入口，会以 GPU 4、`127.0.0.1:5555` 和原模型、模板、显存与并行参数运行 `vllm serve`，通过 `--middleware` 在 ASGI 启动阶段加载本地 ForcedAligner。单音频 base64 非流式 Chat 请求在 `choices[].message.timestamps` 返回相对输入音频的毫秒时间戳，`return_time_stamps=false` 可关闭。现有客户端可继续读取 `message.content`，持久化服务端时间戳需读取新增字段。服务器须使用支持 `--middleware` 的 vLLM 环境，并安装 `qwen_asr`。本机替身验证了启动参数、预加载和启动失败、时间戳响应、流式透传和原生 HTTP 错误，现有 Qwen 测试 10 项通过。真实 5555 和 GPU 联调待服务器执行。
+
+2026-11-16，新增 `scripts/run_qwen_asr_batch_with_timestamps.py`。该独立入口复用 `scripts/run_qwen_asr_batch.py` 的 vLLM 请求和转写格式，默认调用 qwen-base 5555，单个进程加载本地 Qwen3-ForcedAligner 权重。单条用 `--audio`，直接输出转写和时间戳 JSON；批量用 `input.parquet -o output.parquet`，默认写 `transcripts.qwen-base-timestamps.extra.timestamps`（`text`、`start_ms`、`end_ms`，以输入音频开头为零点）。空转写、纯标点和 `【听不清】` 跳过对齐；失败记录到样本状态，下次可续跑。原批脚本及评测流水线保持各自入口。替身 HTTP 和对齐器验证了单条请求、Parquet 落盘、跳过、限量、失败重试与续跑；真实 5555 和 GPU 待服务器验证。
+
+当 5555 运行官方 `qwen-asr-demo` 时，客户端加 `--backend gradio --api-base http://127.0.0.1:5555`，并在调用端安装 `gradio-client`。该模式通过 Demo 的 `/run` 上传音频并请求服务器生成时间戳，读取秒值后转换成原有毫秒字段，无需本地对齐权重。Demo 接口接受语言选择，现有 vLLM 热词模板不参与这条调用。已用本机 Gradio 6 和替身推理验证音频上传、单条 JSON、并发批量落盘和续跑；远端实际推理待验证。
+
 `pipelines/qwen_asr_batch.yaml` 写盘 profile 为 `configs/normalization/zh_asr_keep_punct_v1.yaml`：`transcripts.*.text` 保留标点（仍去空白/控制标签）；`blank_exact_qwen_v1` 仍在无标点 plain 上匹配/删跨度，命中后残余仍为 plain。`extra.raw_text` 仍是模型原串。GLM/SenseVoice 仍走 `zh_asr_v1` 去标点。下游分拣/字准比对继续用 `plain_transcript_text`。旧批次无标点 parquet 不自动回填，需重跑 Qwen ASR。
+
+## 工序一审批 HTTP VAD（2026-11-16，已实现调用方）
+
+[050 统一场景识别、混合采样率入库与审批 HTTP VAD](04-改进需求/进行中/050-工序一审批场景HTTP-VAD接入.md)已在 `v4.1` 落地调用方（不含服务部署）。`pipelines/audio_ingest.yaml` 在 `pcm_to_wav` 前跑 `ingest.resolve_audio_scene`：`fenshen*` → `fenshen`；`shenpi_ai-`/`shepi_ai-` 按第二个 `-` 后后缀是否含大写 `V/P` → `shenpi_interview`(8 kHz) / `shenpi_outbound`(16 kHz)；未知 → `unknown`。裸 int16 重采样先转浮点幅度再写 PCM16；转换缓存与派生路径纳入 `sample.id`/场景/有效源率并隔离 `pcm_to_wav_v2`。分身 `vad_segment_batch` 只选分身（历史缺标记分身仍兼容；未标记审批前缀拦截）；审批 `pipelines/vad_segment_shenpi_batch.yaml` + `audio.shenpi_vad_segment` 读 `configs/vad/shenpi_vad_profiles.yaml`，`POST /vad/upload` 上传原始 PCM，毫秒区间按本地 16 kHz 父音频裁切，默认输出 `segments_<batch>-shenpi`。共享发布见 `core/fsmn_vad/publish.py`，两路显式继承 `labels.audio_scene`。本机替身：`tests/test_audio_scene.py`、`tests/test_shenpi_050_ingest_vad.py`（含 stub HTTP）与 `tests/test_pcm_to_wav.py` 通过。真实 `SHENPI_VAD_API_BASE`、真实 8k/16k 听感与正式下游链仍待服务器联调。历史错误审批须换批次从 `audio.raw` 重入库。
 
 ## VAD 裁切（2026-11-05）
 
@@ -71,10 +95,13 @@ Manifest 驱动的音频数据治理引擎：原始音频入库、VAD/多路 ASR
 ```bash
 bash scripts/run_fenshen_1015_eval.sh full v024
 bash scripts/run_fenshen_1015_eval.sh lora-full v030
+bash scripts/run_fenshen_1015_eval.sh omni v030
 bash scripts/run_fenshen_1015_eval.sh sophon v032
 ```
 
-Shell 入口默认 `dev best`，仍可显式指定切分与权重。端口为 base 5555、Full best/over 5560/5561、LoRA best/over 5565/5566、RL 5580、Sophon 6179。RL 和 Sophon 只提供单端口，`all` 会补跑基线。输入金标位于 `datasets/stage1/derived/`，按 train/dev 与版本命名。
+Shell 入口默认 `dev best`，仍可显式指定切分与权重。端口为 base 5555、Full best/over 5560/5561、LoRA best/over 5565/5566、RL 5580、Omni 6190、Sophon 6179。RL、Omni 和 Sophon 只提供单端口，`all` 会补跑基线。Omni 走与 LoRA/Full/RL 相同的 `pipelines/qwen_asr_batch.yaml`，模型 ID 从 `6190` 的 `/v1/models` 读取并写入 `QWEN_ASR_MODEL`。输入金标位于 `datasets/stage1/derived/`，按 train/dev 与版本命名。
+
+2026-11-13，Omni Thinking 在单卡 A800 上读完 16 个分片并启动。`omni v030` 复用已落盘的 5555 基线，实际向 6190 发起最多 32 路并发请求。服务端日志 10:33–10:39 多次连续解码，KV cache 峰值 99.1%，同时有请求排队。当前 Omni 共用 Qwen3-ASR 的 chat 请求，该分支未发送配置里的 `max_new_tokens`，现场服务也覆盖了 Qwen3-ASR 模板。短转写需验证 Omni 自带模板、关闭思考、显式转写提示和输出 token 上限。`PROGRESS.log` 按 checkpoint 或分片产物计数，75 条左右的分片在 `checkpoint_every=500` 时通常整片完成才跳数。证据位置为服务器 `runs/fenshen_1015_eval_omni_v030_dev_best_20261113_103305/best.log` 和同次 6190 服务日志。每条请求的输出 token、停止原因以及与 5555 的同条件测速仍待核验。
 
 `lora-full` 并行转写 LoRA 和 Full，两路共用同一份金标和 qwen-base 基线。默认比较两路 best，写出 `datasets/stage3/asr/eval_v030/<月日_小时分钟>/v030_dev_lora-full.xlsx`。选 `both` 时每个切分各出一份联合报表。本机替身端口已验证默认和 `both all` 的路由、基线去重、联合出表及一路失败时不出表，真实模型联合评测待服务器执行。
 
@@ -113,6 +140,8 @@ SOPHON_PROFILE=legacy bash scripts/run_fenshen_1015_eval.sh sophon v032
 历史排查发现：极少数超长复读输出可让句级正确率很高而汇总字准很低。比较结果必须确认删语气词、重复折叠、空金标等计分口径；保留原始输出，另存诊断修正版，不能把手工修正后的指标当原始模型成绩。空金标自 2026-11-11 起不进总字准、正确率不受语气词表影响，见上文「空金标计分」。
 
 ## 验证与后续接手
+
+2026-11-16，新增单条强制对齐验证入口 `scripts/test_qwen3_forced_aligner.py`。它用本地 Qwen3-ForcedAligner 权重，把现有转写对齐到对应音频，输出相对音频起点的秒级时间戳。默认权重路径指向扁平化后的模型目录，也可传 `--model-dir` 覆盖。本机替身验证了缺配置报错、加载参数和 TSV 输出。真实权重、音频和 GPU 仍待服务器验证。
 
 安装入口见根 README：`pip install -e .`；开发依赖见 `pyproject.toml`。代码修改后按模块选择 `python -m pytest tests/<相关路径>`，不要为阅读文档启动生产流水线。
 

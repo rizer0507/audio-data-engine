@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from audio_engine.cli.main import app
 from audio_engine.core.manifest import Manifest
 from audio_engine.core.progress import (
+    INGEST_STEP_PROGRESS,
     ProgressSnapshot,
     checkpoint_consumed,
     collect_sharded_progress,
@@ -166,3 +170,37 @@ def test_shard_input_count_tolerates_zero_byte_parquet(tmp_path: Path):
     empty.write_bytes(b"")
     assert shard_input_count(empty) == 0
     assert checkpoint_consumed(tmp_path, "shard-000") == 0
+
+
+def test_ingest_progress_counts_finished_inputs_and_kept_rows_separately(tmp_path: Path):
+    finished, running, failed = "shard-000", "shard-001", "shard-002"
+    manifest = Manifest([Sample(id="kept", source_path="/tmp/kept.wav")])
+    manifest.save(tmp_path / f"{finished}.parquet")
+    # A failed or re-running shard can have an output left over from an earlier run.
+    manifest.save(tmp_path / f"{failed}.parquet")
+    (tmp_path / running).mkdir()
+    (tmp_path / running / INGEST_STEP_PROGRESS).write_text(
+        json.dumps({"step": "probe", "done": 2}), encoding="utf-8"
+    )
+
+    snapshot = collect_sharded_progress(
+        run_root=tmp_path,
+        shard_totals={finished: 3, running: 4, failed: 2},
+        running_stems={running},
+        finished_stems={finished, failed},
+        succeeded_stems={finished},
+        queued_stems=set(),
+        started_at=0,
+        prev_done=0,
+        prev_at=0,
+        config={"ingest_steps": ["convert", "probe", "select"]},
+    )
+
+    assert (snapshot.done, snapshot.total, snapshot.output_rows) == (3, 9, 1)
+    assert snapshot.step_done == {"convert": 7, "probe": 5, "select": 3}
+    assert "ingested_rows=1 excluded=2" in snapshot.format_line()
+
+    write_progress(tmp_path, snapshot)
+    result = CliRunner().invoke(app, ["pipeline", "progress", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "steps[convert=7/9 probe=5/9 select=3/9]" in " ".join(result.output.split())

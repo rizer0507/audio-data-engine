@@ -1,0 +1,28 @@
+# 050：审批 FireRedVAD HTTP 两套 profile（按 labels.audio_scene 选）
+# 业务原配置前缀 vad_ / wh_vad_ 仅作命名参考；接口字段如下。
+
+shenpi_interview:
+  source_sample_rate: 8000
+  vad_config:
+    smooth_window_size: 0
+    speech_threshold: 0.64
+    pad_start_frame: 25
+    min_speech_frame: 15
+    max_speech_frame: 3000
+    chunk_max_frame: 30000
+    min_silence_frame: 80
+    merge_silence_frame: 0
+    extend_speech_frame: 0
+
+shenpi_outbound:
+  source_sample_rate: 16000
+  vad_config:
+    smooth_window_size: 0
+    speech_threshold: 0.62
+    pad_start_frame: 25
+    min_speech_frame: 13
+    max_speech_frame: 3000
+    chunk_max_frame: 30000
+    min_silence_frame: 80
+    merge_silence_frame: 0
+    extend_speech_frame: 0

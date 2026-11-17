@@ -353,6 +353,20 @@ CUDA_VISIBLE_DEVICES=5 /data2/data-cp/lizi/env_hub/miniconda312_qw3tts_vllm020/b
   --lora-modules qwen3-asr=/home/lizi/Qwen3-ASR-main/data/exp004_audio/checkpoint-1800 \
   --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja
 
+#带时间戳
+CUDA_VISIBLE_DEVICES=4 vllm serve /data2/data-cp/zcl/models/Qwen3-ASR-1___7B \
+  --gpu-memory-utilization 0.5 \
+  --host 127.0.0.1 \
+  --port 5555 \
+  --tensor-parallel-size 1 \
+  --served-model-name qwen3-asr \
+  --chat-template /data2/data-cp/zcl/project/vllm-test/qwen3_asr_language.jinja \
+  --middleware serve_qwen_base_with_timestamps.ForcedAlignmentMiddleware
+
+
+
+
+
 # ── 2.2 流水线终端（建议另开 tmux 会话 asr_batch）：确认接口 + 探针 ─
 # tmux new -s asr_batch   # 或 attach 已有会话后再跑下面
 

@@ -5,16 +5,21 @@ from __future__ import annotations
 import os
 import threading
 import time
-import wave
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Any
 
-import soundfile as sf
 from loguru import logger
 
-from audio_engine.core.artifacts import atomic_path, atomic_write_json
+from audio_engine.core.artifacts import atomic_write_json
+from audio_engine.core.audio_scene import (
+    SCENE_FENSHEN,
+    VAD_FENSHEN_SCENES,
+    infer_legacy_fenshen_scene,
+    requires_reingest_for_shenpi,
+    scene_from_sample_labels,
+)
 from audio_engine.core.fsmn_vad.adapter import (
     MockVadModel,
     ScheduleVadModel,
@@ -22,10 +27,13 @@ from audio_engine.core.fsmn_vad.adapter import (
     run_streaming_vad,
 )
 from audio_engine.core.fsmn_vad.identity import (
-    build_segment_labels,
     parent_source_audio_id,
     segment_content_sha256,
-    stable_segment_id,
+)
+from audio_engine.core.fsmn_vad.publish import (
+    publish_kept_segments,
+    read_pcm16le_mono,
+    write_wav_pcm16le,
 )
 from audio_engine.core.fsmn_vad.runtime import (
     assert_fenshen_runtime_config,
@@ -52,31 +60,56 @@ from audio_engine.core.sample import Sample
 
 
 def _read_pcm16le_mono(path: Path, *, expect_sr: int = SR) -> tuple[bytes, int, dict[str, Any]]:
-    """Load audio as 16-bit mono PCM16LE bytes at expect_sr (resample if needed)."""
-    data, sr = sf.read(str(path), always_2d=True, dtype="int16")
-    sr = int(sr)
-    # Take first channel only (channel strategy: mono / ch0). Multi-channel
-    # independent VAD can be enabled later via params.channel_mode.
-    mono = data[:, 0]
-    meta = {"source_sr": sr, "frames": int(mono.shape[0]), "channels_read": int(data.shape[1])}
-    if sr != expect_sr:
-        # Should already be 16k from upstream resample; refuse silent mis-rate.
-        raise ValueError(
-            f"normalized audio sample_rate={sr} != {expect_sr}; "
-            "run audio.resample before FSMN VAD"
-        )
-    return mono.astype("<i2").tobytes(), sr, meta
+    return read_pcm16le_mono(path, expect_sr=expect_sr)
 
 
 def _write_wav_pcm16le(path: Path, pcm16le: bytes, *, sample_rate: int = SR) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_path(path) as tmp:
-        with wave.open(str(tmp), "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(pcm16le)
-    return file_sha256(path)
+    return write_wav_pcm16le(path, pcm16le, sample_rate=sample_rate)
+
+
+def _select_fenshen_parents(samples: list[Sample]) -> tuple[list[Sample], dict[str, int]]:
+    """Keep twin parents; reject unmarked approval IDs; skip other scenes."""
+    selected: list[Sample] = []
+    stats = {
+        "input": len(samples),
+        "selected": 0,
+        "other_scene": 0,
+        "unknown_scene": 0,
+        "legacy_fenshen": 0,
+        "missing_scene": 0,
+    }
+    blocked: list[str] = []
+    for sample in samples:
+        if requires_reingest_for_shenpi(sample.id, sample.labels):
+            blocked.append(sample.id)
+            continue
+        scene = scene_from_sample_labels(sample.labels)
+        if scene is None:
+            legacy = infer_legacy_fenshen_scene(sample.id, sample.labels)
+            if legacy == SCENE_FENSHEN:
+                selected.append(sample)
+                stats["legacy_fenshen"] += 1
+                continue
+            stats["missing_scene"] += 1
+            # Historical non-fenshen / non-shenpi parents keep prior FSMN behavior.
+            selected.append(sample)
+            continue
+        if scene in VAD_FENSHEN_SCENES:
+            selected.append(sample)
+            continue
+        if scene == "unknown":
+            stats["unknown_scene"] += 1
+        else:
+            stats["other_scene"] += 1
+    if blocked:
+        preview = ", ".join(blocked[:5])
+        more = "" if len(blocked) <= 5 else f" (+{len(blocked) - 5} more)"
+        raise ValueError(
+            "audio.fsmn_vad_segment: approval parents lack labels.audio_scene and must be "
+            f"re-ingested before either VAD branch: {preview}{more}"
+        )
+    stats["selected"] = len(selected)
+    return selected, stats
 
 
 def _segment_to_dict(seg: VadKeptSegment) -> dict[str, Any]:
@@ -204,6 +237,21 @@ class FsmnVadSegmentOperator(ManifestOperator):
         processing_version = str(params.get("vad_processing_version") or VAD_PROCESSING_VERSION)
         packet_ms = int(params.get("packet_ms") or PACKET_MS)
 
+        selected, select_stats = _select_fenshen_parents(samples)
+        logger.info(
+            "audio.fsmn_vad_segment scene select: input={} selected={} other={} "
+            "unknown={} legacy_fenshen={} missing_scene={}",
+            select_stats["input"],
+            select_stats["selected"],
+            select_stats["other_scene"],
+            select_stats["unknown_scene"],
+            select_stats["legacy_fenshen"],
+            select_stats["missing_scene"],
+        )
+        if not selected:
+            logger.info("audio.fsmn_vad_segment: no fenshen parents selected; returning empty segments")
+            return []
+
         base_dir = Path(config.run_dir) if config.run_dir else Path(config.output_dir)
         source_results_dir = base_dir / str(params.get("source_results_dir", "vad_source_results"))
         segments_dir = Path(config.output_dir) / str(params.get("segments_subdir", "vad_segments"))
@@ -217,13 +265,14 @@ class FsmnVadSegmentOperator(ManifestOperator):
             packet_ms=packet_ms,
             send_end_result=include_eof,
         )
+        fingerprint["scene_select"] = select_stats
         source_workers = max(1, int(params.get("source_workers") or 1))
         max_in_flight = int(params.get("max_in_flight_sources") or source_workers)
         max_in_flight = max(source_workers, max_in_flight)
-        active_workers = min(source_workers, len(samples))
+        active_workers = min(source_workers, len(selected))
         logger.info(
             "FSMN VAD initializing: sources={} source_workers={} max_in_flight={} ncpu={} runtime={}",
-            len(samples), active_workers, max_in_flight, params.get("ncpu", 1),
+            len(selected), active_workers, max_in_flight, params.get("ncpu", 1),
             fingerprint.get("runtime_dir", "mock"),
         )
         # Initialize before queueing work: a failed load aborts once, rather than
@@ -279,21 +328,21 @@ class FsmnVadSegmentOperator(ManifestOperator):
             with lock:
                 completed += 1
                 now = time.monotonic()
-                if now - last_progress >= 10 or completed == len(samples):
+                if now - last_progress >= 10 or completed == len(selected):
                     logger.info(
                         "FSMN VAD progress: sources={}/{} kept={} failed={}",
-                        completed, len(samples), summary["kept_segments"], summary["failed"],
+                        completed, len(selected), summary["kept_segments"], summary["failed"],
                     )
                     last_progress = now
             return segments
 
         if active_workers == 1:
             _init_worker()
-            for sample in samples:
+            for sample in selected:
                 out_segments.extend(_handle_one(sample))
         elif active_workers > 1:
             # Keep both queued and running tasks bounded; reuse each worker's model.
-            pending_sources = iter(samples)
+            pending_sources = iter(selected)
             with ThreadPoolExecutor(
                 max_workers=active_workers, initializer=_init_worker,
             ) as pool:
@@ -422,96 +471,23 @@ class FsmnVadSegmentOperator(ManifestOperator):
             return _fail(SOURCE_STATUS_VAD_FAILED, str(exc))
 
         config_sha = str(fingerprint.get("config_sha256") or "")
-        published_ids: list[str] = []
-
-        for idx, seg in enumerate(result.kept):
-            pcm_sha = segment_content_sha256(seg.pcm16le)
-            seg_id = stable_segment_id(
-                source_audio_id=source_audio_id,
-                normalized_sha256=normalized_sha,
-                channel_index=channel_index,
-                start_sample=seg.start_sample,
-                end_sample=seg.end_sample,
-                vad_processing_version=processing_version,
-                config_sha256=config_sha,
-            )
-            out_path = segments_dir / seg_id[:2] / f"{seg_id}.wav"
-            if out_path.is_file():
-                wav_sha = file_sha256(out_path)
-            else:
-                wav_sha = _write_wav_pcm16le(out_path, seg.pcm16le)
-
-            work_sha = pcm_sha
-            labels = build_segment_labels(
-                source_audio_id=source_audio_id,
-                source_pcm_sha256=source_pcm_sha,
-                normalized_sha256=normalized_sha,
-                normalized_audio_path=str(audio_path.resolve()),
-                channel_index=channel_index,
-                segment=seg,
-                segment_sha256=work_sha,
-                segment_index=idx,
-                vad_processing_version=processing_version,
-                config_sha256=config_sha,
-                model_fingerprint=fingerprint,
-            )
-            labels["segment_id"] = seg_id
-            labels["segment_wav_sha256"] = wav_sha
-            for k in (
-                "source_sample_rate",
-                "normalized_sample_rate",
-                "source_channels",
-                "selected_channel",
-                "channel_policy",
-                "sample_rate_source",
-            ):
-                if k in sample.labels and k not in labels:
-                    labels[k] = sample.labels[k]
-                elif k in sample.quality and k not in labels:
-                    labels[k] = sample.quality[k]
-
-            child = Sample(
-                id=seg_id,
-                source_path=str(audio_path.resolve()),
-                sha256=work_sha,
-                sample_rate=SR,
-                channels=1,
-                duration=seg.duration_ms / 1000.0,
-                audio={
-                    output_key: str(out_path.resolve()),
-                    "normalized_16k": str(audio_path.resolve()),
-                    "parent_resampled_16k": str(audio_path.resolve()),
-                },
-                labels=labels,
-                quality={
-                    "vad_end_reason": seg.end_reason,
-                    "vad_clip_branch": seg.clip_branch,
-                    "clip_start_sample": seg.start_sample,
-                    "clip_end_sample": seg.end_sample,
-                },
-            )
-            if "raw" in sample.audio:
-                child.audio["parent_raw"] = sample.audio["raw"]
-            elif sample.source_path:
-                child.audio["parent_raw"] = sample.source_path
-
-            child.mark_completed(self.full_name)
-            child.add_lineage(
-                operator=self.full_name,
-                version=self.version,
-                params={
-                    "vad_processing_version": processing_version,
-                    "config_sha256": config_sha,
-                    "start_sample": seg.start_sample,
-                    "end_sample": seg.end_sample,
-                    "source_audio_id": source_audio_id,
-                },
-                input_key=input_key,
-                output_key=output_key,
-                output_path=str(out_path),
-            )
-            out_segments.append(child)
-            published_ids.append(seg_id)
+        out_segments, published_ids = publish_kept_segments(
+            parent=sample,
+            kept=result.kept,
+            source_audio_id=source_audio_id,
+            source_pcm_sha256=source_pcm_sha,
+            normalized_path=audio_path,
+            normalized_sha256=normalized_sha,
+            channel_index=channel_index,
+            segments_dir=segments_dir,
+            processing_version=processing_version,
+            config_sha256=config_sha,
+            operator_full_name=self.full_name,
+            operator_version=self.version,
+            input_key=input_key,
+            output_key=output_key,
+            model_fingerprint=fingerprint,
+        )
 
         with summary_lock:
             summary["kept_segments"] += len(result.kept)

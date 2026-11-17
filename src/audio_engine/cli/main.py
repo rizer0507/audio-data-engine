@@ -1162,7 +1162,7 @@ def pipeline_run(
                 cfg,
                 config_path=config_path.resolve(),
                 run_root=Path(cfg.resume) if cfg.resume else None,
-                log=lambda msg: console.print(msg),
+                log=lambda msg: console.print(msg, markup=False),
                 transcript_key=_first_asr_transcript_key(cfg),
                 speed_factor=speed_factor
                 if speed_factor is not None
@@ -2795,17 +2795,19 @@ def pipeline_progress(
     ),
     interval: float = typer.Option(5.0, "--interval", help="Follow refresh seconds"),
 ) -> None:
-    """Show aggregate recognition progress / throughput for a sharded run.
+    """Show aggregate progress / throughput for a sharded run.
 
-    Rebuilds done counts from checkpoints and VAD ``vad_source_results`` on each
-    refresh (does not blindly trust a stale ``progress.json``).
+    Read the batch snapshot for ingest and rebuild legacy counts from checkpoints
+    and VAD ``vad_source_results`` on each refresh.
     """
     import time as _time
 
     from audio_engine.core.progress import (
         PROGRESS_JSON,
         PROGRESS_LOG,
+        ProgressSnapshot,
         collect_sharded_progress,
+        read_progress,
         shard_input_count,
     )
 
@@ -2869,6 +2871,18 @@ def pipeline_progress(
                         f"started={info.get('started_at')} finished={info.get('finished_at')} "
                         f"error={info.get('error')}"
                     )
+                    if node_id == "ingest" and info.get("started_at"):
+                        children = sorted((root / "nodes" / node_id / "work").glob("*/progress.json"))
+                        if children:
+                            child_progress = read_progress(children[-1].parent)
+                            if child_progress is not None and (
+                                child_progress.get("output_rows") is not None
+                                or child_progress.get("phase") == "preparing"
+                            ):
+                                console.print(
+                                    f"    {ProgressSnapshot(**child_progress).format_line()}",
+                                    markup=False,
+                                )
                 overlap = root / "overlap_evidence.json"
                 if overlap.is_file():
                     console.print(f"  Overlap evidence: [cyan]{overlap}[/cyan]")
@@ -2904,12 +2918,13 @@ def pipeline_progress(
             return
 
         progress_json = root / PROGRESS_JSON
-        stored: dict | None = None
-        if progress_json.is_file():
-            try:
-                stored = json.loads(progress_json.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                stored = None
+        stored = read_progress(root)
+        if stored is not None and (
+            stored.get("output_rows") is not None or stored.get("phase") == "preparing"
+        ):
+            console.print(ProgressSnapshot(**stored).format_line(), markup=False)
+            console.print(f"  Log:    [cyan]{root / PROGRESS_LOG}[/cyan]")
+            return
 
         totals = _resolve_shard_totals(stored)
         if not totals:
@@ -2973,7 +2988,7 @@ def pipeline_progress(
         follow_state["prev_done"] = float(snapshot.done)
         follow_state["prev_at"] = snapshot.updated_at
 
-        console.print(snapshot.format_line())
+        console.print(snapshot.format_line(), markup=False)
         if progress_json.is_file():
             console.print(f"  Source: live scan (+ metadata from [cyan]{progress_json}[/cyan])")
         else:
@@ -3089,7 +3104,7 @@ def pipeline_run_shards(
             run_root=root,
             shard_dir=shard_dir,
             sharding_override=override,
-            log=lambda msg: console.print(msg),
+            log=lambda msg: console.print(msg, markup=False),
         )
     except ShardedRunError as exc:
         console.print(f"[red]{exc}[/red]")

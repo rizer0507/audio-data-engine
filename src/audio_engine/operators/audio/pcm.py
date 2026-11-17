@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +15,11 @@ from audio_engine.core.audio_normalize import (
     NormalizeMeta,
     format_rate_alert,
     is_non_target_rate,
+    pcm_array_to_float32,
     resolve_headerless_rate,
     take_channel_0,
     validate_headerless_pcm_bytes,
+    write_pcm16_wav,
 )
 from audio_engine.core.operator import BaseOperator, OperatorConfig
 from audio_engine.core.registry import register_operator
@@ -27,6 +31,9 @@ _CONTAINER_EXTS = {".wav", ".flac", ".ogg", ".mp3", ".m4a"}
 _PCM_EXTS = {".pcm", ".raw"}
 _RIFF_MAGIC = b"RIFF"
 _WAVE_MAGIC = b"WAVE"
+
+# Isolate new normalize recipe from historical wrong 16 kHz / clipped WAVs.
+_PCM_TO_WAV_SUBDIR = "pcm_to_wav_v2"
 
 
 def looks_like_wav(path: Path) -> bool:
@@ -45,8 +52,6 @@ def _append_run_alert(config: OperatorConfig, record: dict[str, Any]) -> None:
         return
     path = Path(config.run_dir) / "normalize_alerts.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    import json
-
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -56,15 +61,34 @@ class PcmToWavOperator(BaseOperator):
     """Normalize to 16 kHz mono PCM16 WAV (channel 0 only).
 
     ``sample_rate`` is the *output* target (default 16 kHz). Headered files are
-    probed for real rate/channels. Headerless ``.pcm`` / ``.raw`` use
-    ``source_sample_rate`` (default 16 kHz) and ``channels`` (default 1);
-    multi-channel headerless must be explicitly declared then de-interleaved —
-    never interpreted as packed mono.
+    probed for real rate/channels. Headerless ``.pcm`` / ``.raw`` use per-sample
+    ``labels.source_sample_rate`` (scene routing), then YAML ``source_sample_rate``,
+    then the 16 kHz default. Multi-channel headerless must be explicitly declared
+    then de-interleaved — never interpreted as packed mono.
     """
 
     name = "pcm_to_wav"
-    version = "1.3.0"
+    version = "1.4.0"
     category = "audio"
+
+    def compute_cache_key(self, sample: Sample, config: OperatorConfig) -> str:
+        effective_sr, _ = resolve_headerless_rate(
+            config.params,
+            default_sr=DEFAULT_SAMPLE_RATE,
+            labels=sample.labels,
+        )
+        payload = {
+            "sha256": sample.sha256,
+            "sample_id": sample.id,
+            "operator": self.full_name,
+            "version": self.version,
+            "params": config.params,
+            "audio_scene": sample.labels.get("audio_scene"),
+            "effective_source_sample_rate": effective_sr,
+            "recipe": _PCM_TO_WAV_SUBDIR,
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     def _execute(self, sample: Sample, config: OperatorConfig) -> dict[str, Any]:
         input_key = config.params.get("input_audio_key", "raw")
@@ -77,7 +101,7 @@ class PcmToWavOperator(BaseOperator):
         suffix = input_path.suffix.lower()
         headered = suffix in _CONTAINER_EXTS or looks_like_wav(input_path)
         source_sr, rate_source, data, source_channels, channel_policy = self._load_mono(
-            input_path, suffix, config, declared_channels, dtype
+            input_path, suffix, config, sample, declared_channels, dtype
         )
 
         mono = data
@@ -109,16 +133,26 @@ class PcmToWavOperator(BaseOperator):
 
         if source_sr == target_sr:
             to_write = mono
-            quality_status = "converted" if channel_policy == "take_channel_0" else "converted"
+            quality_status = "converted"
             resampled = False
         else:
-            to_write = resample_audio(np.asanyarray(mono), source_sr, target_sr)
+            # Resample in float amplitude domain to avoid int16-scale clipping on write.
+            to_write = resample_audio(pcm_array_to_float32(np.asanyarray(mono)), source_sr, target_sr)
             quality_status = "resampled"
             resampled = True
 
-        output_path = derived_audio_path(config.output_dir, "pcm_to_wav", sample)
+        output_path = derived_audio_path(config.output_dir, _PCM_TO_WAV_SUBDIR, sample)
         with atomic_path(output_path) as tmp:
-            sf.write(str(tmp), to_write, target_sr, subtype="PCM_16")
+            arr = np.asanyarray(to_write)
+            if (
+                not resampled
+                and np.issubdtype(arr.dtype, np.integer)
+                and arr.dtype == np.int16
+            ):
+                # Same-rate headerless wrap: keep PCM16 payload byte-identical.
+                sf.write(str(tmp), arr, target_sr, subtype="PCM_16")
+            else:
+                write_pcm16_wav(str(tmp), arr, target_sr)
 
         n_frames = len(to_write) if getattr(to_write, "ndim", 1) == 1 else to_write.shape[0]
         duration_tgt = n_frames / target_sr if target_sr else duration_src
@@ -149,6 +183,7 @@ class PcmToWavOperator(BaseOperator):
         input_path: Path,
         suffix: str,
         config: OperatorConfig,
+        sample: Sample,
         declared_channels: int,
         dtype: str,
     ) -> tuple[int, str, np.ndarray, int, str]:
@@ -165,7 +200,9 @@ class PcmToWavOperator(BaseOperator):
             )
 
         source_sr, rate_source = resolve_headerless_rate(
-            config.params, default_sr=DEFAULT_SAMPLE_RATE
+            config.params,
+            default_sr=DEFAULT_SAMPLE_RATE,
+            labels=sample.labels,
         )
         channels = max(1, int(declared_channels))
         raw = np.fromfile(input_path, dtype=dtype)
@@ -217,6 +254,7 @@ class PcmToWavOperator(BaseOperator):
                     "resampled": meta.resampled,
                     "duration_source_sec": meta.duration_source_sec,
                     "duration_target_sec": meta.duration_target_sec,
+                    "audio_scene": sample.labels.get("audio_scene"),
                 },
             )
 
@@ -237,6 +275,14 @@ class PcmToWavOperator(BaseOperator):
             "pcm_converted": pcm_converted,
             **meta.as_labels(),
         }
+        # Preserve scene metadata already resolved upstream.
+        if "audio_scene" in sample.labels and "audio_scene" not in labels:
+            labels["audio_scene"] = sample.labels["audio_scene"]
+        if (
+            "audio_scene_rule_version" in sample.labels
+            and "audio_scene_rule_version" not in labels
+        ):
+            labels["audio_scene_rule_version"] = sample.labels["audio_scene_rule_version"]
         return {
             "audio": {output_key: output_path},
             "sample_rate": meta.target_sample_rate,

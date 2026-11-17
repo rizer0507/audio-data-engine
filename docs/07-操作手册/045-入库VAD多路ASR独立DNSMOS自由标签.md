@@ -59,13 +59,16 @@ VAD 的实际并发是 `parallel_shards × source_workers`，当前默认 `8 × 
 
 | 阶段 | 权威路径 |
 |------|----------|
-| 入库 | `datasets/stage1/ingested/ingested_<batch>.parquet` |
-| VAD 片段 | `datasets/stage1/segments/segments_<batch>.parquet` |
+| 入库 | `datasets/stage1/ingested/ingested_<batch>.parquet`（含 `labels.audio_scene` / `label_audio_scene`） |
+| 分身 VAD 片段 | `datasets/stage1/segments/segments_<batch>.parquet`（只选 `fenshen`） |
+| 审批 VAD 片段 | `datasets/stage1/segments/segments_<batch>-shenpi.parquet`（只选面谈/外呼） |
 | 话术标签剔除（可选） | 同路径写回过滤后的 `segments_<batch>.parquet`；全量备份 `segments_<batch>_vad_all.parquet` |
-| ASR | `datasets/stage1/asr/<route_id>_asr_<batch>.parquet` |
+| ASR | `datasets/stage1/asr/<route_id>_asr_<batch>.parquet`（审批下游用 `<batch>-shenpi`） |
 | DNSMOS | `datasets/stage1/quality/dnsmos_<batch>.parquet` |
 | 合并证据 | `datasets/stage1/derived/prepared_evidence_<batch>.parquet` |
 | 自由 tag | `datasets/stage1/derived/tagged_free_tags_v2_<batch>.parquet` |
+
+统一入库按原始文件名标记场景：`fenshen*` → 分身 16 kHz；已知审批前缀 `shenpi_ai-` / `shepi_ai-` 且第二个 `-` 后后缀含大写 `V/P` → 面谈 8 kHz，否则外呼 16 kHz；未知前缀 → `unknown`（两路 VAD 都不选）。历史错误审批父源须换批次从原始 PCM 重入库。审批 HTTP VAD 见 [050](../04-改进需求/进行中/050-工序一审批场景HTTP-VAD接入.md)；`export SHENPI_VAD_API_BASE=...` 后跑 `pipelines/vad_segment_shenpi_batch.yaml`。
 
 有业务 xlsx（含 `file_id`、`AI话术分类标签`）时，可在 VAD 之后、ASR/DNSMOS 之前跑：
 
@@ -85,6 +88,10 @@ python scripts/filter_segments_drop_identity_verify.py \
 历史 `quality_sidecar_*` / `cleaned_*`（041 合并入口）仍可读，但新链默认不发现、不依赖。
 
 ## 父 run 查询 / 续跑 / 失败重试
+
+入库总进度按父音频计数。扫描和场景识别期间显示 `total=pending_scan`，之后 `total` 为实际送入分片的父音频数。父进程在控制台和入库 run 的 `PROGRESS.log` 输出各步骤全批次的 `已处理/总数`，以及成功分片的输入数（`done`）、保留行数（`ingested_rows`）和质检剔除数（`excluded`）。要核对分片前的扫描数与场景剔除数，查看 `prepare/run.log` 和 `prepare/audio_scene_stats.json`。最终交付行数以合并产物为准。
+
+单独执行入库时，用 `audio-data pipeline progress "runs/<ingest-run>" --follow` 查看汇总。用一步到位入口时，父 run 的进度查询会在 `ingest` 节点下显示该汇总，Web 可在入库节点日志里查看。VAD 按各场景选中的父音频处理，ASR 各路及 DNSMOS 按送入分支的片段计数。
 
 ```bash
 # 进度：可见 ASR 与 DNSMOS 同时 running，以及谁在阻塞 join
@@ -115,8 +122,12 @@ audio-data pipeline run pipelines/tag_dataset_free_tags_v2.yaml \
 ```bash
 audio-data pipeline run pipelines/audio_ingest.yaml --source-name "$BATCH" --source-dir "$SOURCE_DIR"
 audio-data pipeline run pipelines/vad_segment_batch.yaml --source-name "$BATCH"
+# 审批分支（同入库；默认输出 segments_$BATCH-shenpi）：
+# export SHENPI_VAD_API_BASE='http://your-vad-host:8090'
+# audio-data pipeline run pipelines/vad_segment_shenpi_batch.yaml --source-name "$BATCH"
 # 可选：按 xlsx 剔除「接洽（身份核实）」后再进 ASR/DNSMOS（见上文）
 # python scripts/filter_segments_drop_identity_verify.py --source-name "$BATCH" --xlsx "$LABEL_XLSX"
+# 审批下游把 --source-name 换成 "${BATCH}-shenpi"
 audio-data pipeline run pipelines/dnsmos_score_batch.yaml --source-name "$BATCH"
 ```
 

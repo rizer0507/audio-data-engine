@@ -13,11 +13,12 @@ from concurrent.futures import (
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 from loguru import logger
 
+from audio_engine.core.artifacts import atomic_write_json
 from audio_engine.core.checkpoint import (
     COUNT_KEYS,
     StepCheckpoint,
@@ -27,6 +28,7 @@ from audio_engine.core.checkpoint import (
 )
 from audio_engine.core.manifest import Manifest
 from audio_engine.core.operator import BaseOperator, BatchOperator, ManifestOperator, OperatorConfig
+from audio_engine.core.progress import INGEST_STEP_PROGRESS, is_audio_ingest
 from audio_engine.core.registry import OperatorRegistry
 from audio_engine.core.sample import Sample
 
@@ -440,8 +442,14 @@ class PipelineRunner:
         )
 
         samples = list(manifest.samples)
+        track_ingest = is_audio_ingest(self.config.name)
         for order, step in enumerate(self.config.steps):
+            input_count = len(samples)
+            if track_ingest:
+                self._write_ingest_progress(step, 0)
             samples = self._run_step(step, samples, order=order)
+            if track_ingest:
+                self._write_ingest_progress(step, input_count)
 
         result = Manifest(samples)
         out_manifest = self.run_dir / "manifest.parquet"
@@ -482,6 +490,9 @@ class PipelineRunner:
 
         logger.info("Pipeline finished. Run dir: {}", self.run_dir)
         return result
+
+    def _write_ingest_progress(self, step: PipelineStep, done: int) -> None:
+        atomic_write_json(self.run_dir / INGEST_STEP_PROGRESS, {"step": step.name, "done": done})
 
     def _run_step(self, step: PipelineStep, samples: list[Sample], order: int = 0) -> list[Sample]:
         operator = OperatorRegistry.get(step.operator)
@@ -713,6 +724,18 @@ class PipelineRunner:
         started = time.perf_counter()
         total = len(samples)
         already = len(done)
+        last_report = started
+
+        def report(completed: int) -> None:
+            nonlocal last_report
+            now = time.perf_counter()
+            if now - last_report >= 2:
+                self._write_ingest_progress(step, already + start + completed)
+                last_report = now
+
+        report_progress = report if is_audio_ingest(self.config.name) else None
+        if report_progress is not None:
+            self._write_ingest_progress(step, already)
         for start in range(0, len(pending), batch_size):
             batch = pending[start : start + batch_size]
             if isinstance(operator, BatchOperator):
@@ -720,9 +743,13 @@ class PipelineRunner:
                     step, operator, op_config, batch, execution
                 )
             elif execution.concurrent and len(batch) > 1:
-                updated, counts = self._run_concurrent(step, operator, op_config, batch, execution)
+                updated, counts = self._run_concurrent(
+                    step, operator, op_config, batch, execution, report_progress
+                )
             else:
-                updated, counts = self._run_sequential(step, operator, op_config, batch, execution)
+                updated, counts = self._run_sequential(
+                    step, operator, op_config, batch, execution, report_progress
+                )
             self.metrics.record_counts(step.name, counts)
             done.extend(updated)
             if checkpoint is not None:
@@ -730,6 +757,9 @@ class PipelineRunner:
 
             elapsed = time.perf_counter() - started
             done_now = already + (start + len(batch))
+            if report_progress is not None:
+                self._write_ingest_progress(step, done_now)
+                last_report = time.perf_counter()
             # Only count freshly processed pending for rate (resume-friendly).
             processed_pending = start + len(batch)
             rate = processed_pending / elapsed if elapsed > 0 else 0.0
@@ -850,6 +880,7 @@ class PipelineRunner:
         op_config: OperatorConfig,
         samples: list[Sample],
         execution: ExecutionConfig,
+        report_progress: Callable[[int], None] | None = None,
     ) -> tuple[list[Sample], dict[str, int]]:
         updated_samples: list[Sample] = []
         counts = empty_counts()
@@ -864,6 +895,8 @@ class PipelineRunner:
                 )
             if idx % 100 == 0:
                 logger.debug("Step '{}' progress: {}/{}", step.name, idx, len(samples))
+            if report_progress is not None:
+                report_progress(idx)
         return updated_samples, counts
 
     def _run_concurrent(
@@ -873,6 +906,7 @@ class PipelineRunner:
         op_config: OperatorConfig,
         samples: list[Sample],
         execution: ExecutionConfig,
+        report_progress: Callable[[int], None] | None = None,
     ) -> tuple[list[Sample], dict[str, int]]:
         """Bounded worker pool: at most `in_flight` tasks queued, output order preserved."""
         total = len(samples)
@@ -926,6 +960,8 @@ class PipelineRunner:
                         )
                     if completed % 100 == 0:
                         logger.debug("Step '{}' progress: {}/{}", step.name, completed, total)
+                    if report_progress is not None:
+                        report_progress(completed)
                 if abort is not None:
                     break
                 for _ in range(len(done)):
