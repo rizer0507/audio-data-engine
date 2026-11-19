@@ -76,7 +76,7 @@ def _resolve_settings(config: OperatorConfig) -> dict[str, Any]:
     )
     if chat_format := os.environ.get("QWEN_ASR_CHAT_FORMAT"):
         settings["chat_format"] = chat_format
-    if settings.get("chat_format") == "sophon":
+    if settings.get("chat_format") in ("sophon", "omni"):
         settings["model_version"] = settings["model"]
     return settings
 
@@ -107,6 +107,8 @@ def _cache_config(config: OperatorConfig, settings: dict[str, Any]) -> OperatorC
         "chat_template_kwargs",
         "chat_format",
         "force_language",
+        "temperature",
+        "max_new_tokens",
     ):
         if key in settings:
             params[f"resolved_{key}"] = settings[key]

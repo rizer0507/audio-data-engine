@@ -4,8 +4,8 @@
 # 先把 gold 放到 datasets/stage1/derived，再自行拉起要用的端口。
 #   full: best 5560, over 5561
 #   lora: best 5565, over 5566
-#   rl: 固定 5580；omni: 固定 6190；sophon: 固定 6179。三个模式都只提供 best。
-#   omni 走与 lora/full/rl 相同的 qwen_asr_batch，模型 ID 从 6190 的 /v1/models 读取。
+#   rl: 固定 5580；omni: 固定 6191；sophon: 固定 6179。三个模式都只提供 best。
+#   omni 走 pipelines/qwen_omni_asr_batch.yaml（user 指令提示词），模型 ID 从 6191 的 /v1/models 读取。
 #   qwen-base: 5555。第四个参数为 all 时总是转写。
 #   只转写 best/over 时，本次切分已有 qwen-base parquet 就跳过 5555；没有则调用 5555 补转写。
 # 字准 xlsx 始终和 qwen-base 比较；lora-full 将 LoRA 和 Full 放进同一份报表。
@@ -22,7 +22,7 @@
 #   bash scripts/run_fenshen_1015_eval.sh full v014 both best-over
 #   bash scripts/run_fenshen_1015_eval.sh lora v014 both all
 #   bash scripts/run_fenshen_1015_eval.sh rl v025
-#   bash scripts/run_fenshen_1015_eval.sh omni v030
+#   bash scripts/run_fenshen_1015_eval.sh omni v031
 #   bash scripts/run_fenshen_1015_eval.sh sophon v032
 #   Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen vllm_hotwords.default + language=zh）
 #   SOPHON_PROFILE=v1 bash scripts/run_fenshen_1015_eval.sh sophon v032
@@ -38,14 +38,14 @@ CKPT="${4:-best}"
 usage() {
   echo "用法: bash scripts/run_fenshen_1015_eval.sh <lora|full|lora-full|rl|omni|sophon> <v0xx> [train|dev|both] [all|best|over|best-over]"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh lora-full v030（默认 dev best）"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh omni v030"
+  echo "示例: bash scripts/run_fenshen_1015_eval.sh omni v031"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 train best"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 dev over"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 both best-over"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh rl v025"
   echo "示例: bash scripts/run_fenshen_1015_eval.sh sophon v032（默认 dev best）"
   echo "Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen 热词 + 中文），回退可设 SOPHON_PROFILE=v1 或 legacy。"
-  echo "full 的 best 在 5560，over 在 5561。lora 的 best 在 5565，over 在 5566。rl 固定在 5580，omni 固定在 6190，sophon 固定在 6179，三者无 over。"
+  echo "full 的 best 在 5560，over 在 5561。lora 的 best 在 5565，over 在 5566。rl 固定在 5580，omni 固定在 6191，sophon 固定在 6179，三者无 over。"
   echo "字准表始终和 qwen-base 比较。只转写 best/over 时，没有 base parquet 才会调用 5555。"
 }
 
@@ -77,10 +77,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PORT_BASE=5555
-PORT_OMNI=6190
+PORT_OMNI=6191
 PORT_SOPHON=6179
 SOPHON_RUN_TAG=""
 QWEN_PIPELINE="pipelines/qwen_asr_batch.yaml"
+OMNI_PIPELINE="pipelines/qwen_omni_asr_batch.yaml"
+if [[ "$MODE" == "omni" ]]; then
+  if [[ ! -f "$OMNI_PIPELINE" ]]; then
+    echo "缺少 Omni 流水线配置: $OMNI_PIPELINE" >&2
+    exit 1
+  fi
+fi
 if [[ "$MODE" == "sophon" ]]; then
   SOPHON_PROFILE="${SOPHON_PROFILE:-v1-hotwords}"
   if [[ ! "$SOPHON_PROFILE" =~ ^(legacy|v[0-9]+(-[a-z0-9]+)*)$ ]]; then
@@ -283,7 +290,8 @@ run_one() {
   export QWEN_ASR_API_KEY=dummy
   export QWEN_ASR_API_BASE="http://127.0.0.1:${port}"
   if [[ "$MODE" == "omni" && "$port" == "$PORT_OMNI" ]]; then
-    unset QWEN_ASR_CHAT_FORMAT
+    pipeline="$OMNI_PIPELINE"
+    export QWEN_ASR_CHAT_FORMAT=omni
     export QWEN_ASR_MODEL="$OMNI_MODEL"
   fi
   if [[ "$MODE" == "sophon" && "$port" == "$PORT_SOPHON" ]]; then

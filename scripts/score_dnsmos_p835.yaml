@@ -1,0 +1,17 @@
+# Standalone DNSMOS P.835（独立打分配置，不含流水线 / Manifest 字段）
+# 同事二次开发可只改本文件；算法与生产一致：p835_official_nonpersonalized_v2
+
+# 改成你本机可读的 sig_bak_ovr.onnx 绝对路径
+model_path: /data2/data-cp/lizi/DNS-Challenge-master/DNSMOS/DNSMOS/sig_bak_ovr.onnx
+
+preprocess_version: p835_official_nonpersonalized_v2
+
+providers:
+  - CPUExecutionProvider
+
+runtime:
+  intra_op_num_threads: 2
+  inter_op_num_threads: 1
+  allow_spinning: false
+  # 同一片段多窗合批；逐窗校准后求平均
+  window_batch_size: 4

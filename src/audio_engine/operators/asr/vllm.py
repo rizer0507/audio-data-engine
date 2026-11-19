@@ -137,6 +137,11 @@ def _http_json(
     return payload
 
 
+_OMNI_DEFAULT_PROMPT = (
+    "这段音频是电话贷款营销业务场景中客户的回答，大部分客户会表示不用了、不需要等否定意图，输出ASR转译文本。"
+)
+
+
 def _sophon_chat_payload(path: Path, settings: dict[str, Any], context: str) -> dict[str, Any]:
     prompt = settings.get("system_prompt") or (
         "逐字转写音频中的人声，保留语气词和重复。只输出转写文本。"
@@ -168,6 +173,23 @@ def _sophon_chat_payload(path: Path, settings: dict[str, Any], context: str) -> 
     }
 
 
+def _omni_chat_payload(path: Path, settings: dict[str, Any]) -> dict[str, Any]:
+    prompt = settings.get("prompt") or _OMNI_DEFAULT_PROMPT
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "audio_url", "audio_url": {"url": _audio_data_url(path)}},
+                    {"type": "text", "text": str(prompt)},
+                ],
+            }
+        ],
+        "max_tokens": int(settings.get("max_new_tokens", 20480)),
+        "stream": False,
+    }
+
+
 def call_vllm_chat_asr(audio_path: str, settings: dict[str, Any]) -> dict[str, Any]:
     """Call vLLM `/v1/chat/completions` with the configured ASR request format."""
     path = Path(audio_path)
@@ -177,9 +199,13 @@ def call_vllm_chat_asr(audio_path: str, settings: dict[str, Any]) -> dict[str, A
     context = settings.get("context")
     if context is None:
         context = settings.get("prompt") or ""
-    sophon = settings.get("chat_format") == "sophon"
+    chat_format = settings.get("chat_format")
+    sophon = chat_format == "sophon"
+    omni = chat_format == "omni"
     if sophon:
         payload = _sophon_chat_payload(path, settings, str(context))
+    elif omni:
+        payload = _omni_chat_payload(path, settings)
     else:
         payload = {
             "messages": [
@@ -193,7 +219,8 @@ def call_vllm_chat_asr(audio_path: str, settings: dict[str, Any]) -> dict[str, A
             ],
             "chat_template_kwargs": _chat_template_kwargs(settings),
         }
-    payload["temperature"] = float(settings.get("temperature", 0))
+    default_temperature = 0.1 if omni else 0
+    payload["temperature"] = float(settings.get("temperature", default_temperature))
     # model 对 served-model-name 路由必需；不改变上面与业务对齐的 messages/kwargs/temperature。
     if settings.get("model"):
         payload = {"model": str(settings["model"]), **payload}
@@ -228,6 +255,13 @@ def call_vllm_chat_asr(audio_path: str, settings: dict[str, Any]) -> dict[str, A
             "text": text,
             "language": payload["language"],
             "extra": extra,
+        }
+
+    if omni:
+        return {
+            "text": str(content or "").strip(),
+            "language": settings.get("language") or "zh",
+            "extra": {"raw_response": response},
         }
 
     language, text = _parse_qwen_chat_content(str(content or ""))

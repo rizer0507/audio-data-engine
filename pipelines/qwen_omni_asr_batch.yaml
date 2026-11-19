@@ -1,0 +1,47 @@
+# Qwen3-Omni 评测转写：对齐 audio_model_v3.py 的 user 指令提示词与 chat 请求体。
+# 端口由评测入口注入（默认 6191）；模型 ID 从 /v1/models 读取后写入 QWEN_ASR_MODEL。
+name: qwen_omni_asr_batch
+
+input:
+  manifest: datasets/stage1/cleaned/cleaned_source_A.parquet
+
+output:
+  manifest: datasets/stage1/asr/qwen_omni_asr_source_A.parquet
+
+execution:
+  executor: sequential
+  workers: 1
+  fail_fast: false
+  checkpoint_every: 500
+
+sharding:
+  shards: 8
+  strategy: duration-balanced
+  parallel_shards: 8
+  gpus: [4, 5]
+  instances_per_gpu: 4
+  workers: 1
+  executor: sequential
+
+pipeline:
+  - name: qwen_asr
+    operator: asr.qwen_batch
+    params:
+      input_audio_key: resampled_16k
+      config_path: null  # Omni 独立配置，关闭共享 Qwen YAML 的 vocabulary context
+      chat_format: omni
+      prompt: 这段音频是电话贷款营销业务场景中客户的回答，大部分客户会表示不用了、不需要等否定意图，输出ASR转译文本。
+      temperature: 0.1
+      max_new_tokens: 20480
+      timeout: 590
+      batch_size: 32
+      concurrency: 4
+      language: zh
+
+  - name: normalize_transcripts
+    operator: quality.normalize_transcripts
+    params:
+      models: [qwen]
+      keep_raw: true
+      normalization_path: configs/normalization/zh_asr_keep_punct_v1.yaml
+      blank_exact_hotwords_path: configs/normalization/blank_exact_qwen_v1.yaml

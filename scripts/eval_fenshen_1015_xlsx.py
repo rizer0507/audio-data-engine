@@ -12,7 +12,7 @@
   python scripts/eval_fenshen_1015_xlsx.py lora-full v030
   python scripts/eval_fenshen_1015_xlsx.py lora v015 --split dev
   python scripts/eval_fenshen_1015_xlsx.py rl v025 --split dev --ckpt best
-  python scripts/eval_fenshen_1015_xlsx.py omni v030 --split dev --ckpt best
+  python scripts/eval_fenshen_1015_xlsx.py omni v031 --split dev --ckpt best
   python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt best
   python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt over
 

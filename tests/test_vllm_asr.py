@@ -158,6 +158,52 @@ def test_vllm_chat_asr_matches_force_language_payload(tmp_path: Path, monkeypatc
     assert result["language"] == "Chinese"
 
 
+def test_omni_chat_asr_uses_user_instruction_prompt(tmp_path: Path, monkeypatch):
+    audio = tmp_path / "sample.wav"
+    audio_bytes = b"RIFF-omni"
+    audio.write_bytes(audio_bytes)
+    prompt = (
+        "这段音频是电话贷款营销业务场景中客户的回答，"
+        "大部分客户会表示不用了、不需要等否定意图，输出ASR转译文本。"
+    )
+
+    def fake_http_json(url, *, body, headers, timeout):
+        payload = json.loads(body)
+        assert url == "http://127.0.0.1:6191/v1/chat/completions"
+        assert payload["model"] == "qwen3-omni"
+        assert payload["temperature"] == 0.1
+        assert payload["max_tokens"] == 20480
+        assert payload["stream"] is False
+        assert "chat_template_kwargs" not in payload
+        assert len(payload["messages"]) == 1
+        user = payload["messages"][0]
+        assert user["role"] == "user"
+        expected_url = (
+            "data:audio/wav;base64," + base64.b64encode(audio_bytes).decode("ascii")
+        )
+        assert user["content"] == [
+            {"type": "audio_url", "audio_url": {"url": expected_url}},
+            {"type": "text", "text": prompt},
+        ]
+        return {"choices": [{"message": {"content": " 暂时不用。 "}}]}
+
+    monkeypatch.setattr(vllm, "_http_json", fake_http_json)
+    result = vllm.call_vllm_chat_asr(
+        str(audio),
+        {
+            "api_base": "http://127.0.0.1:6191",
+            "model": "qwen3-omni",
+            "chat_format": "omni",
+            "prompt": prompt,
+            "temperature": 0.1,
+            "max_new_tokens": 20480,
+            "language": "zh",
+        },
+    )
+    assert result["text"] == "暂时不用。"
+    assert result["language"] == "zh"
+
+
 def test_sophon_chat_asr_requests_text_only_transcription(tmp_path: Path, monkeypatch):
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF-test")

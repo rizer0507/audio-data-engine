@@ -95,13 +95,15 @@ Manifest 驱动的音频数据治理引擎：原始音频入库、VAD/多路 ASR
 ```bash
 bash scripts/run_fenshen_1015_eval.sh full v024
 bash scripts/run_fenshen_1015_eval.sh lora-full v030
-bash scripts/run_fenshen_1015_eval.sh omni v030
+bash scripts/run_fenshen_1015_eval.sh omni v031
 bash scripts/run_fenshen_1015_eval.sh sophon v032
 ```
 
-Shell 入口默认 `dev best`，仍可显式指定切分与权重。端口为 base 5555、Full best/over 5560/5561、LoRA best/over 5565/5566、RL 5580、Omni 6190、Sophon 6179。RL、Omni 和 Sophon 只提供单端口，`all` 会补跑基线。Omni 走与 LoRA/Full/RL 相同的 `pipelines/qwen_asr_batch.yaml`，模型 ID 从 `6190` 的 `/v1/models` 读取并写入 `QWEN_ASR_MODEL`。输入金标位于 `datasets/stage1/derived/`，按 train/dev 与版本命名。
+Shell 入口默认 `dev best`，仍可显式指定切分与权重。端口为 base 5555、Full best/over 5560/5561、LoRA best/over 5565/5566、RL 5580、Omni 6191、Sophon 6179。RL、Omni 和 Sophon 只提供单端口，`all` 会补跑基线。输入金标位于 `datasets/stage1/derived/`，按 train/dev 与版本命名。
 
-2026-11-13，Omni Thinking 在单卡 A800 上读完 16 个分片并启动。`omni v030` 复用已落盘的 5555 基线，实际向 6190 发起最多 32 路并发请求。服务端日志 10:33–10:39 多次连续解码，KV cache 峰值 99.1%，同时有请求排队。当前 Omni 共用 Qwen3-ASR 的 chat 请求，该分支未发送配置里的 `max_new_tokens`，现场服务也覆盖了 Qwen3-ASR 模板。短转写需验证 Omni 自带模板、关闭思考、显式转写提示和输出 token 上限。`PROGRESS.log` 按 checkpoint 或分片产物计数，75 条左右的分片在 `checkpoint_every=500` 时通常整片完成才跳数。证据位置为服务器 `runs/fenshen_1015_eval_omni_v030_dev_best_20261113_103305/best.log` 和同次 6190 服务日志。每条请求的输出 token、停止原因以及与 5555 的同条件测速仍待核验。
+2026-11-17，Omni 评测改为独立 `pipelines/qwen_omni_asr_batch.yaml` + `chat_format=omni`：端口 6191，模型 ID 仍从 `/v1/models` 读取并写入 `QWEN_ASR_MODEL`。请求对齐 `audio_model_v3.py`——单条 user，`audio_url` 后接固定提示词「这段音频是电话贷款营销业务场景中客户的回答，大部分客户会表示不用了、不需要等否定意图，输出ASR转译文本。」，`temperature=0.1`，`max_tokens=20480`，`timeout=590`，不发 system vocabulary / `chat_template_kwargs`。响应按纯文本落盘后再走既有保标点清洗与字准 xlsx。本机 `tests/test_vllm_asr.py` omni 请求体单测已加；真实 `bash scripts/run_fenshen_1015_eval.sh omni v031` 待服务器执行。
+
+2026-11-13，Omni Thinking 在单卡 A800 上读完 16 个分片并启动。当时 `omni v030` 复用已落盘的 5555 基线，实际向 6190 发起最多 32 路并发请求，且仍共用 Qwen3-ASR chat 请求（无显式转写提示 / `max_new_tokens`）。该形态已被 2026-11-17 的 omni 专用 pipeline 取代。证据位置为服务器 `runs/fenshen_1015_eval_omni_v030_dev_best_20261113_103305/best.log` 和同次 6190 服务日志。
 
 `lora-full` 并行转写 LoRA 和 Full，两路共用同一份金标和 qwen-base 基线。默认比较两路 best，写出 `datasets/stage3/asr/eval_v030/<月日_小时分钟>/v030_dev_lora-full.xlsx`。选 `both` 时每个切分各出一份联合报表。本机替身端口已验证默认和 `both all` 的路由、基线去重、联合出表及一路失败时不出表，真实模型联合评测待服务器执行。
 
