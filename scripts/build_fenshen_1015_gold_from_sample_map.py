@@ -82,8 +82,8 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def _load_builder():
-    path = ROOT / "scripts" / "eval_fenshen_1015_xlsx.py"
-    spec = importlib.util.spec_from_file_location("eval_fenshen_1015_xlsx", path)
+    path = ROOT / "scripts" / "eval_asr_xlsx.py"
+    spec = importlib.util.spec_from_file_location("eval_asr_xlsx", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载 {path}")
     module = importlib.util.module_from_spec(spec)
@@ -359,8 +359,8 @@ def build_one(version: str, split: str, *, cleaned: dict[str, dict[str, Any]]) -
         },
         "next": [
             f'audio-data eval register "{out.as_posix()}" --name eval_fenshen_1015_{split}_{version} --force',
-            f"bash scripts/run_fenshen_1015_eval.sh full {version}",
-            f"python scripts/eval_fenshen_1015_xlsx.py full {version}",
+            f"bash scripts/run_asr_eval.sh fenshen full {version}",
+            f"python scripts/eval_asr_xlsx.py fenshen full {version}",
         ],
     }
     meta_path = out.with_suffix(".meta.json")

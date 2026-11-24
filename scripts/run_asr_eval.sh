@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# 评测 fenshen_1015 的 train / dev，转写结束后写出字准 xlsx。
-# 第三个参数默认 dev，第四个参数默认 best。
+# 按主题评测 train / dev，转写结束后写出字准 xlsx。
+# 主题与版本同级：fenshen / shenpi，避免同版本号冲突。
+# 第五个参数默认 dev，第六个参数默认 best。
 # 先把 gold 放到 datasets/stage1/derived，再自行拉起要用的端口。
 #   full: best 5560, over 5561
 #   lora: best 5565, over 5566
 #   rl: 固定 5580；omni: 固定 6191；sophon: 固定 6179。三个模式都只提供 best。
 #   omni 走 pipelines/qwen_omni_asr_batch.yaml（user 指令提示词），模型 ID 从 6191 的 /v1/models 读取。
-#   qwen-base: 5555。第四个参数为 all 时总是转写。
+#   qwen-base: 5555。ckpt 为 all 时总是转写。
 #   只转写 best/over 时，本次切分已有 qwen-base parquet 就跳过 5555；没有则调用 5555 补转写。
 # 字准 xlsx 始终和 qwen-base 比较；lora-full 将 LoRA 和 Full 放进同一份报表。
 #
@@ -15,39 +16,47 @@
 # 5555 的 --asr-run：dev=qwen-base-dev，train=qwen-base-full。
 #
 # 用法:
-#   bash scripts/run_fenshen_1015_eval.sh full v014
-#   bash scripts/run_fenshen_1015_eval.sh lora-full v030
-#   bash scripts/run_fenshen_1015_eval.sh full v014 train best
-#   bash scripts/run_fenshen_1015_eval.sh full v014 dev over
-#   bash scripts/run_fenshen_1015_eval.sh full v014 both best-over
-#   bash scripts/run_fenshen_1015_eval.sh lora v014 both all
-#   bash scripts/run_fenshen_1015_eval.sh rl v025
-#   bash scripts/run_fenshen_1015_eval.sh omni v031
-#   bash scripts/run_fenshen_1015_eval.sh sophon v032
+#   bash scripts/run_asr_eval.sh fenshen full v014
+#   bash scripts/run_asr_eval.sh fenshen lora-full v030
+#   bash scripts/run_asr_eval.sh shenpi full v001
+#   bash scripts/run_asr_eval.sh fenshen full v014 train best
+#   bash scripts/run_asr_eval.sh fenshen full v014 dev over
+#   bash scripts/run_asr_eval.sh fenshen full v014 both best-over
+#   bash scripts/run_asr_eval.sh fenshen lora v014 both all
+#   bash scripts/run_asr_eval.sh fenshen rl v025
+#   bash scripts/run_asr_eval.sh fenshen omni v031
+#   bash scripts/run_asr_eval.sh fenshen sophon v032
 #   Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen vllm_hotwords.default + language=zh）
-#   SOPHON_PROFILE=v1 bash scripts/run_fenshen_1015_eval.sh sophon v032
-#   SOPHON_PROFILE=legacy bash scripts/run_fenshen_1015_eval.sh sophon v032
+#   SOPHON_PROFILE=v1 bash scripts/run_asr_eval.sh fenshen sophon v032
+#   SOPHON_PROFILE=legacy bash scripts/run_asr_eval.sh fenshen sophon v032
 
 set -euo pipefail
 
-MODE="${1:-}"
-VER="${2:-}"
-SPLIT="${3:-dev}"
-CKPT="${4:-best}"
+THEME="${1:-}"
+MODE="${2:-}"
+VER="${3:-}"
+SPLIT="${4:-dev}"
+CKPT="${5:-best}"
 
 usage() {
-  echo "用法: bash scripts/run_fenshen_1015_eval.sh <lora|full|lora-full|rl|omni|sophon> <v0xx> [train|dev|both] [all|best|over|best-over]"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh lora-full v030（默认 dev best）"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh omni v031"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 train best"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 dev over"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh full v014 both best-over"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh rl v025"
-  echo "示例: bash scripts/run_fenshen_1015_eval.sh sophon v032（默认 dev best）"
+  echo "用法: bash scripts/run_asr_eval.sh <fenshen|shenpi> <lora|full|lora-full|rl|omni|sophon> <v0xx> [train|dev|both] [all|best|over|best-over]"
+  echo "示例: bash scripts/run_asr_eval.sh fenshen lora-full v030（默认 dev best）"
+  echo "示例: bash scripts/run_asr_eval.sh shenpi full v001"
+  echo "示例: bash scripts/run_asr_eval.sh fenshen omni v031"
+  echo "示例: bash scripts/run_asr_eval.sh fenshen full v014 train best"
+  echo "示例: bash scripts/run_asr_eval.sh fenshen full v014 dev over"
+  echo "示例: bash scripts/run_asr_eval.sh fenshen full v014 both best-over"
+  echo "示例: bash scripts/run_asr_eval.sh fenshen rl v025"
+  echo "示例: bash scripts/run_asr_eval.sh fenshen sophon v032（默认 dev best）"
   echo "Sophon 默认 SOPHON_PROFILE=v1-hotwords（fenshen 热词 + 中文），回退可设 SOPHON_PROFILE=v1 或 legacy。"
   echo "full 的 best 在 5560，over 在 5561。lora 的 best 在 5565，over 在 5566。rl 固定在 5580，omni 固定在 6191，sophon 固定在 6179，三者无 over。"
   echo "字准表始终和 qwen-base 比较。只转写 best/over 时，没有 base parquet 才会调用 5555。"
 }
+
+case "$THEME" in
+  fenshen|shenpi) ;;
+  *) echo "主题须为 fenshen 或 shenpi，当前: ${THEME:-<空>}"; usage; exit 1 ;;
+esac
 
 case "$MODE" in
   lora-full) models=(lora full) ;;
@@ -114,10 +123,10 @@ if [[ "$MODE" == "rl" || "$MODE" == "omni" || "$MODE" == "sophon" ]]; then
 fi
 
 DERIVED="datasets/stage1/derived"
-TRAIN_GOLD="${DERIVED}/gold_fenshen_1015_train_${VER}.parquet"
-DEV_GOLD="${DERIVED}/gold_fenshen_1015_dev_${VER}.parquet"
-TRAIN_EVAL="eval_fenshen_1015_train_${VER}"
-DEV_EVAL="eval_fenshen_1015_dev_${VER}"
+TRAIN_GOLD="${DERIVED}/gold_${THEME}_train_${VER}.parquet"
+DEV_GOLD="${DERIVED}/gold_${THEME}_dev_${VER}.parquet"
+TRAIN_EVAL="eval_${THEME}_train_${VER}"
+DEV_EVAL="eval_${THEME}_dev_${VER}"
 ASR_DIR="datasets/stage3/asr"
 
 want_train=0
@@ -179,7 +188,7 @@ if [[ "$want_dev" -eq 1 && ! -f "$DEV_GOLD" ]]; then
   exit 1
 fi
 
-echo "======== 条数 ${VER} ${SPLIT} ========"
+echo "======== 条数 ${THEME} ${VER} ${SPLIT} ========"
 python - "$SPLIT" "$TRAIN_GOLD" "$DEV_GOLD" <<'PY'
 import sys
 import pyarrow.parquet as pq
@@ -336,7 +345,7 @@ run_port() {
 }
 
 RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_DIR="runs/fenshen_1015_eval_${MODE}_${VER}_${SPLIT}_${CKPT}_${RUN_STAMP}"
+LOG_DIR="runs/${THEME}_eval_${MODE}_${VER}_${SPLIT}_${CKPT}_${RUN_STAMP}"
 if [[ "$MODE" == "sophon" ]]; then
   mkdir -p runs
   LOG_DIR="$(mktemp -d "${LOG_DIR}_${SOPHON_PROFILE}_XXXXXX")"
@@ -419,21 +428,21 @@ kill "$pid_tail" 2>/dev/null || true
 wait "$pid_tail" 2>/dev/null || true
 
 echo "======== 产物 ${ASR_DIR} ========"
-python - "$MODE" "$VER" "$ASR_DIR" "$SPLIT" "$XLSX_CKPT" "$SOPHON_RUN_TAG" <<'PY'
+python - "$THEME" "$MODE" "$VER" "$ASR_DIR" "$SPLIT" "$XLSX_CKPT" "$SOPHON_RUN_TAG" <<'PY'
 import sys
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
 sys.path.insert(0, "scripts")
-from eval_fenshen_1015_xlsx import asr_jobs
+from eval_asr_xlsx import asr_jobs
 
-mode, ver, asr_dir, split, ckpt = sys.argv[1], sys.argv[2], Path(sys.argv[3]), sys.argv[4], sys.argv[5]
-run_tag = sys.argv[6] or None
+theme, mode, ver, asr_dir, split, ckpt = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]), sys.argv[5], sys.argv[6]
+run_tag = sys.argv[7] or None
 missing = []
 jobs = []
 for selected_split in ("dev", "train") if split == "both" else (split,):
-    eval_name = f"eval_fenshen_1015_{selected_split}_{ver}"
+    eval_name = f"eval_{theme}_{selected_split}_{ver}"
     jobs.extend((run, eval_name) for _, run in asr_jobs(mode, selected_split, ckpt, sophon_run_tag=run_tag))
 for asr_run, eval_name in jobs:
     path = asr_dir / eval_name / f"{asr_run}_asr_{eval_name}.parquet"
@@ -445,15 +454,15 @@ for asr_run, eval_name in jobs:
     print(f"OK {rows}  {path.as_posix()}")
 if missing:
     raise SystemExit(1)
-print(f"完成: {mode} {ver} {split} {ckpt} 共 {len(jobs)} 个 parquet")
+print(f"完成: {theme} {mode} {ver} {split} {ckpt} 共 {len(jobs)} 个 parquet")
 PY
 if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 
 echo "======== 字准 xlsx ========"
-xlsx_args=("$MODE" "$VER" --split "$SPLIT" --ckpt "$XLSX_CKPT")
+xlsx_args=("$THEME" "$MODE" "$VER" --split "$SPLIT" --ckpt "$XLSX_CKPT")
 if [[ "$MODE" == "sophon" ]]; then
   xlsx_args+=(--sophon-run-tag "$SOPHON_RUN_TAG")
 fi
-python scripts/eval_fenshen_1015_xlsx.py "${xlsx_args[@]}"
+python scripts/eval_asr_xlsx.py "${xlsx_args[@]}"

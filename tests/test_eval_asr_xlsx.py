@@ -1,4 +1,4 @@
-"""fenshen_1015 字准 xlsx：type、non_speech 整数总字准、表结构。"""
+"""ASR 字准 xlsx：type、non_speech 整数总字准、表结构、主题路径。"""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from audio_engine.core.sample import Sample
 
 
 def _load_script():
-    path = Path(__file__).resolve().parents[1] / "scripts" / "eval_fenshen_1015_xlsx.py"
-    spec = importlib.util.spec_from_file_location("eval_fenshen_1015_xlsx", path)
+    path = Path(__file__).resolve().parents[1] / "scripts" / "eval_asr_xlsx.py"
+    spec = importlib.util.spec_from_file_location("eval_asr_xlsx", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -451,12 +451,13 @@ def test_evaluation_groups_splits_and_preserves_previous_workbooks(
             }
         ]
     )
+    theme = "fenshen"
     for split in splits:
-        gold = mod.gold_path(tmp_path, split, "v015")
+        gold = mod.gold_path(tmp_path, theme, split, "v015")
         gold.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(gold_rows, gold)
         for _name, run in mod.asr_jobs(mode, split, ckpt):
-            path = mod.asr_parquet(tmp_path, "v015", split, run)
+            path = mod.asr_parquet(tmp_path, theme, "v015", split, run)
             path.parent.mkdir(parents=True, exist_ok=True)
             sample = Sample(
                 id="a",
@@ -474,18 +475,18 @@ def test_evaluation_groups_splits_and_preserves_previous_workbooks(
             return next(run_times)
 
     monkeypatch.setattr(mod, "datetime", FixedClock)
-    command = [mode, "v015", *options, "--root", str(tmp_path)]
-    reports = tmp_path / "datasets" / "stage3" / "asr" / "eval_v015"
+    command = [theme, mode, "v015", *options, "--root", str(tmp_path)]
+    reports = tmp_path / "datasets" / "stage3" / "asr" / f"eval_{theme}_v015"
     first = reports / "1110_1430"
     second = reports / "1110_1430_2"
-    names = {f"v015_{split}_{mode}.xlsx" for split in splits}
+    names = {f"{theme}_v015_{split}_{mode}.xlsx" for split in splits}
     assert mod.main(command) == 0
     original = {path.name: path.read_bytes() for path in first.iterdir()}
     assert original.keys() == names
     assert mod.main(command) == 0
     assert {path.name for path in second.iterdir()} == names
     assert {path.name: path.read_bytes() for path in first.iterdir()} == original
-    report = second / f"v015_dev_{mode}.xlsx"
+    report = second / f"{theme}_v015_dev_{mode}.xlsx"
     detail = pd.read_excel(report, sheet_name="明细")
     assert detail.loc[0, "type"] == "auto_gold"
     assert detail.loc[0, "qwen-full-best_exact_correct"] == 1

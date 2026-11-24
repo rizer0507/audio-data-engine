@@ -69,8 +69,8 @@ def _cell(value: Any) -> str:
 
 
 def _load_xlsx_module():
-    path = ROOT / "scripts" / "eval_fenshen_1015_xlsx.py"
-    spec = importlib.util.spec_from_file_location("eval_fenshen_1015_xlsx", path)
+    path = ROOT / "scripts" / "eval_asr_xlsx.py"
+    spec = importlib.util.spec_from_file_location("eval_asr_xlsx", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载 {path}")
     module = importlib.util.module_from_spec(spec)
@@ -244,7 +244,7 @@ def build() -> None:
         [
             ("金标", str(OUT)),
             ("来源", str(SAMPLE_MAP)),
-            ("命令", "bash scripts/run_fenshen_1015_eval.sh lora v024 dev best"),
+            ("命令", "bash scripts/run_asr_eval.sh fenshen lora v024 dev best"),
             ("范围", "train_v024 的 dev。每个类别 round(n*0.2)，id 不重复。"),
             ("分类", "label_eval_type_split=true。label_eval_type 来自 sample_map.eval_type。"),
             (
@@ -275,7 +275,7 @@ def build() -> None:
         "eval_type_split": True,
         "source": {"sample_map": str(SAMPLE_MAP), "split": "dev"},
         "type_policy": "按 sample_map.eval_type 写出 label_eval_type；字准表划分 auto_gold / hardcase / non_speech。",
-        "next": "bash scripts/run_fenshen_1015_eval.sh lora v024 dev best",
+        "next": "bash scripts/run_asr_eval.sh fenshen lora v024 dev best",
     }
     OUT.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n",

@@ -1,6 +1,17 @@
 # Audio Data Engine 项目上下文
 
-核对日期：2026-11-13。基于分支 `v4.1`、现有文档和部分相关历史对话整理；不是完整聊天导出。
+核对日期：2026-11-24。基于分支 `v4.1`、现有文档和部分相关历史对话整理；不是完整聊天导出。
+
+## 评测入口主题化与 shenpi gold_dev_v001（2026-11-24）
+
+评测脚本改名并引入同级主题参数 `fenshen|shenpi`：
+
+- `scripts/run_asr_eval.sh <theme> <mode> <v0xx> ...`
+- `scripts/eval_asr_xlsx.py <theme> <mode> <v0xx> ...`
+
+金标/评测注册名改为 `gold_${theme}_{split}_${ver}.parquet`、`eval_${theme}_{split}_${ver}`；字准归档为 `datasets/stage3/asr/eval_${theme}_${ver}/`。旧名 `run_fenshen_1015_eval.sh` / `eval_fenshen_1015_xlsx.py` 已删除，不留兼容包装。历史磁盘产物仍可能为 `gold_fenshen_1015_*`。服务器批量改名：`python scripts/rename_fenshen_1015_theme_artifacts.py`（预览），确认后加 `--apply`；可选 `--include-runs`。改名前 `run_asr_eval.sh fenshen ...` 会找不到旧金标。
+
+审批 exploratory 金标：`scripts/build_shenpi_gold_v001_dev.py` 从 `audio-qwen3-asr-train` 的 `exploratory/shenpi/train_v001` sample_map 写出 `datasets/stage1/derived/gold_shenpi_dev_v001.parquet`（2090：auto_gold 2033 / non_speech 57），正式评测门禁通过。明细 xlsx：`tmp/1124/gold_shenpi_dev_v001.xlsx`。评测示例：`bash scripts/run_asr_eval.sh shenpi full v001`。未跑真实转写。
 
 ## 工序一入库批次进度（2026-11-17）
 
@@ -14,7 +25,7 @@
 
 ## fenshen_1015 空金标计分（2026-11-11）
 
-`scripts/eval_fenshen_1015_xlsx.py`：噪声 / 空转写（计分参考为空）不再参与总字准率。正确率上，识别经 `plain_transcript_text` 后只要还有文字即字准=0，**不去语气词**（避免「什么」等被词表抹成空后误算正确）。空金标只累计编辑距离（插入字数），在 `non_speech` scope 的「总字准」列仍改写为该编辑距离整数。金标非空样本仍走 plain → 删语气词 → 重复折叠 → 字准。相关单测：`tests/test_eval_fenshen_1015_xlsx.py`。
+`scripts/eval_asr_xlsx.py`：噪声 / 空转写（计分参考为空）不再参与总字准率。正确率上，识别经 `plain_transcript_text` 后只要还有文字即字准=0，**不去语气词**（避免「什么」等被词表抹成空后误算正确）。空金标只累计编辑距离（插入字数），在 `non_speech` scope 的「总字准」列仍改写为该编辑距离整数。金标非空样本仍走 plain → 删语气词 → 重复折叠 → 字准。相关单测：`tests/test_eval_asr_xlsx.py`。
 
 ## tmp/1110 证据聚合（2026-11-10）
 
@@ -88,20 +99,20 @@ Manifest 驱动的音频数据治理引擎：原始音频入库、VAD/多路 ASR
 - 自由标签库位于 `configs/tagging/library/`，词表在 `configs/tagging/lexicons/`；运行配置必须显式选中 tag。新增库文件不等于自动生效。恢复会核对定义指纹。
 - 人工 accepted Gold 与 release 分组拆分/冻结是正式训练数据的必要治理环节；候选文本或三模型一致不能自动当成人工确认。
 
-## fenshen_1015 评测知识
+## ASR 评测知识（原 fenshen_1015 评测）
 
-入口 `scripts/run_fenshen_1015_eval.sh` 调用转写和 XLSX 评测链，不是重新给原始音频做生产分拣。示例（先准备金标、模型服务与依赖）：
+入口 `scripts/run_asr_eval.sh`，主题与版本同级（`fenshen` / `shenpi`），调用转写和 XLSX 评测链，不是重新给原始音频做生产分拣。示例（先准备金标、模型服务与依赖）：
 
 ```bash
-bash scripts/run_fenshen_1015_eval.sh full v024
-bash scripts/run_fenshen_1015_eval.sh lora-full v030
-bash scripts/run_fenshen_1015_eval.sh omni v031
-bash scripts/run_fenshen_1015_eval.sh sophon v032
+bash scripts/run_asr_eval.sh fenshen full v024
+bash scripts/run_asr_eval.sh fenshen lora-full v030
+bash scripts/run_asr_eval.sh fenshen omni v031
+bash scripts/run_asr_eval.sh fenshen sophon v032
 ```
 
 Shell 入口默认 `dev best`，仍可显式指定切分与权重。端口为 base 5555、Full best/over 5560/5561、LoRA best/over 5565/5566、RL 5580、Omni 6191、Sophon 6179。RL、Omni 和 Sophon 只提供单端口，`all` 会补跑基线。输入金标位于 `datasets/stage1/derived/`，按 train/dev 与版本命名。
 
-2026-11-17，Omni 评测改为独立 `pipelines/qwen_omni_asr_batch.yaml` + `chat_format=omni`：端口 6191，模型 ID 仍从 `/v1/models` 读取并写入 `QWEN_ASR_MODEL`。请求对齐 `audio_model_v3.py`——单条 user，`audio_url` 后接固定提示词「这段音频是电话贷款营销业务场景中客户的回答，大部分客户会表示不用了、不需要等否定意图，输出ASR转译文本。」，`temperature=0.1`，`max_tokens=20480`，`timeout=590`，不发 system vocabulary / `chat_template_kwargs`。响应按纯文本落盘后再走既有保标点清洗与字准 xlsx。本机 `tests/test_vllm_asr.py` omni 请求体单测已加；真实 `bash scripts/run_fenshen_1015_eval.sh omni v031` 待服务器执行。
+2026-11-17，Omni 评测改为独立 `pipelines/qwen_omni_asr_batch.yaml` + `chat_format=omni`：端口 6191，模型 ID 仍从 `/v1/models` 读取并写入 `QWEN_ASR_MODEL`。请求对齐 `audio_model_v3.py`——单条 user，`audio_url` 后接固定提示词「这段音频是电话贷款营销业务场景中客户的回答，大部分客户会表示不用了、不需要等否定意图，输出ASR转译文本。」，`temperature=0.1`，`max_tokens=20480`，`timeout=590`，不发 system vocabulary / `chat_template_kwargs`。响应按纯文本落盘后再走既有保标点清洗与字准 xlsx。本机 `tests/test_vllm_asr.py` omni 请求体单测已加；真实 `bash scripts/run_asr_eval.sh fenshen omni v031` 待服务器执行。
 
 2026-11-13，Omni Thinking 在单卡 A800 上读完 16 个分片并启动。当时 `omni v030` 复用已落盘的 5555 基线，实际向 6190 发起最多 32 路并发请求，且仍共用 Qwen3-ASR chat 请求（无显式转写提示 / `max_new_tokens`）。该形态已被 2026-11-17 的 omni 专用 pipeline 取代。证据位置为服务器 `runs/fenshen_1015_eval_omni_v030_dev_best_20261113_103305/best.log` 和同次 6190 服务日志。
 
@@ -120,24 +131,24 @@ Sophon 使用内网 Sophon-Realtime-32B-Tag。评测从 `/v1/models` 取实际 I
 继续调热词或提示词时复制现有 profile 为新版本，只改试验组的 `params.context` / `system_prompt`。非空词表附在 system 提示，`SOPHON_PROFILE=legacy` 使用原 Qwen 配置和原 Sophon 提示。配置由评测客户端加载，更新评测代码后启动新任务即可。
 
 ```bash
-bash scripts/run_fenshen_1015_eval.sh sophon v032
-SOPHON_PROFILE=v1 bash scripts/run_fenshen_1015_eval.sh sophon v032
-SOPHON_PROFILE=legacy bash scripts/run_fenshen_1015_eval.sh sophon v032
+bash scripts/run_asr_eval.sh fenshen sophon v032
+SOPHON_PROFILE=v1 bash scripts/run_asr_eval.sh fenshen sophon v032
+SOPHON_PROFILE=legacy bash scripts/run_asr_eval.sh fenshen sophon v032
 ```
 
-每次运行在 `runs/fenshen_1015_eval_sophon_*` 归档原始 YAML、实际使用的 `sophon.pipeline.yaml`、引用的 YAML 和 `sophon.run.txt`（profile、run_tag、模型 ID、API 地址）。Sophon 转写别名为 `qwen-sophon-<split>-best-<run_tag>`，旧转写仍可读取。根据 `sophon.run.txt` 重出对应的报表：`python scripts/eval_fenshen_1015_xlsx.py sophon v032 --split dev --sophon-run-tag <run_tag>`。
+每次运行在 `runs/fenshen_1015_eval_sophon_*` 归档原始 YAML、实际使用的 `sophon.pipeline.yaml`、引用的 YAML 和 `sophon.run.txt`（profile、run_tag、模型 ID、API 地址）。Sophon 转写别名为 `qwen-sophon-<split>-best-<run_tag>`，旧转写仍可读取。根据 `sophon.run.txt` 重出对应的报表：`python scripts/eval_asr_xlsx.py fenshen sophon v032 --split dev --sophon-run-tag <run_tag>`。
 
 本机相关测试 56 项通过，Bash 语法检查通过。替身 HTTP 通过完整评测入口验证 `v1`、自定义词表和 `legacy` 均有各自的配置快照、Parquet 与 XLSX，并复用同一份 qwen-base。真实音频误转写率与服务端兼容性仍待验收。
 
 本地 Parquet 核对 `gold_fenshen_1015_dev_v028` 有 500 条空参考（其中 478 条为 SIG<=2.0 的候选），可用于噪声压力测试；`v032` 有 3 条空参考。上线前在服务器用同一份语音比较成对结果，分别统计确认无语音样本的非空输出率、短词和弱语音的漏转率、发布文本标签残留率。候选需复听区分纯噪声与低质量人声；本机无法读取 v028 所引用的音频路径。
 
-分类实现见 `scripts/eval_fenshen_1015_xlsx.py`：显式 `label_eval_type` 可指定分类；否则 non_speech/empty 优先，再按候选与金标 plain 文本相等分 auto_gold 或 hardcase。所有行关闭 `label_eval_type_split` 时只出 overall。评测桶不代表当前待评模型识别是否正确，也不等同声学五类。字准 XLSX 每次运行归档到 `datasets/stage3/asr/eval_<版本>/<月日_小时分钟>/`，文件名为 `<版本>_<切分>_<模式>.xlsx`，例如 `datasets/stage3/asr/eval_v030/1110_1430/v030_dev_full.xlsx`。同次命令的 train 和 dev 共用归档目录，同一分钟内重复运行时给目录加序号。
+分类实现见 `scripts/eval_asr_xlsx.py`：显式 `label_eval_type` 可指定分类；否则 non_speech/empty 优先，再按候选与金标 plain 文本相等分 auto_gold 或 hardcase。所有行关闭 `label_eval_type_split` 时只出 overall。评测桶不代表当前待评模型识别是否正确，也不等同声学五类。字准 XLSX 每次运行归档到 `datasets/stage3/asr/eval_<主题>_<版本>/<月日_小时分钟>/`，文件名为 `<主题>_<版本>_<切分>_<模式>.xlsx`，例如 `datasets/stage3/asr/eval_fenshen_v030/1110_1430/fenshen_v030_dev_full.xlsx`。同次命令的 train 和 dev 共用归档目录，同一分钟内重复运行时给目录加序号。
 
-`gold_fenshen_1015_dev_v024` 已于 2026-11-06 打开分类：`label_eval_type_split=true`，`label_eval_type` 取自 `train_v024` sample_map 的 `eval_type`（auto_gold 1732 / hardcase 433 / non_speech 2）。旧无分类 parquet 备份为 `gold_fenshen_1015_dev_v024.parquet.bak_no_type_split`。已有转写时只需重跑 `python scripts/eval_fenshen_1015_xlsx.py <mode> v024 --split dev`。
+`gold_fenshen_1015_dev_v024` 已于 2026-11-06 打开分类：`label_eval_type_split=true`，`label_eval_type` 取自 `train_v024` sample_map 的 `eval_type`（auto_gold 1732 / hardcase 433 / non_speech 2）。旧无分类 parquet 备份为 `gold_fenshen_1015_dev_v024.parquet.bak_no_type_split`。已有转写时只需重跑 `python scripts/eval_asr_xlsx.py fenshen <mode> v024 --split dev`。
 
-`gold_fenshen_1015_dev_v027` 已于 2026-11-09 生成：同样打开分类，dev 2337（auto_gold 1732 / hardcase 583 / non_speech 22）。评测示例：`bash scripts/run_fenshen_1015_eval.sh lora v027 dev best`。
+`gold_fenshen_1015_dev_v027` 已于 2026-11-09 生成：同样打开分类，dev 2337（auto_gold 1732 / hardcase 583 / non_speech 22）。评测示例：`bash scripts/run_asr_eval.sh fenshen lora v027 dev best`。
 
-`gold_fenshen_1015_dev_v028` 已于 2026-11-10 生成：同样打开分类，dev 2815（auto_gold 1732 / hardcase 583 / non_speech 500）。评测示例：`bash scripts/run_fenshen_1015_eval.sh lora v028 dev best`。
+`gold_fenshen_1015_dev_v028` 已于 2026-11-10 生成：同样打开分类，dev 2815（auto_gold 1732 / hardcase 583 / non_speech 500）。评测示例：`bash scripts/run_asr_eval.sh fenshen lora v028 dev best`。
 
 历史排查发现：极少数超长复读输出可让句级正确率很高而汇总字准很低。比较结果必须确认删语气词、重复折叠、空金标等计分口径；保留原始输出，另存诊断修正版，不能把手工修正后的指标当原始模型成绩。空金标自 2026-11-11 起不进总字准、正确率不受语气词表影响，见上文「空金标计分」。
 

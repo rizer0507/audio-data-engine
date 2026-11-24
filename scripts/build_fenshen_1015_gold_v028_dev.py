@@ -84,8 +84,8 @@ def _cell(value: Any) -> str:
 
 
 def _load_xlsx_module():
-    path = ROOT / "scripts" / "eval_fenshen_1015_xlsx.py"
-    spec = importlib.util.spec_from_file_location("eval_fenshen_1015_xlsx", path)
+    path = ROOT / "scripts" / "eval_asr_xlsx.py"
+    spec = importlib.util.spec_from_file_location("eval_asr_xlsx", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载 {path}")
     module = importlib.util.module_from_spec(spec)
@@ -301,7 +301,7 @@ def build_gold() -> None:
         [
             ("金标", str(OUT)),
             ("来源", str(SAMPLE_MAP)),
-            ("命令", "bash scripts/run_fenshen_1015_eval.sh lora v028 dev best"),
+            ("命令", "bash scripts/run_asr_eval.sh fenshen lora v028 dev best"),
             (
                 "范围",
                 "train_v028 的 dev。含 v027 原 dev 2337 行，以及 SIG<=2.0 新增空金标 478 行。",
@@ -343,7 +343,7 @@ def build_gold() -> None:
         "source": {"sample_map": str(SAMPLE_MAP), "split": "dev"},
         "type_policy": "按 sample_map.eval_type 写出 label_eval_type；字准表划分 auto_gold / hardcase / non_speech。",
         "empty_gold_policy": "non_speech 与空 gold_text 的计分参考为空串；含 SIG<=2.0 新增候选。",
-        "next": "bash scripts/run_fenshen_1015_eval.sh lora v028 dev best",
+        "next": "bash scripts/run_asr_eval.sh fenshen lora v028 dev best",
     }
     OUT.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n",

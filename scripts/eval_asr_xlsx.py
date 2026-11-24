@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""把 run_fenshen_1015_eval.sh 的转写 parquet 收成字准 xlsx。
+"""把 run_asr_eval.sh 的转写 parquet 收成字准 xlsx。
 
 每次评测创建一个时间戳目录，每个切分一份 XLSX::
 
-  datasets/stage3/asr/eval_v030/1110_1430/v030_train_full.xlsx
-  datasets/stage3/asr/eval_v030/1110_1430/v030_dev_full.xlsx
+  datasets/stage3/asr/eval_fenshen_v030/1110_1430/fenshen_v030_train_full.xlsx
+  datasets/stage3/asr/eval_shenpi_v001/1110_1430/shenpi_v001_dev_full.xlsx
 
 用法::
 
-  python scripts/eval_fenshen_1015_xlsx.py full v015
-  python scripts/eval_fenshen_1015_xlsx.py lora-full v030
-  python scripts/eval_fenshen_1015_xlsx.py lora v015 --split dev
-  python scripts/eval_fenshen_1015_xlsx.py rl v025 --split dev --ckpt best
-  python scripts/eval_fenshen_1015_xlsx.py omni v031 --split dev --ckpt best
-  python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt best
-  python scripts/eval_fenshen_1015_xlsx.py full v015 --split dev --ckpt over
+  python scripts/eval_asr_xlsx.py fenshen full v015
+  python scripts/eval_asr_xlsx.py fenshen lora-full v030
+  python scripts/eval_asr_xlsx.py shenpi full v001 --split dev
+  python scripts/eval_asr_xlsx.py fenshen lora v015 --split dev
+  python scripts/eval_asr_xlsx.py fenshen rl v025 --split dev --ckpt best
+  python scripts/eval_asr_xlsx.py fenshen omni v031 --split dev --ckpt best
+  python scripts/eval_asr_xlsx.py fenshen full v015 --split dev --ckpt best
+  python scripts/eval_asr_xlsx.py fenshen full v015 --split dev --ckpt over
 
 qwen-base 是 baseline。只转写 best 或 over 时不重跑 base，字准表仍读取已有的 qwen-base parquet 做比较。
 train 的基座文件名是 qwen-base-full，dev 是 qwen-base-dev。
@@ -41,6 +42,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 SCORE_DROP_YAML = ROOT / "configs" / "normalization" / "fenshen_1015_filler_tokens.yaml"
+THEMES = ("fenshen", "shenpi")
 
 from audio_engine.core.manifest import Manifest  # noqa: E402
 from audio_engine.core.transcript_reconcile import (  # noqa: E402
@@ -534,8 +536,8 @@ def write_xlsx(
         raise
 
 
-def gold_path(root: Path, split: str, version: str) -> Path:
-    return root / "datasets" / "stage1" / "derived" / f"gold_fenshen_1015_{split}_{version}.parquet"
+def gold_path(root: Path, theme: str, split: str, version: str) -> Path:
+    return root / "datasets" / "stage1" / "derived" / f"gold_{theme}_{split}_{version}.parquet"
 
 
 def asr_jobs(
@@ -556,13 +558,13 @@ def asr_jobs(
     return jobs
 
 
-def asr_parquet(root: Path, version: str, split: str, asr_run: str) -> Path:
-    eval_name = f"eval_fenshen_1015_{split}_{version}"
+def asr_parquet(root: Path, theme: str, version: str, split: str, asr_run: str) -> Path:
+    eval_name = f"eval_{theme}_{split}_{version}"
     return root / "datasets" / "stage3" / "asr" / eval_name / f"{asr_run}_asr_{eval_name}.parquet"
 
 
-def create_report_dir(root: Path, version: str) -> Path:
-    parent = root / "datasets" / "stage3" / "asr" / f"eval_{version}"
+def create_report_dir(root: Path, theme: str, version: str) -> Path:
+    parent = root / "datasets" / "stage3" / "asr" / f"eval_{theme}_{version}"
     parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%m%d_%H%M")
     for attempt in count(1):
@@ -576,6 +578,7 @@ def create_report_dir(root: Path, version: str) -> Path:
 
 def evaluate_split(
     root: Path,
+    theme: str,
     mode: str,
     version: str,
     split: str,
@@ -584,11 +587,11 @@ def evaluate_split(
     report_dir: Path | None = None,
     sophon_run_tag: str | None = None,
 ) -> Path:
-    gold = gold_path(root, split, version)
+    gold = gold_path(root, theme, split, version)
     if not gold.is_file():
         raise SystemExit(f"[ERROR] 缺少金标: {gold}")
     jobs = asr_jobs(mode, split, ckpt, sophon_run_tag=sophon_run_tag)
-    paths = {name: asr_parquet(root, version, split, run) for name, run in jobs}
+    paths = {name: asr_parquet(root, theme, version, split, run) for name, run in jobs}
     missing = [str(path) for path in paths.values() if not path.is_file()]
     if missing:
         joined = "\n".join(missing)
@@ -607,15 +610,16 @@ def evaluate_split(
         models.append((name, texts))
     frames = build_frames(gold_rows, models, gold_path=gold, model_paths=paths)
     if report_dir is None:
-        report_dir = create_report_dir(root, version)
-    destination = report_dir / f"{version}_{split}_{mode}.xlsx"
+        report_dir = create_report_dir(root, theme, version)
+    destination = report_dir / f"{theme}_{version}_{split}_{mode}.xlsx"
     write_xlsx(destination, frames)
-    print(f"[OK] {split} {len(gold_rows)} -> {destination}")
+    print(f"[OK] {theme} {split} {len(gold_rows)} -> {destination}")
     return destination
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="fenshen_1015 转写 parquet 汇总成字准 xlsx")
+    parser = argparse.ArgumentParser(description="按主题汇总 ASR 转写 parquet 成字准 xlsx")
+    parser.add_argument("theme", choices=THEMES, help="fenshen 或 shenpi")
     parser.add_argument("mode", choices=("lora", "full", "lora-full", "rl", "omni", "sophon"))
     parser.add_argument("version", help="例如 v015")
     parser.add_argument("--split", choices=("train", "dev", "both"))
@@ -649,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
     report_dir = None
     for split in splits:
         destination = evaluate_split(
-            root, args.mode, args.version, split, ckpt,
+            root, args.theme, args.mode, args.version, split, ckpt,
             report_dir=report_dir, sophon_run_tag=args.sophon_run_tag,
         )
         report_dir = destination.parent

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把标注导出写成 run_fenshen_1015_eval.sh 要的 dev 金标。
+"""把标注导出写成 run_asr_eval.sh 要的 dev 金标。
 
 这份评测集不做 auto_gold / hardcase / non_speech 分桶。
 label_eval_type_split=false，字准表只统计 overall。
@@ -73,8 +73,8 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def _load_xlsx_module():
-    path = ROOT / "scripts" / "eval_fenshen_1015_xlsx.py"
-    spec = importlib.util.spec_from_file_location("eval_fenshen_1015_xlsx", path)
+    path = ROOT / "scripts" / "eval_asr_xlsx.py"
+    spec = importlib.util.spec_from_file_location("eval_asr_xlsx", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载 {path}")
     module = importlib.util.module_from_spec(spec)
@@ -222,7 +222,7 @@ def build() -> None:
         [
             ("金标", str(OUT)),
             ("来源", str(EXPORT_DIR)),
-            ("命令", "bash scripts/run_fenshen_1015_eval.sh lora v030 dev best"),
+            ("命令", "bash scripts/run_asr_eval.sh fenshen lora v030 dev best"),
             ("分类", "label_eval_type_split=false。不划分 auto_gold / hardcase / non_speech。"),
             (
                 "空参考",
@@ -252,7 +252,7 @@ def build() -> None:
         "eval_type_split": False,
         "source": {"export_id": EXPORT_ID, "export_dir": str(EXPORT_DIR)},
         "type_policy": "不做分类。字准表只统计 overall。空金标按空串计分。",
-        "next": "bash scripts/run_fenshen_1015_eval.sh lora v030 dev best",
+        "next": "bash scripts/run_asr_eval.sh fenshen lora v030 dev best",
     }
     OUT.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n",

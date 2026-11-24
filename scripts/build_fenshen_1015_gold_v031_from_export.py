@@ -99,8 +99,8 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def _load_xlsx_module():
-    path = ROOT / "scripts" / "eval_fenshen_1015_xlsx.py"
-    spec = importlib.util.spec_from_file_location("eval_fenshen_1015_xlsx", path)
+    path = ROOT / "scripts" / "eval_asr_xlsx.py"
+    spec = importlib.util.spec_from_file_location("eval_asr_xlsx", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载 {path}")
     module = importlib.util.module_from_spec(spec)
@@ -299,7 +299,7 @@ def build() -> None:
             ("预标注", "candidate_text 即 transcripts.qwen_1.text。"),
             ("纳入", "环境噪声 16 条，有文本标注的 speech 585 条。"),
             ("未纳入", "多人说话、停顿、音频截断，共 17 条，没有文本金标。"),
-            ("命令", "bash scripts/run_fenshen_1015_eval.sh lora v031 dev best"),
+            ("命令", "bash scripts/run_asr_eval.sh fenshen lora v031 dev best"),
             ("导出", str(EXPORT_DIR)),
         ],
         columns=["字段/口径", "说明"],
@@ -323,7 +323,7 @@ def build() -> None:
         "eval_type_split": False,
         "source": {"export_id": EXPORT_ID, "export_dir": str(EXPORT_DIR)},
         "type_policy": "不做分类。字准表只统计 overall。环境噪声按空串计分。",
-        "next": "bash scripts/run_fenshen_1015_eval.sh lora v031 dev best",
+        "next": "bash scripts/run_asr_eval.sh fenshen lora v031 dev best",
     }
     OUT.with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
